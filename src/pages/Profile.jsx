@@ -12,6 +12,39 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { NFL_CITIES, TEAM_COLORS } from "@/lib/nflTeams";
 
+function isMissingProfileNameColumn(error) {
+  const message = String(error?.message || "");
+  return message.includes("profile_name") && (message.includes("Could not find") || message.includes("schema cache"));
+}
+
+async function saveProfileWithSchemaFallback(profile, user, payload) {
+  try {
+    if (profile) {
+      return { profile: await appClient.entities.UserProfile.update(profile.id, payload), profileNameSaved: true };
+    }
+    return {
+      profile: await appClient.entities.UserProfile.create({
+        user_email: user.email,
+        ...payload,
+      }),
+      profileNameSaved: true,
+    };
+  } catch (error) {
+    if (!isMissingProfileNameColumn(error)) throw error;
+    const { profile_name, ...fallbackPayload } = payload;
+    if (profile) {
+      return { profile: await appClient.entities.UserProfile.update(profile.id, fallbackPayload), profileNameSaved: false };
+    }
+    return {
+      profile: await appClient.entities.UserProfile.create({
+        user_email: user.email,
+        ...fallbackPayload,
+      }),
+      profileNameSaved: false,
+    };
+  }
+}
+
 export default function Profile() {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -105,19 +138,16 @@ const { data: publicProfile, isLoading: isLoadingPublicProfile } = useQuery({
         theme_secondary: colors?.secondary,
       };
       
-      if (profile) {
-        return appClient.entities.UserProfile.update(profile.id, payload);
-      } else {
-        return appClient.entities.UserProfile.create({
-          user_email: user.email,
-          ...payload,
-        });
-      }
+      return saveProfileWithSchemaFallback(profile, user, payload);
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries(['profile']);
       queryClient.invalidateQueries({ queryKey: ["auth-route-user"] });
-      toast.success("Profile updated successfully!");
+      if (result?.profileNameSaved === false) {
+        toast.warning("Profile saved, but public profile names need the latest Supabase migration.");
+      } else {
+        toast.success("Profile updated successfully!");
+      }
     },
     onError: (error) => {
       toast.error(error.message || "Failed to update profile");
@@ -138,8 +168,7 @@ const { data: publicProfile, isLoading: isLoadingPublicProfile } = useQuery({
         if (!/^[A-Za-z0-9]{4,20}$/.test(formData.profile_name.trim())) {
           throw new Error("Save a valid profile name before uploading a profile picture.");
         }
-        await appClient.entities.UserProfile.create({
-          user_email: user.email,
+        await saveProfileWithSchemaFallback(null, user, {
           profile_name: formData.profile_name.trim(),
           display_name: formData.display_name || "Manager",
           avatar_url: file_url
