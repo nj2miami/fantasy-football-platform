@@ -47,6 +47,8 @@ export const OfficialLeague = appClient.entities.OfficialLeague;
 
 export const Global = appClient.entities.Global;
 
+export const SeasonScoringRule = appClient.entities.SeasonScoringRule;
+
 
 
 // Native demo auth:

@@ -121,6 +121,48 @@ const textStatFields = [
 type Json = Record<string, unknown>;
 type Supabase = ReturnType<typeof createClient>;
 
+const DEFAULT_SCORING_RULES: Json = {
+  OFFENSE: {
+    passing_yard: 0.04,
+    passing_td: 4,
+    passing_int: -2,
+    passing_first_down: 0.5,
+    rushing_yard: 0.1,
+    rushing_td: 6,
+    rushing_first_down: 0.5,
+    fumble: -1,
+    fumble_lost: -2,
+    reception: 1,
+    receiving_yard: 0.1,
+    receiving_td: 6,
+    receiving_first_down: 0.5,
+    two_pt_conversion: 2,
+    bonus_100_rush_rec_yards: 3,
+    bonus_300_pass_yards: 3,
+  },
+  KICKER: {
+    fg_0_39: 3,
+    fg_40_49: 4,
+    fg_50_plus: 5,
+    fg_miss: -1,
+    xp_made: 1,
+    xp_miss: -1,
+  },
+  DEFENSE: {
+    solo_tackle: 1.5,
+    assist_tackle: 0.75,
+    tackle_for_loss: 1,
+    sack: 3,
+    qb_hit: 0.5,
+    interception: 4,
+    pass_defended: 1,
+    fumble_forced: 2,
+    fumble_recovered: 2,
+    touchdown: 6,
+    safety: 2,
+  },
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -256,45 +298,64 @@ function n(row: Json, field: string) {
   return Number(toNumber(row[field]) || 0);
 }
 
-function calculateFantasyPoints(row: Json) {
+function rule(rules: Json, category: string, key: string, fallback: number) {
+  const categoryRules = rules?.[category] as Json | undefined;
+  const parsed = Number(categoryRules?.[key]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) {
   const position = normalizePosition(row);
-  const fallback = Number(toNumber(row.fantasy_points_ppr) ?? toNumber(row.fantasy_points) ?? 0);
 
   if (position === "K") {
     return (
-      n(row, "fg_made_0_19") * 3 +
-      n(row, "fg_made_20_29") * 3 +
-      n(row, "fg_made_30_39") * 3 +
-      n(row, "fg_made_40_49") * 4 +
-      n(row, "fg_made_50_59") * 5 +
-      n(row, "fg_made_60_") * 6 +
-      n(row, "gwfg_made") * 3 +
-      n(row, "pat_made") -
-      n(row, "fg_missed") -
-      n(row, "pat_missed")
+      (n(row, "fg_made_0_19") + n(row, "fg_made_20_29") + n(row, "fg_made_30_39")) * rule(rules, "KICKER", "fg_0_39", 3) +
+      n(row, "fg_made_40_49") * rule(rules, "KICKER", "fg_40_49", 4) +
+      (n(row, "fg_made_50_59") + n(row, "fg_made_60_")) * rule(rules, "KICKER", "fg_50_plus", 5) +
+      n(row, "pat_made") * rule(rules, "KICKER", "xp_made", 1) +
+      n(row, "fg_missed") * rule(rules, "KICKER", "fg_miss", -1) +
+      n(row, "pat_missed") * rule(rules, "KICKER", "xp_miss", -1)
     );
   }
 
   if (position === "DEF") {
     return (
-      n(row, "def_tackles_solo") * 1 +
-      n(row, "def_tackle_assists") * 0.5 +
-      n(row, "def_tackles_for_loss") * 1 +
-      n(row, "def_sacks") * 4 +
-      n(row, "def_qb_hits") * 0.5 +
-      n(row, "def_interceptions") * 3 +
-      n(row, "def_pass_defended") * 1 +
-      n(row, "def_fumbles_forced") * 2 +
-      (n(row, "fumble_recovery_own") + n(row, "fumble_recovery_opp")) * 2 +
-      n(row, "def_safeties") * 2 +
-      (n(row, "def_tds") + n(row, "fumble_recovery_tds") + n(row, "special_teams_tds")) * 6
+      n(row, "def_tackles_solo") * rule(rules, "DEFENSE", "solo_tackle", 1.5) +
+      n(row, "def_tackle_assists") * rule(rules, "DEFENSE", "assist_tackle", 0.75) +
+      n(row, "def_tackles_for_loss") * rule(rules, "DEFENSE", "tackle_for_loss", 1) +
+      n(row, "def_sacks") * rule(rules, "DEFENSE", "sack", 3) +
+      n(row, "def_qb_hits") * rule(rules, "DEFENSE", "qb_hit", 0.5) +
+      n(row, "def_interceptions") * rule(rules, "DEFENSE", "interception", 4) +
+      n(row, "def_pass_defended") * rule(rules, "DEFENSE", "pass_defended", 1) +
+      n(row, "def_fumbles_forced") * rule(rules, "DEFENSE", "fumble_forced", 2) +
+      (n(row, "fumble_recovery_own") + n(row, "fumble_recovery_opp")) * rule(rules, "DEFENSE", "fumble_recovered", 2) +
+      n(row, "def_safeties") * rule(rules, "DEFENSE", "safety", 2) +
+      (n(row, "def_tds") + n(row, "fumble_recovery_tds") + n(row, "special_teams_tds")) * rule(rules, "DEFENSE", "touchdown", 6)
     );
   }
 
-  return fallback;
+  const offensivePoints =
+    n(row, "passing_yards") * rule(rules, "OFFENSE", "passing_yard", 0.04) +
+    n(row, "passing_tds") * rule(rules, "OFFENSE", "passing_td", 4) +
+    n(row, "passing_interceptions") * rule(rules, "OFFENSE", "passing_int", -2) +
+    n(row, "passing_first_downs") * rule(rules, "OFFENSE", "passing_first_down", 0.5) +
+    n(row, "rushing_yards") * rule(rules, "OFFENSE", "rushing_yard", 0.1) +
+    n(row, "rushing_tds") * rule(rules, "OFFENSE", "rushing_td", 6) +
+    n(row, "rushing_first_downs") * rule(rules, "OFFENSE", "rushing_first_down", 0.5) +
+    n(row, "receptions") * rule(rules, "OFFENSE", "reception", 1) +
+    n(row, "receiving_yards") * rule(rules, "OFFENSE", "receiving_yard", 0.1) +
+    n(row, "receiving_tds") * rule(rules, "OFFENSE", "receiving_td", 6) +
+    n(row, "receiving_first_downs") * rule(rules, "OFFENSE", "receiving_first_down", 0.5) +
+    (n(row, "rushing_fumbles") + n(row, "receiving_fumbles")) * rule(rules, "OFFENSE", "fumble", -1) +
+    (n(row, "rushing_fumbles_lost") + n(row, "receiving_fumbles_lost")) * rule(rules, "OFFENSE", "fumble_lost", -2) +
+    (n(row, "passing_2pt_conversions") + n(row, "rushing_2pt_conversions") + n(row, "receiving_2pt_conversions")) * rule(rules, "OFFENSE", "two_pt_conversion", 2) +
+    (n(row, "rushing_yards") + n(row, "receiving_yards") >= 100 ? rule(rules, "OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
+    (n(row, "passing_yards") >= 300 ? rule(rules, "OFFENSE", "bonus_300_pass_yards", 3) : 0);
+
+  return offensivePoints;
 }
 
-function buildWeeklyRow(row: Json) {
+function buildWeeklyRow(row: Json, rules: Json = DEFAULT_SCORING_RULES) {
   const payload: Json = {
     player_id: row.player_id,
     season: toNumber(row.season),
@@ -307,7 +368,7 @@ function buildWeeklyRow(row: Json) {
 
   for (const field of numberFields) payload[field] = toNumber(row[field]);
   for (const field of textStatFields) payload[field] = row[field] ? String(row[field]) : null;
-  payload.fantasy_points = calculateFantasyPoints(row);
+  payload.fantasy_points = calculateFantasyPoints(row, rules);
   return payload;
 }
 
@@ -343,10 +404,40 @@ async function saveHeadshot(supabase: Supabase, playerId: string, url: string) {
   return { path, publicUrl: data.publicUrl };
 }
 
+async function defaultScoringRules(supabase: Supabase) {
+  const { data, error } = await supabase
+    .from("global_settings")
+    .select("value")
+    .eq("key", "SCORING_RULES")
+    .maybeSingle();
+  if (error) throw error;
+  return (data?.value as Json | undefined) || DEFAULT_SCORING_RULES;
+}
+
+async function ensureSeasonScoringRules(supabase: Supabase, season: number) {
+  const { data: existing, error: existingError } = await supabase
+    .from("season_scoring_rules")
+    .select("rules")
+    .eq("season_year", season)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing?.rules) return existing.rules as Json;
+
+  const rules = await defaultScoringRules(supabase);
+  const { data: created, error: createError } = await supabase
+    .from("season_scoring_rules")
+    .insert({ season_year: season, rules })
+    .select("rules")
+    .single();
+  if (createError) throw createError;
+  return (created?.rules as Json | undefined) || rules;
+}
+
 async function importSeason(supabase: Supabase, season: number, sourceUrl: string, downloadHeadshots: boolean) {
   const response = await fetch(sourceUrl);
   if (!response.ok) throw new Error(`Could not download ${sourceUrl}: ${response.status}`);
 
+  const scoringRules = await ensureSeasonScoringRules(supabase, season);
   const csv = await response.text();
   const parsedRows = parseCsv(csv).filter((row) => String(row.season_type || "").toUpperCase() === "REG");
   const playerMap = new Map<string, Json>();
@@ -362,7 +453,7 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
       headshot_storage_path: existing?.headshot_storage_path || null,
       headshot_public_url: existing?.headshot_public_url || null,
     });
-    weeklyRows.push(buildWeeklyRow(row));
+    weeklyRows.push(buildWeeklyRow(row, scoringRules));
   }
 
   const players = [...playerMap.values()];
@@ -384,7 +475,7 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
 
   const aggregateMap = new Map<string, { total: number; high: number; low: number | null; count: number }>();
   for (const row of parsedRows) {
-    const points = calculateFantasyPoints(row);
+    const points = calculateFantasyPoints(row, scoringRules);
     const current = aggregateMap.get(String(row.player_id)) || { total: 0, high: 0, low: null, count: 0 };
     current.total += points;
     current.high = Math.max(current.high, points);
@@ -436,13 +527,13 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
         season_year: toNumber(row.season),
         week: toNumber(row.week),
         team: row.team || null,
-        fantasy_points: calculateFantasyPoints(row),
+        fantasy_points: calculateFantasyPoints(row, scoringRules),
         passing_yards: toNumber(row.passing_yards) ?? 0,
         passing_tds: toNumber(row.passing_tds) ?? 0,
         rushing_yards: toNumber(row.rushing_yards) ?? 0,
         receiving_yards: toNumber(row.receiving_yards) ?? 0,
         touchdowns,
-        raw_stats: buildWeeklyRow(row),
+        raw_stats: buildWeeklyRow(row, scoringRules),
       };
     })
     .filter(Boolean) as Json[];
@@ -522,8 +613,10 @@ async function refreshPlayerAggregates(supabase: Supabase) {
   await refreshGlobalCounts(supabase);
 }
 
-async function refreshComputedFantasyPoints(supabase: Supabase) {
-  const { error: updateError } = await supabase.rpc("recompute_player_week_fantasy_points");
+async function refreshComputedFantasyPoints(supabase: Supabase, seasonYear?: number | null) {
+  const { error: updateError } = await supabase.rpc("recompute_player_week_fantasy_points", {
+    p_season_year: seasonYear || null,
+  });
   if (updateError) throw updateError;
 }
 
@@ -574,10 +667,15 @@ Deno.serve(async (request) => {
     }
 
     if (jobType === "SCORING_UPDATE") {
-      await refreshComputedFantasyPoints(supabase);
-      await refreshPlayerAggregates(supabase);
-      await completeJob(supabase, job, "Updated computed fantasy points, player aggregates, and player pool count summaries.");
-      return json({ processed: 1, job_type: jobType });
+      const seasonYear = parameters.season_year ? Number(parameters.season_year) : null;
+      await appendJobLog(supabase, job, seasonYear
+        ? `Recalculating fantasy points for ${seasonYear}.`
+        : "Recalculating fantasy points for every stored season.");
+      await refreshComputedFantasyPoints(supabase, seasonYear);
+      await completeJob(supabase, job, seasonYear
+        ? `Updated computed fantasy points and player aggregates for ${seasonYear}.`
+        : "Updated computed fantasy points and player aggregates for every stored season.");
+      return json({ processed: 1, job_type: jobType, season_year: seasonYear });
     }
 
     if (parameters.fresh_start) {

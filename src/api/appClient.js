@@ -372,6 +372,9 @@ function createSeedStore() {
       { id: "site_roster_rules", key: "ROSTER_RULES", value: DEFAULT_ROSTER_RULES, created_date: createdDate },
       { id: "site_paid_join_fee_max", key: "PAID_LEAGUE_JOIN_FEE_MAX_CENTS", value: PAID_JOIN_FEE_DEFAULT_MAX_CENTS, description: "Maximum paid league join fee in cents.", created_date: createdDate },
     ],
+    SeasonScoringRule: [
+      { id: "season_scoring_2025", season_year: 2025, rules: DEFAULT_SCORING_RULES, created_date: createdDate },
+    ],
     WeekRandomization: buildWeekRandomizations(),
     ManagerPlayerUsage: [
       {
@@ -441,6 +444,7 @@ const entityTableMap = {
   PlayoffRosterDecision: "playoff_roster_decisions",
   Lineup: "lineups",
   PlayerPositionYearCount: "player_position_year_counts",
+  SeasonScoringRule: "season_scoring_rules",
 };
 
 function makeId(prefix) {
@@ -529,6 +533,7 @@ function readLocalStore() {
     store.LeagueWeekResult = store.LeagueWeekResult || [];
     store.PlayoffRosterDecision = store.PlayoffRosterDecision || [];
     store.PlayerPositionYearCount = store.PlayerPositionYearCount || [];
+    store.SeasonScoringRule = store.SeasonScoringRule || [];
     store.DraftRoom = store.DraftRoom || [];
     return store;
   }
@@ -732,6 +737,7 @@ const entityNames = [
   "PlayoffRosterDecision",
   "Lineup",
   "PlayerPositionYearCount",
+  "SeasonScoringRule",
 ];
 
 const localEntities = Object.fromEntries(entityNames.map((name) => [name, makeLocalEntityApi(name)]));
@@ -1442,6 +1448,18 @@ const localFunctions = {
     const jobs = await entities.ImportJob.list("-created_date");
     const pending = jobs.find((job) => job.status === "PENDING" || job.status === "RUNNING");
     if (!pending) return { processed: 0 };
+    if (String(pending.job_type || "").toUpperCase() === "SCORING_UPDATE") {
+      const seasonYear = pending.parameters?.season_year ? Number(pending.parameters.season_year) : null;
+      localRecalculateFantasyPoints(seasonYear);
+      const scope = seasonYear ? `${seasonYear}` : "all stored seasons";
+      await entities.ImportJob.update(pending.id, {
+        status: "COMPLETED",
+        progress: 100,
+        summary: `Recalculated fantasy points for ${scope}.`,
+        logs: [...(pending.logs || []), `Recalculated fantasy points for ${scope}.`, "Updated player aggregates and player pool counts."],
+      });
+      return { processed: 1, job_type: "SCORING_UPDATE", season_year: seasonYear };
+    }
     await entities.ImportJob.update(pending.id, {
       status: "COMPLETED",
       progress: 100,
@@ -1471,6 +1489,14 @@ const localFunctions = {
     };
   },
   async importHistoricalStats({ source_season_year = 2025 } = {}) {
+    const existingRules = await entities.SeasonScoringRule.filter({ season_year: Number(source_season_year) });
+    if (!existingRules[0]) {
+      const defaultRules = (await entities.Global.filter({ key: "SCORING_RULES" }))[0]?.value || DEFAULT_SCORING_RULES;
+      await entities.SeasonScoringRule.create({
+        season_year: Number(source_season_year),
+        rules: defaultRules,
+      });
+    }
     const job = await entities.ImportJob.create({
       job_type: "HISTORICAL_STATS",
       status: "COMPLETED",
@@ -1628,6 +1654,131 @@ function buildLocalPlayerPositionYearCounts(store) {
     stat_weeks: group.stat_weeks,
     updated_date: group.updated_date,
   }));
+}
+
+function localStatNumber(stats = {}, key) {
+  const parsed = Number(stats?.[key]);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function localRuleNumber(rules = DEFAULT_SCORING_RULES, category, key, fallback) {
+  const parsed = Number(rules?.[category]?.[key]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function localCalculateFantasyPoints(stats = {}, position = "OFF", rules = DEFAULT_SCORING_RULES) {
+  const n = (key) => localStatNumber(stats, key);
+  const pos = String(position || "OFF").toUpperCase();
+
+  if (pos === "K") {
+    return (
+      (n("fg_made_0_19") + n("fg_made_20_29") + n("fg_made_30_39")) * localRuleNumber(rules, "KICKER", "fg_0_39", 3) +
+      n("fg_made_40_49") * localRuleNumber(rules, "KICKER", "fg_40_49", 4) +
+      (n("fg_made_50_59") + n("fg_made_60_")) * localRuleNumber(rules, "KICKER", "fg_50_plus", 5) +
+      n("pat_made") * localRuleNumber(rules, "KICKER", "xp_made", 1) +
+      n("fg_missed") * localRuleNumber(rules, "KICKER", "fg_miss", -1) +
+      n("pat_missed") * localRuleNumber(rules, "KICKER", "xp_miss", -1)
+    );
+  }
+
+  if (pos === "DEF") {
+    return (
+      n("def_tackles_solo") * localRuleNumber(rules, "DEFENSE", "solo_tackle", 1.5) +
+      n("def_tackle_assists") * localRuleNumber(rules, "DEFENSE", "assist_tackle", 0.75) +
+      n("def_tackles_for_loss") * localRuleNumber(rules, "DEFENSE", "tackle_for_loss", 1) +
+      n("def_sacks") * localRuleNumber(rules, "DEFENSE", "sack", 3) +
+      n("def_qb_hits") * localRuleNumber(rules, "DEFENSE", "qb_hit", 0.5) +
+      n("def_interceptions") * localRuleNumber(rules, "DEFENSE", "interception", 4) +
+      n("def_pass_defended") * localRuleNumber(rules, "DEFENSE", "pass_defended", 1) +
+      n("def_fumbles_forced") * localRuleNumber(rules, "DEFENSE", "fumble_forced", 2) +
+      (n("fumble_recovery_own") + n("fumble_recovery_opp")) * localRuleNumber(rules, "DEFENSE", "fumble_recovered", 2) +
+      n("def_safeties") * localRuleNumber(rules, "DEFENSE", "safety", 2) +
+      (n("def_tds") + n("fumble_recovery_tds") + n("special_teams_tds")) * localRuleNumber(rules, "DEFENSE", "touchdown", 6)
+    );
+  }
+
+  return (
+    n("passing_yards") * localRuleNumber(rules, "OFFENSE", "passing_yard", 0.04) +
+    n("passing_tds") * localRuleNumber(rules, "OFFENSE", "passing_td", 4) +
+    n("passing_interceptions") * localRuleNumber(rules, "OFFENSE", "passing_int", -2) +
+    n("passing_first_downs") * localRuleNumber(rules, "OFFENSE", "passing_first_down", 0.5) +
+    n("rushing_yards") * localRuleNumber(rules, "OFFENSE", "rushing_yard", 0.1) +
+    n("rushing_tds") * localRuleNumber(rules, "OFFENSE", "rushing_td", 6) +
+    n("rushing_first_downs") * localRuleNumber(rules, "OFFENSE", "rushing_first_down", 0.5) +
+    n("receptions") * localRuleNumber(rules, "OFFENSE", "reception", 1) +
+    n("receiving_yards") * localRuleNumber(rules, "OFFENSE", "receiving_yard", 0.1) +
+    n("receiving_tds") * localRuleNumber(rules, "OFFENSE", "receiving_td", 6) +
+    n("receiving_first_downs") * localRuleNumber(rules, "OFFENSE", "receiving_first_down", 0.5) +
+    (n("rushing_fumbles") + n("receiving_fumbles")) * localRuleNumber(rules, "OFFENSE", "fumble", -1) +
+    (n("rushing_fumbles_lost") + n("receiving_fumbles_lost")) * localRuleNumber(rules, "OFFENSE", "fumble_lost", -2) +
+    (n("passing_2pt_conversions") + n("rushing_2pt_conversions") + n("receiving_2pt_conversions")) * localRuleNumber(rules, "OFFENSE", "two_pt_conversion", 2) +
+    (n("rushing_yards") + n("receiving_yards") >= 100 ? localRuleNumber(rules, "OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
+    (n("passing_yards") >= 300 ? localRuleNumber(rules, "OFFENSE", "bonus_300_pass_yards", 3) : 0)
+  );
+}
+
+function localRefreshPlayerAggregates(store) {
+  const grouped = new Map();
+  (store.PlayerWeek || []).forEach((week) => {
+    const current = grouped.get(week.player_id) || { total: 0, high: null, low: null, count: 0, years: new Set() };
+    const points = Number(week.fantasy_points || 0);
+    current.total += points;
+    current.high = current.high === null ? points : Math.max(current.high, points);
+    current.low = current.low === null ? points : Math.min(current.low, points);
+    current.count += 1;
+    if (week.season_year) current.years.add(Number(week.season_year));
+    grouped.set(week.player_id, current);
+  });
+
+  store.Player = (store.Player || []).map((player) => {
+    const aggregate = grouped.get(player.id);
+    if (!aggregate) return player;
+    const activeYears = [...aggregate.years].sort((a, b) => a - b);
+    return {
+      ...player,
+      active_years: activeYears,
+      source_season_year: activeYears[activeYears.length - 1] || player.source_season_year,
+      avg_points: aggregate.count ? aggregate.total / aggregate.count : 0,
+      high_score: aggregate.high ?? 0,
+      low_score: aggregate.low ?? 0,
+      total_points: aggregate.total,
+      updated_date: now(),
+    };
+  });
+  store.PlayerPositionYearCount = buildLocalPlayerPositionYearCounts(store);
+}
+
+function localRecalculateFantasyPoints(seasonYear = null) {
+  const store = readLocalStore();
+  const defaultRules = (store.Global || []).find((row) => row.key === "SCORING_RULES")?.value || DEFAULT_SCORING_RULES;
+  const playersById = new Map((store.Player || []).map((player) => [player.id, player]));
+  const selectedYear = seasonYear ? Number(seasonYear) : null;
+
+  store.SeasonScoringRule = store.SeasonScoringRule || [];
+  const ensureRules = (year) => {
+    let record = store.SeasonScoringRule.find((row) => Number(row.season_year) === Number(year));
+    if (!record) {
+      record = {
+        id: `season_scoring_${year}`,
+        season_year: Number(year),
+        rules: defaultRules,
+        created_date: now(),
+      };
+      store.SeasonScoringRule.push(record);
+    }
+    return record.rules || defaultRules;
+  };
+
+  store.PlayerWeek = (store.PlayerWeek || []).map((week) => {
+    if (selectedYear && Number(week.season_year) !== selectedYear) return week;
+    const player = playersById.get(week.player_id);
+    const stats = { ...(week.raw_stats || {}), ...week };
+    const fantasyPoints = localCalculateFantasyPoints(stats, player?.position, ensureRules(week.season_year));
+    return { ...week, fantasy_points: Number(fantasyPoints.toFixed(2)), updated_date: now() };
+  });
+
+  localRefreshPlayerAggregates(store);
+  writeLocalStore(store);
 }
 
 function normalizePlayerPoolSort(sortBy) {
