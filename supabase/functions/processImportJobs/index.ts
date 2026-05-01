@@ -474,6 +474,66 @@ async function refreshGlobalCounts(supabase: Supabase) {
     ],
     "key",
   );
+
+  const { error: countRefreshError } = await supabase.rpc("refresh_player_position_year_counts");
+  if (countRefreshError) throw countRefreshError;
+}
+
+async function refreshPlayerAggregates(supabase: Supabase) {
+  const { error } = await supabase.rpc("refresh_player_aggregates");
+  if (!error) {
+    await refreshGlobalCounts(supabase);
+    return;
+  }
+
+  const { data: weeks, error: weekError } = await supabase
+    .from("player_week_stats")
+    .select("player_id,season_year,fantasy_points");
+  if (weekError) throw weekError;
+
+  const grouped = new Map<string, { years: Set<number>; total: number; high: number; low: number | null; count: number }>();
+  for (const week of weeks || []) {
+    const playerId = String(week.player_id);
+    const points = Number(week.fantasy_points || 0);
+    const current = grouped.get(playerId) || { years: new Set<number>(), total: 0, high: 0, low: null, count: 0 };
+    current.years.add(Number(week.season_year));
+    current.total += points;
+    current.high = Math.max(current.high, points);
+    current.low = current.low === null ? points : Math.min(current.low, points);
+    current.count += 1;
+    grouped.set(playerId, current);
+  }
+
+  for (const [playerId, aggregate] of grouped.entries()) {
+    const { error: updateError } = await supabase
+      .from("players")
+      .update({
+        active_years: [...aggregate.years].filter(Boolean).sort((a, b) => a - b),
+        source_season_year: Math.max(...[...aggregate.years].filter(Boolean)),
+        avg_points: aggregate.count ? aggregate.total / aggregate.count : 0,
+        high_score: aggregate.high || 0,
+        low_score: aggregate.low ?? 0,
+        total_points: aggregate.total || 0,
+      })
+      .eq("id", playerId);
+    if (updateError) throw updateError;
+  }
+
+  await refreshGlobalCounts(supabase);
+}
+
+async function refreshComputedFantasyPoints(supabase: Supabase) {
+  const { error: updateError } = await supabase.rpc("recompute_player_week_fantasy_points");
+  if (updateError) throw updateError;
+}
+
+async function completeJob(supabase: Supabase, job: Json, summary: string) {
+  await appendJobLog(supabase, job, summary, {
+    status: "COMPLETED",
+    progress: 100,
+    summary,
+    error_details: null,
+  });
 }
 
 Deno.serve(async (request) => {
@@ -492,11 +552,33 @@ Deno.serve(async (request) => {
     const startYear = Number(parameters.start_year || parameters.season || parameters.source_season_year || new Date().getFullYear() - 1);
     const endYear = Number(parameters.end_year || startYear);
     const downloadHeadshots = parameters.download_headshots !== false;
+    const jobType = String(job.job_type || parameters.job_type || "HISTORICAL_STATS").toUpperCase();
 
-    await appendJobLog(supabase, job, `Starting nflverse player import for ${startYear}-${endYear}.`, {
+    await appendJobLog(supabase, job, jobType === "HISTORICAL_STATS"
+      ? `Starting nflverse player import for ${startYear}-${endYear}.`
+      : `Starting ${jobType}.`, {
       status: "RUNNING",
       progress: 5,
     });
+
+    if (jobType === "RECOUNT_PLAYERS") {
+      await refreshGlobalCounts(supabase);
+      await completeJob(supabase, job, "Recounted player totals and refreshed player pool count summaries.");
+      return json({ processed: 1, job_type: jobType });
+    }
+
+    if (jobType === "PLAYER_STAT_AGGREGATION") {
+      await refreshPlayerAggregates(supabase);
+      await completeJob(supabase, job, "Updated player aggregates and refreshed player pool count summaries.");
+      return json({ processed: 1, job_type: jobType });
+    }
+
+    if (jobType === "SCORING_UPDATE") {
+      await refreshComputedFantasyPoints(supabase);
+      await refreshPlayerAggregates(supabase);
+      await completeJob(supabase, job, "Updated computed fantasy points, player aggregates, and player pool count summaries.");
+      return json({ processed: 1, job_type: jobType });
+    }
 
     if (parameters.fresh_start) {
       await supabase.from("weekly_player_stats").delete().neq("id", "00000000-0000-0000-0000-000000000000");

@@ -390,6 +390,7 @@ function createSeedStore() {
     PlayerReleaseEvent: [],
     LeagueWeekResult: [],
     PlayoffRosterDecision: [],
+    PlayerPositionYearCount: [],
     Lineup: [
       {
         id: "lineup_retro_w2",
@@ -439,6 +440,7 @@ const entityTableMap = {
   LeagueWeekResult: "league_week_results",
   PlayoffRosterDecision: "playoff_roster_decisions",
   Lineup: "lineups",
+  PlayerPositionYearCount: "player_position_year_counts",
 };
 
 function makeId(prefix) {
@@ -526,6 +528,7 @@ function readLocalStore() {
     store.PlayerReleaseEvent = store.PlayerReleaseEvent || [];
     store.LeagueWeekResult = store.LeagueWeekResult || [];
     store.PlayoffRosterDecision = store.PlayoffRosterDecision || [];
+    store.PlayerPositionYearCount = store.PlayerPositionYearCount || [];
     store.DraftRoom = store.DraftRoom || [];
     return store;
   }
@@ -728,6 +731,7 @@ const entityNames = [
   "LeagueWeekResult",
   "PlayoffRosterDecision",
   "Lineup",
+  "PlayerPositionYearCount",
 ];
 
 const localEntities = Object.fromEntries(entityNames.map((name) => [name, makeLocalEntityApi(name)]));
@@ -1588,11 +1592,145 @@ const auth = isSupabaseConfigured
       },
     };
 
+function buildLocalPlayerPositionYearCounts(store) {
+  const playersById = new Map((store.Player || []).map((player) => [player.id, player]));
+  const grouped = new Map();
+
+  (store.PlayerWeek || []).forEach((week) => {
+    const player = playersById.get(week.player_id);
+    if (!player) return;
+    const seasonYear = Number(week.season_year);
+    const position = String(player.position || "OFF").toUpperCase();
+    if (!seasonYear) return;
+    const key = `${seasonYear}:${position}`;
+    const group = grouped.get(key) || {
+      season_year: seasonYear,
+      position,
+      playerIds: new Set(),
+      playersWithStats: new Set(),
+      stat_weeks: 0,
+      updated_date: now(),
+    };
+    group.playerIds.add(player.id);
+    if (Number(week.fantasy_points || 0) !== 0) {
+      group.playersWithStats.add(player.id);
+      group.stat_weeks += 1;
+    }
+    grouped.set(key, group);
+  });
+
+  return [...grouped.values()].map((group) => ({
+    id: `player_count_${group.season_year}_${group.position}`,
+    season_year: group.season_year,
+    position: group.position,
+    total_players: group.playerIds.size,
+    players_with_stats: group.playersWithStats.size,
+    stat_weeks: group.stat_weeks,
+    updated_date: group.updated_date,
+  }));
+}
+
+function normalizePlayerPoolSort(sortBy) {
+  return ["-avg_points", "avg_points", "-total_points", "total_points", "-high_score", "high_score", "-low_score", "low_score"].includes(sortBy)
+    ? sortBy
+    : "-avg_points";
+}
+
+function localPlayerPoolList({ seasonYear, position, searchTerm, sortBy = "-avg_points", limit = 20, offset = 0 } = {}) {
+  const store = readLocalStore();
+  const weeks = store.PlayerWeek || [];
+  const normalizedPosition = String(position || "ALL").toUpperCase();
+  const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
+  const selectedYear = seasonYear ? Number(seasonYear) : null;
+
+  const filtered = (store.Player || []).filter((player) => {
+    if (Number(player.total_points || 0) === 0) return false;
+    if (normalizedPosition !== "ALL" && String(player.position || "").toUpperCase() !== normalizedPosition) return false;
+    if (normalizedSearch) {
+      const playerName = `${player.player_display_name || ""} ${player.full_name || ""}`.toLowerCase();
+      if (!playerName.includes(normalizedSearch)) return false;
+    }
+    if (selectedYear) {
+      return weeks.some((week) => week.player_id === player.id && Number(week.season_year) === selectedYear);
+    }
+    return true;
+  });
+
+  const sorted = sortRecords(filtered, [normalizePlayerPoolSort(sortBy)]);
+  const start = Number(offset) || 0;
+  const end = start + (Number(limit) || 20);
+  return {
+    data: sorted.slice(start, end),
+    totalCount: sorted.length,
+    hasMore: sorted.length > end,
+  };
+}
+
+const playerPool = isSupabaseConfigured
+  ? {
+      async listPlayers({ seasonYear, position, searchTerm, sortBy = "-avg_points", limit = 20, offset = 0 } = {}) {
+        const { data, error } = await supabase.rpc("search_player_pool", {
+          p_season_year: seasonYear ? Number(seasonYear) : null,
+          p_position: position && position !== "ALL" ? position : null,
+          p_search_term: searchTerm || null,
+          p_sort_by: normalizePlayerPoolSort(sortBy),
+          p_limit: limit,
+          p_offset: offset,
+        });
+        if (error) throw mapSupabaseError(error);
+        const rows = data || [];
+        const totalCount = Number(rows[0]?.total_count || 0);
+        return {
+          data: rows.map(({ total_count, ...player }) => player),
+          totalCount,
+          hasMore: totalCount > Number(offset || 0) + rows.length,
+        };
+      },
+      async listYears() {
+        const { data, error } = await supabase
+          .from("player_position_year_counts")
+          .select("season_year")
+          .order("season_year", { ascending: false });
+        if (error) throw mapSupabaseError(error);
+        return [...new Set((data || []).map((row) => Number(row.season_year)).filter(Boolean))];
+      },
+      async getPositionYearCount({ seasonYear, position } = {}) {
+        if (!seasonYear || !position || position === "ALL") return null;
+        const { data, error } = await supabase
+          .from("player_position_year_counts")
+          .select("*")
+          .eq("season_year", Number(seasonYear))
+          .eq("position", String(position).toUpperCase())
+          .maybeSingle();
+        if (error) throw mapSupabaseError(error);
+        return data || null;
+      },
+    }
+  : {
+      async listPlayers(args = {}) {
+        return localPlayerPoolList(args);
+      },
+      async listYears() {
+        const store = readLocalStore();
+        return [...new Set(buildLocalPlayerPositionYearCounts(store).map((row) => row.season_year))]
+          .filter(Boolean)
+          .sort((a, b) => b - a);
+      },
+      async getPositionYearCount({ seasonYear, position } = {}) {
+        if (!seasonYear || !position || position === "ALL") return null;
+        const store = readLocalStore();
+        return buildLocalPlayerPositionYearCounts(store).find(
+          (row) => Number(row.season_year) === Number(seasonYear) && row.position === String(position).toUpperCase()
+        ) || null;
+      },
+    };
+
 export const appClient = {
   isSupabaseConfigured,
   entities,
   auth,
   functions,
+  playerPool,
   integrations: {
     Core: {
       UploadFile: uploadFile,

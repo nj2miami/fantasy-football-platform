@@ -225,8 +225,8 @@ export default function PlayerStats() {
               {team.name}
             </p>
             <div className="mt-4 space-y-1 text-sm font-bold text-white">
-              <p><span className="font-black uppercase text-white">Active Years:</span> {activeYears}</p>
-              <p><span className="font-black uppercase text-white">Active Weeks:</span> {activeWeeks}</p>
+              <p><span className="font-black uppercase text-white">Years:</span> {activeYears}</p>
+              <p><span className="font-black uppercase text-white">Weeks:</span> {activeWeeks}</p>
               <p><span className="font-black uppercase text-white">Player ID:</span> {player.player_key || player.player_id || player.id}</p>
             </div>
           </div>
