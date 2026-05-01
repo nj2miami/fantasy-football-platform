@@ -4,7 +4,7 @@ import { useLocation, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { appClient } from "@/api/appClient";
 import { createPageUrl } from "@/utils";
-import { ArrowLeft, Calendar } from "lucide-react";
+import { ArrowLeft, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const TEAM_DETAILS = {
@@ -236,6 +236,20 @@ export default function PlayerStats() {
   };
 
   const activeWeeks = weeks.filter((week) => Number(week.fantasy_points || 0) !== 0).length;
+  const selectedWeekIndex = selectedWeek
+    ? weeks.findIndex((week) => (
+      (week.id && selectedWeek.id && week.id === selectedWeek.id)
+      || (
+        Number(week.season || 0) === Number(selectedWeek.season || 0)
+        && Number(week.week || 0) === Number(selectedWeek.week || 0)
+        && (week.team || "") === (selectedWeek.team || "")
+      )
+    ))
+    : -1;
+  const previousWeek = selectedWeekIndex > 0 ? weeks[selectedWeekIndex - 1] : null;
+  const nextWeek = selectedWeekIndex >= 0 && selectedWeekIndex < weeks.length - 1
+    ? weeks[selectedWeekIndex + 1]
+    : null;
 
   if (isLoadingPlayer) {
     return (
@@ -399,27 +413,51 @@ export default function PlayerStats() {
               </Button>
             </div>
 
-            <div className="mb-6 p-6 neo-border bg-[#F7B801]">
-              <p className="text-sm font-black uppercase text-black mb-2">Fantasy Points</p>
-              <p className="text-5xl font-black text-black">{(selectedWeek.fantasy_points || 0).toFixed(2)}</p>
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button
+                onClick={() => previousWeek && setSelectedWeek(previousWeek)}
+                disabled={!previousWeek}
+                className="neo-btn bg-white text-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ChevronLeft className="mr-2 h-5 w-5" />
+                Prev Week
+              </Button>
+              <p className="text-center text-sm font-black uppercase text-gray-500">
+                Stat Record {selectedWeekIndex + 1} of {weeks.length}
+              </p>
+              <Button
+                onClick={() => nextWeek && setSelectedWeek(nextWeek)}
+                disabled={!nextWeek}
+                className="neo-btn bg-white text-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next Week
+                <ChevronRight className="ml-2 h-5 w-5" />
+              </Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {buildScoringSections(selectedWeek).map((section) => (
-                <div key={section.title} className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
-                  <div className="space-y-2 text-sm">
-                    {section.lines.map((line) => (
-                      <ScoredLine
-                        key={line.label}
-                        label={line.label}
-                        value={line.value}
-                        points={line.points}
-                      />
-                    ))}
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px_1fr] lg:items-start">
+              <div className="neo-border bg-[#F7B801] p-6">
+                <p className="mb-2 text-sm font-black uppercase text-black">Fantasy Points</p>
+                <p className="text-5xl font-black text-black">{(selectedWeek.fantasy_points || 0).toFixed(2)}</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {buildScoringSections(selectedWeek).map((section) => (
+                  <div key={section.title} className="neo-border p-4 bg-gray-50">
+                    <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
+                    <div className="space-y-2 text-sm">
+                      {section.lines.map((line) => (
+                        <ScoredLine
+                          key={line.label}
+                          label={line.label}
+                          value={line.value}
+                          points={line.points}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
         </div>
