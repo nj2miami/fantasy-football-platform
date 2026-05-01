@@ -36,6 +36,12 @@ function getPlayerStat(player, field) {
   return Number(player?.[field] ?? 0);
 }
 
+function splitPlayerName(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return [parts[0] || "Unknown", "\u00a0"];
+  return [parts[0], parts.slice(1).join(" ")];
+}
+
 export default function Players() {
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
@@ -336,6 +342,7 @@ export default function Players() {
               const lowScore = getPlayerStat(player, "low_score");
               const totalPoints = getPlayerStat(player, "total_points");
               const rank = page * PAGE_SIZE + idx + 1;
+              const [firstName, lastName] = splitPlayerName(player.player_display_name || player.full_name);
 
               return (
                 <Link key={player.id} to={createPageUrl(`PlayerStats?id=${player.id}`)}>
@@ -348,9 +355,10 @@ export default function Players() {
                       </>
                     )}
                     <div className="flex items-start justify-between mb-4">
-                      <div>
-                        <h3 className="text-xl font-black uppercase text-black">
-                          {player.player_display_name || player.full_name}
+                      <div className="min-w-0 pr-3">
+                        <h3 className="min-h-[3.5rem] text-xl font-black uppercase leading-none text-black">
+                          <span className="block truncate">{firstName}</span>
+                          <span className="block truncate pt-1">{lastName}</span>
                         </h3>
                       </div>
                       <div className={`${positionColors[player.position]} text-black px-3 py-1 neo-border text-sm font-black`}>

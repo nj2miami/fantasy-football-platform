@@ -65,7 +65,10 @@ function pointsLabel(points) {
 }
 
 function ScoredLine({ label, value, points }) {
-  if (!statNumber(value) && !Number(points || 0)) return null;
+  const hasValue = typeof value === "string"
+    ? value.trim() !== "" && value !== "0/0"
+    : Boolean(statNumber(value));
+  if (!hasValue && !Number(points || 0)) return null;
   const pointValue = Number(points || 0);
   return (
     <div className="flex items-center justify-between gap-3">
@@ -78,6 +81,80 @@ function ScoredLine({ label, value, points }) {
       </span>
     </div>
   );
+}
+
+function buildScoringSections(week) {
+  const n = (field) => statNumber(week[field]);
+  const passing = [
+    { label: "Completions/Attempts", value: `${n("completions")}/${n("attempts")}`, points: 0 },
+    { label: "Passing Yards", value: n("passing_yards"), points: n("passing_yards") * 0.04 },
+    { label: "Passing TDs", value: n("passing_tds"), points: n("passing_tds") * 4 },
+    { label: "Interceptions", value: n("passing_interceptions"), points: n("passing_interceptions") * -2 },
+    { label: "First Downs", value: n("passing_first_downs"), points: n("passing_first_downs") * 0.5 },
+    { label: "2PT Conv", value: n("passing_2pt_conversions"), points: n("passing_2pt_conversions") * 2 },
+  ];
+  const rushing = [
+    { label: "Carries", value: n("carries"), points: 0 },
+    { label: "Rushing Yards", value: n("rushing_yards"), points: n("rushing_yards") * 0.1 },
+    { label: "Rushing TDs", value: n("rushing_tds"), points: n("rushing_tds") * 6 },
+    { label: "First Downs", value: n("rushing_first_downs"), points: n("rushing_first_downs") * 0.5 },
+    { label: "Fumbles", value: n("rushing_fumbles"), points: n("rushing_fumbles") * -1 },
+    { label: "Fumbles Lost", value: n("rushing_fumbles_lost"), points: n("rushing_fumbles_lost") * -2 },
+    { label: "2PT Conv", value: n("rushing_2pt_conversions"), points: n("rushing_2pt_conversions") * 2 },
+  ];
+  const receiving = [
+    { label: "Receptions/Targets", value: `${n("receptions")}/${n("targets")}`, points: n("receptions") },
+    { label: "Receiving Yards", value: n("receiving_yards"), points: n("receiving_yards") * 0.1 },
+    { label: "Receiving TDs", value: n("receiving_tds"), points: n("receiving_tds") * 6 },
+    { label: "First Downs", value: n("receiving_first_downs"), points: n("receiving_first_downs") * 0.5 },
+    { label: "Fumbles", value: n("receiving_fumbles"), points: n("receiving_fumbles") * -1 },
+    { label: "Fumbles Lost", value: n("receiving_fumbles_lost"), points: n("receiving_fumbles_lost") * -2 },
+    { label: "2PT Conv", value: n("receiving_2pt_conversions"), points: n("receiving_2pt_conversions") * 2 },
+  ];
+  const defense = [
+    { label: "Solo Tackles", value: n("def_tackles_solo"), points: n("def_tackles_solo") * 1 },
+    { label: "Assist Tackles", value: n("def_tackle_assists"), points: n("def_tackle_assists") * 0.5 },
+    { label: "TFL", value: n("def_tackles_for_loss"), points: n("def_tackles_for_loss") * 1 },
+    { label: "Sacks", value: n("def_sacks"), points: n("def_sacks") * 4 },
+    { label: "QB Hits", value: n("def_qb_hits"), points: n("def_qb_hits") * 0.5 },
+    { label: "Interceptions", value: n("def_interceptions"), points: n("def_interceptions") * 3 },
+    { label: "Pass Defended", value: n("def_pass_defended"), points: n("def_pass_defended") * 1 },
+    { label: "Fumbles Forced", value: n("def_fumbles_forced"), points: n("def_fumbles_forced") * 2 },
+    { label: "Safeties", value: n("def_safeties"), points: n("def_safeties") * 2 },
+    { label: "Def TDs", value: n("def_tds"), points: n("def_tds") * 6 },
+  ];
+  const kicking = [
+    { label: "FG Made/Att", value: `${n("fg_made")}/${n("fg_att")}`, points: 0 },
+    { label: "FG 0-19 Made", value: n("fg_made_0_19"), points: n("fg_made_0_19") * 3 },
+    { label: "FG 20-29 Made", value: n("fg_made_20_29"), points: n("fg_made_20_29") * 3 },
+    { label: "FG 30-39 Made", value: n("fg_made_30_39"), points: n("fg_made_30_39") * 3 },
+    { label: "FG 40-49 Made", value: n("fg_made_40_49"), points: n("fg_made_40_49") * 4 },
+    { label: "FG 50-59 Made", value: n("fg_made_50_59"), points: n("fg_made_50_59") * 5 },
+    { label: "FG 60+ Made", value: n("fg_made_60_"), points: n("fg_made_60_") * 6 },
+    { label: "XP Made/Att", value: `${n("pat_made")}/${n("pat_att") || n("pat_made") + n("pat_missed")}`, points: n("pat_made") },
+    { label: "Game-Winning FG Bonus", value: n("gwfg_made"), points: n("gwfg_made") * 3 },
+    { label: "FG Missed Penalty", value: n("fg_missed"), points: n("fg_missed") * -1 },
+    { label: "XP Missed Penalty", value: n("pat_missed"), points: n("pat_missed") * -1 },
+  ];
+  const fumbles = [
+    { label: "Own Recovered", value: n("fumble_recovery_own"), points: n("fumble_recovery_own") * 2 },
+    { label: "Opp Recovered", value: n("fumble_recovery_opp"), points: n("fumble_recovery_opp") * 2 },
+    { label: "Recovery TDs", value: n("fumble_recovery_tds"), points: n("fumble_recovery_tds") * 6 },
+  ];
+  return [
+    ["Passing", passing],
+    ["Rushing", rushing],
+    ["Receiving", receiving],
+    ["Defense", defense],
+    ["Kicking", kicking],
+    ["Fumbles", fumbles],
+  ].map(([title, lines]) => ({
+    title,
+    lines: lines.filter((line) => {
+      const hasValue = typeof line.value === "string" ? line.value !== "0/0" : Boolean(statNumber(line.value));
+      return hasValue || Number(line.points || 0) !== 0;
+    }),
+  })).filter((section) => section.lines.length > 0);
 }
 
 export default function PlayerStats() {
@@ -328,265 +405,21 @@ export default function PlayerStats() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* Passing Stats */}
-              {(selectedWeek.passing_yards > 0 || selectedWeek.passing_tds > 0 || selectedWeek.completions > 0 || selectedWeek.attempts > 0 || selectedWeek.passing_interceptions > 0 || selectedWeek.passing_first_downs > 0 || selectedWeek.passing_2pt_conversions > 0) && (
-                <div className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">Passing</h4>
+              {buildScoringSections(selectedWeek).map((section) => (
+                <div key={section.title} className="neo-border p-4 bg-gray-50">
+                  <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
                   <div className="space-y-2 text-sm">
-                    {(selectedWeek.completions > 0 || selectedWeek.attempts > 0) && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Completions/Attempts:</span>
-                        <span className="font-black">{selectedWeek.completions || 0}/{selectedWeek.attempts || 0}</span>
-                      </div>
-                    )}
-                    {selectedWeek.passing_yards > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Yards:</span>
-                        <span className="font-black">{selectedWeek.passing_yards}</span>
-                      </div>
-                    )}
-                    {selectedWeek.passing_tds > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">TDs:</span>
-                        <span className="font-black">{selectedWeek.passing_tds}</span>
-                      </div>
-                    )}
-                    {selectedWeek.passing_interceptions > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">INTs:</span>
-                        <span className="font-black">{selectedWeek.passing_interceptions}</span>
-                      </div>
-                    )}
-                    {selectedWeek.passing_first_downs > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">First Downs:</span>
-                        <span className="font-black">{selectedWeek.passing_first_downs}</span>
-                      </div>
-                    )}
-                    {selectedWeek.passing_2pt_conversions > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">2PT Conv:</span>
-                        <span className="font-black">{selectedWeek.passing_2pt_conversions}</span>
-                      </div>
-                    )}
+                    {section.lines.map((line) => (
+                      <ScoredLine
+                        key={line.label}
+                        label={line.label}
+                        value={line.value}
+                        points={line.points}
+                      />
+                    ))}
                   </div>
                 </div>
-              )}
-
-              {/* Rushing Stats */}
-              {(selectedWeek.rushing_yards > 0 || selectedWeek.rushing_tds > 0 || selectedWeek.carries > 0 || selectedWeek.rushing_first_downs > 0 || selectedWeek.rushing_fumbles > 0 || selectedWeek.rushing_fumbles_lost > 0 || selectedWeek.rushing_2pt_conversions > 0) && (
-                <div className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">Rushing</h4>
-                  <div className="space-y-2 text-sm">
-                    {selectedWeek.carries > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Carries:</span>
-                        <span className="font-black">{selectedWeek.carries}</span>
-                      </div>
-                    )}
-                    {selectedWeek.rushing_yards > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Yards:</span>
-                        <span className="font-black">{selectedWeek.rushing_yards}</span>
-                      </div>
-                    )}
-                    {selectedWeek.rushing_tds > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">TDs:</span>
-                        <span className="font-black">{selectedWeek.rushing_tds}</span>
-                      </div>
-                    )}
-                    {selectedWeek.rushing_first_downs > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">First Downs:</span>
-                        <span className="font-black">{selectedWeek.rushing_first_downs}</span>
-                      </div>
-                    )}
-                    {(selectedWeek.rushing_fumbles > 0 || selectedWeek.rushing_fumbles_lost > 0) && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Fumbles/Lost:</span>
-                        <span className="font-black">{selectedWeek.rushing_fumbles || 0}/{selectedWeek.rushing_fumbles_lost || 0}</span>
-                      </div>
-                    )}
-                    {selectedWeek.rushing_2pt_conversions > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">2PT Conv:</span>
-                        <span className="font-black">{selectedWeek.rushing_2pt_conversions}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Receiving Stats */}
-              {(selectedWeek.receiving_yards > 0 || selectedWeek.receiving_tds > 0 || selectedWeek.receptions > 0 || selectedWeek.targets > 0 || selectedWeek.receiving_first_downs > 0 || selectedWeek.receiving_fumbles > 0 || selectedWeek.receiving_fumbles_lost > 0 || selectedWeek.receiving_2pt_conversions > 0) && (
-                <div className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">Receiving</h4>
-                  <div className="space-y-2 text-sm">
-                    {(selectedWeek.receptions > 0 || selectedWeek.targets > 0) && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Receptions/Targets:</span>
-                        <span className="font-black">{selectedWeek.receptions || 0}/{selectedWeek.targets || 0}</span>
-                      </div>
-                    )}
-                    {selectedWeek.receiving_yards > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Yards:</span>
-                        <span className="font-black">{selectedWeek.receiving_yards}</span>
-                      </div>
-                    )}
-                    {selectedWeek.receiving_tds > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">TDs:</span>
-                        <span className="font-black">{selectedWeek.receiving_tds}</span>
-                      </div>
-                    )}
-                    {selectedWeek.receiving_first_downs > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">First Downs:</span>
-                        <span className="font-black">{selectedWeek.receiving_first_downs}</span>
-                      </div>
-                    )}
-                    {(selectedWeek.receiving_fumbles > 0 || selectedWeek.receiving_fumbles_lost > 0) && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Fumbles/Lost:</span>
-                        <span className="font-black">{selectedWeek.receiving_fumbles || 0}/{selectedWeek.receiving_fumbles_lost || 0}</span>
-                      </div>
-                    )}
-                    {selectedWeek.receiving_2pt_conversions > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">2PT Conv:</span>
-                        <span className="font-black">{selectedWeek.receiving_2pt_conversions}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Defense Stats */}
-              {(selectedWeek.def_tackles_solo > 0 || selectedWeek.def_tackle_assists > 0 || selectedWeek.def_tackles_for_loss > 0 || selectedWeek.def_sacks > 0 || selectedWeek.def_qb_hits > 0 || selectedWeek.def_interceptions > 0 || selectedWeek.def_pass_defended > 0 || selectedWeek.def_fumbles_forced > 0 || selectedWeek.def_tds > 0 || selectedWeek.def_safeties > 0) && (
-                <div className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">Defense</h4>
-                  <div className="space-y-2 text-sm">
-                    {selectedWeek.def_tackles_solo > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Solo Tackles:</span>
-                        <span className="font-black">{selectedWeek.def_tackles_solo}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_tackle_assists > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Assist Tackles:</span>
-                        <span className="font-black">{selectedWeek.def_tackle_assists}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_tackles_for_loss > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">TFL:</span>
-                        <span className="font-black">{selectedWeek.def_tackles_for_loss}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_sacks > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Sacks:</span>
-                        <span className="font-black">{selectedWeek.def_sacks}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_qb_hits > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">QB Hits:</span>
-                        <span className="font-black">{selectedWeek.def_qb_hits}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_interceptions > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Interceptions:</span>
-                        <span className="font-black">{selectedWeek.def_interceptions}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_pass_defended > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Pass Defended:</span>
-                        <span className="font-black">{selectedWeek.def_pass_defended}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_fumbles_forced > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Fumbles Forced:</span>
-                        <span className="font-black">{selectedWeek.def_fumbles_forced}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_tds > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">TDs:</span>
-                        <span className="font-black">{selectedWeek.def_tds}</span>
-                      </div>
-                    )}
-                    {selectedWeek.def_safeties > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Safeties:</span>
-                        <span className="font-black">{selectedWeek.def_safeties}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Kicking Stats */}
-              {(selectedWeek.fg_made > 0 || selectedWeek.fg_att > 0 || selectedWeek.fg_made_0_19 > 0 || selectedWeek.fg_made_20_29 > 0 || selectedWeek.fg_made_30_39 > 0 || selectedWeek.fg_made_40_49 > 0 || selectedWeek.fg_made_50_59 > 0 || selectedWeek.fg_made_60_ > 0 || selectedWeek.pat_made > 0 || selectedWeek.pat_missed > 0 || selectedWeek.fg_missed > 0 || selectedWeek.gwfg_made > 0) && (
-                <div className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">Kicking</h4>
-                  <div className="space-y-2 text-sm">
-                    {(selectedWeek.fg_made > 0 || selectedWeek.fg_att > 0) && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">FG Made/Att:</span>
-                        <span className="font-black">{selectedWeek.fg_made || 0}/{selectedWeek.fg_att || 0}</span>
-                      </div>
-                    )}
-                    <ScoredLine label="FG 0-19 Made" value={statNumber(selectedWeek.fg_made_0_19)} points={statNumber(selectedWeek.fg_made_0_19) * 3} />
-                    <ScoredLine label="FG 20-29 Made" value={statNumber(selectedWeek.fg_made_20_29)} points={statNumber(selectedWeek.fg_made_20_29) * 3} />
-                    <ScoredLine label="FG 30-39 Made" value={statNumber(selectedWeek.fg_made_30_39)} points={statNumber(selectedWeek.fg_made_30_39) * 3} />
-                    <ScoredLine label="FG 40-49 Made" value={statNumber(selectedWeek.fg_made_40_49)} points={statNumber(selectedWeek.fg_made_40_49) * 4} />
-                    <ScoredLine label="FG 50-59 Made" value={statNumber(selectedWeek.fg_made_50_59)} points={statNumber(selectedWeek.fg_made_50_59) * 5} />
-                    <ScoredLine label="FG 60+ Made" value={statNumber(selectedWeek.fg_made_60_)} points={statNumber(selectedWeek.fg_made_60_) * 6} />
-                    <ScoredLine
-                      label="XP Made/Att"
-                      value={`${statNumber(selectedWeek.pat_made)}/${statNumber(selectedWeek.pat_att) || statNumber(selectedWeek.pat_made) + statNumber(selectedWeek.pat_missed)}`}
-                      points={statNumber(selectedWeek.pat_made)}
-                    />
-                    <ScoredLine label="Game-Winning FG Bonus" value={statNumber(selectedWeek.gwfg_made)} points={statNumber(selectedWeek.gwfg_made) * 3} />
-                    <ScoredLine label="FG Missed Penalty" value={statNumber(selectedWeek.fg_missed)} points={statNumber(selectedWeek.fg_missed) * -1} />
-                    <ScoredLine label="XP Missed Penalty" value={statNumber(selectedWeek.pat_missed)} points={statNumber(selectedWeek.pat_missed) * -1} />
-                  </div>
-                </div>
-              )}
-
-              {/* Fumble Recoveries */}
-              {(selectedWeek.fumble_recovery_own > 0 || selectedWeek.fumble_recovery_opp > 0 || selectedWeek.fumble_recovery_tds > 0) && (
-                <div className="neo-border p-4 bg-gray-50">
-                  <h4 className="font-black uppercase text-sm mb-3">Fumbles</h4>
-                  <div className="space-y-2 text-sm">
-                    {selectedWeek.fumble_recovery_own > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Own Recovered:</span>
-                        <span className="font-black">{selectedWeek.fumble_recovery_own}</span>
-                      </div>
-                    )}
-                    {selectedWeek.fumble_recovery_opp > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Opp Recovered:</span>
-                        <span className="font-black">{selectedWeek.fumble_recovery_opp}</span>
-                      </div>
-                    )}
-                    {selectedWeek.fumble_recovery_tds > 0 && (
-                      <div className="flex justify-between">
-                        <span className="font-bold text-gray-600">Recovery TDs:</span>
-                        <span className="font-black">{selectedWeek.fumble_recovery_tds}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              ))}
             </div>
           </div>
         </div>
