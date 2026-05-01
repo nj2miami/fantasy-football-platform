@@ -1,0 +1,3 @@
+import { handleAction } from "../_shared/engine.ts";
+
+Deno.serve((request) => handleAction("recalculate_standings", request));

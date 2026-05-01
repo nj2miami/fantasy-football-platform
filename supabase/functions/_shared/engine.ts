@@ -1,0 +1,1369 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.104.1";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+const DEFAULT_SCORING_RULES = {
+  OFFENSE: {
+    passing_yard: 0.04,
+    passing_td: 4,
+    passing_int: -2,
+    passing_first_down: 0.5,
+    rushing_yard: 0.1,
+    rushing_td: 6,
+    rushing_first_down: 0.5,
+    fumble: -1,
+    fumble_lost: -2,
+    reception: 1,
+    receiving_yard: 0.1,
+    receiving_td: 6,
+    receiving_first_down: 0.5,
+    two_pt_conversion: 2,
+    bonus_100_rush_rec_yards: 3,
+    bonus_300_pass_yards: 3,
+  },
+  KICKER: {
+    fg_0_39: 3,
+    fg_40_49: 4,
+    fg_50_plus: 5,
+    fg_miss: -1,
+    xp_made: 1,
+    xp_miss: -1,
+  },
+  DEFENSE: {
+    solo_tackle: 1.5,
+    assist_tackle: 0.75,
+    tackle_for_loss: 1,
+    sack: 3,
+    qb_hit: 0.5,
+    interception: 4,
+    pass_defended: 1,
+    fumble_forced: 2,
+    fumble_recovered: 2,
+    touchdown: 6,
+    safety: 2,
+  },
+};
+
+const DEFAULT_ROSTER_RULES = {
+  starters: { QB: 1, OFF: 2, FLEX: 1, K: 1, DEF: 1 },
+  bench: 5,
+};
+
+const DEFAULT_DRAFT_CONFIG = {
+  type: "snake",
+  rounds: 10,
+  timer_seconds: 60,
+};
+
+const DEFAULT_SCHEDULE_CONFIG = {
+  type: "interval",
+  start_date: new Date().toISOString().slice(0, 10),
+  games_per_period: 1,
+  period_days: 7,
+  preset_dates: [],
+};
+
+const DEFAULT_LEAGUE_PLAY_SETTINGS = {
+  draft_mode: "season_snake",
+  player_retention_mode: "retained",
+  schedule_type: "head_to_head",
+  ranking_system: "standard",
+  advancement_mode: "manual",
+  playoff_mode: "roster_only",
+  playoff_start_week: 9,
+  playoff_team_count: 4,
+  schedule_config: DEFAULT_SCHEDULE_CONFIG,
+};
+
+type Json = Record<string, unknown>;
+const PREMIUM_LEAGUE_LIMIT = 4;
+const PAID_JOIN_FEE_MIN_CENTS = 500;
+const PAID_JOIN_FEE_DEFAULT_MAX_CENTS = 5000;
+const AI_PERSONAS = new Set(["BALANCED", "OFFENSIVE", "DEFENSIVE"]);
+const AI_FIRST_NAMES = [
+  "Blitz", "Redzone", "Iron", "Gridiron", "Goal Line", "Fourth Down", "Two Minute", "Wildcat", "Pigskin", "Audible",
+  "Hail Mary", "End Zone", "Sideline", "Playbook", "Hashmark", "Sunday", "Primetime", "Turbo", "Smashmouth", "Nickel",
+  "Power", "Dynasty", "Rumble", "Rocket", "Phantom", "Thunder", "Victory", "Signal", "Turf", "Helmet",
+];
+const AI_LAST_NAMES = [
+  "Bruisers", "Blitzers", "Maulers", "Crushers", "Punishers", "Hit Squad", "Ball Hawks", "Sack Masters", "Chain Movers", "Playmakers",
+  "Road Graders", "Linebackers", "Safeties", "Generals", "Captains", "Warriors", "Gladiators", "Bombers", "Rushers", "Defenders",
+  "Marauders", "Outlaws", "Renegades", "Stampede", "Avalanche", "Cyclones", "Firebirds", "Ironclads", "Night Shift", "Endzones",
+];
+
+export async function parseRequest(request: Request) {
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
+export function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function adminClient() {
+  const url = Deno.env.get("SUPABASE_URL");
+  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !key) throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function getUser(request: Request, supabase: ReturnType<typeof createClient>) {
+  const token = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token) throw new Error("Missing Authorization bearer token");
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) throw new Error(error?.message || "Invalid user token");
+  return data.user;
+}
+
+async function ensureProfile(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null; user_metadata?: Json }) {
+  if (!user.email) throw new Error("Authenticated user is missing an email address");
+  const { data: existingProfile, error: existingProfileError } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (existingProfileError) throw existingProfileError;
+  if (existingProfile) return existingProfile;
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .insert({
+      id: user.id,
+      user_email: user.email,
+      display_name: (user.user_metadata?.display_name as string | undefined) ||
+        (user.user_metadata?.full_name as string | undefined) ||
+        "Manager",
+      profile_name: user.user_metadata?.profile_name as string | undefined,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function getProfile(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function requireAdmin(supabase: ReturnType<typeof createClient>, user: { id: string }) {
+  const profile = await getProfile(supabase, user);
+  if (String(profile?.role || "").toLowerCase() !== "admin") throw new Error("Admin access required");
+  return profile;
+}
+
+async function requireLeagueControl(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, leagueId: unknown) {
+  const { data: league, error: leagueError } = await supabase
+    .from("leagues")
+    .select("*")
+    .eq("id", leagueId)
+    .single();
+  if (leagueError) throw leagueError;
+
+  const profile = await getProfile(supabase, user);
+  if (String(profile?.role || "").toLowerCase() === "admin") return { league, profile, isAdmin: true };
+  if (league.commissioner_id === user.id || league.commissioner_email === user.email) return { league, profile, isAdmin: false };
+
+  const { data: member, error: memberError } = await supabase
+    .from("league_members")
+    .select("id")
+    .eq("league_id", leagueId)
+    .eq("profile_id", user.id)
+    .eq("role_in_league", "COMMISSIONER")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (memberError) throw memberError;
+  if (!member) throw new Error("Commissioner access required");
+  return { league, profile, isAdmin: false };
+}
+
+function makeInviteCode() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(6)))
+    .map((byte) => byte.toString(36).padStart(2, "0"))
+    .join("")
+    .slice(0, 10)
+    .toUpperCase();
+}
+
+function normalizeLeaguePlaySettings(payload: Json | null | undefined) {
+  const league = payload || {};
+  const draftMode = String(league.draft_mode || (league.mode === "weekly_redraft" ? "weekly_redraft" : "season_snake"));
+  return {
+    ...DEFAULT_LEAGUE_PLAY_SETTINGS,
+    ...league,
+    mode: draftMode === "weekly_redraft" ? "weekly_redraft" : "traditional",
+    draft_mode: draftMode,
+    schedule_config: { ...DEFAULT_SCHEDULE_CONFIG, ...((league.schedule_config as Json | undefined) || {}) },
+  };
+}
+
+function scheduleDatesForLeague(league: Json) {
+  const config = { ...DEFAULT_SCHEDULE_CONFIG, ...((league.schedule_config as Json | undefined) || {}) };
+  const regularWeeks = Math.max(1, Number(league.playoff_start_week || Number(league.season_length_weeks || 8) + 1) - 1);
+  const totalWeeks = Math.max(Number(league.season_length_weeks || regularWeeks), regularWeeks);
+  if (config.type === "one_day") {
+    const date = String(config.start_date || new Date().toISOString().slice(0, 10));
+    return Array.from({ length: totalWeeks }, () => date);
+  }
+  if (config.type === "preset" && Array.isArray(config.preset_dates) && config.preset_dates.length) {
+    return Array.from({ length: totalWeeks }, (_, index) => String(config.preset_dates[index % config.preset_dates.length]));
+  }
+  const start = new Date(`${config.start_date || new Date().toISOString().slice(0, 10)}T12:00:00`);
+  const gamesPerPeriod = Math.max(1, Number(config.games_per_period || 1));
+  const periodDays = Math.max(1, Number(config.period_days || 7));
+  return Array.from({ length: totalWeeks }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + Math.floor(index / gamesPerPeriod) * periodDays);
+    return date.toISOString();
+  });
+}
+
+async function generateGameSchedule(supabase: ReturnType<typeof createClient>, league: Json) {
+  await supabase.from("league_game_schedule").delete().eq("league_id", league.id);
+  const rows = scheduleDatesForLeague(league).map((scheduledAt, index) => ({
+    league_id: league.id,
+    week_number: index + 1,
+    game_number: 1,
+    scheduled_at: scheduledAt,
+    phase: index + 1 >= Number(league.playoff_start_week || 999) ? "playoff" : "regular",
+    advancement_mode: league.advancement_mode || "manual",
+    status: "SCHEDULED",
+  }));
+  if (!rows.length) return [];
+  const { data, error } = await supabase.from("league_game_schedule").insert(rows).select("*");
+  if (error) throw error;
+  return data || [];
+}
+
+async function ensureWeekRandomization(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number, sourceSeasonYear: number) {
+  const { data: existing, error: existingError } = await supabase
+    .from("week_randomizations")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("fantasy_week", weekNumber)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing) return existing;
+
+  const { data: players, error: playerError } = await supabase.from("players").select("id").eq("source_season_year", sourceSeasonYear);
+  if (playerError) throw playerError;
+  const assignments = (players || []).reduce((acc: Record<string, number>, player: { id: string }, index: number) => {
+    acc[player.id] = ((weekNumber + index * 2) % 18) + 1;
+    return acc;
+  }, {});
+  const { data, error } = await supabase
+    .from("week_randomizations")
+    .insert({
+      league_id: league.id,
+      fantasy_week: weekNumber,
+      source_season_year: sourceSeasonYear,
+      reveal_state: "hidden",
+      assignment_method: "per_player_hidden_week",
+      assignments,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function generateMatchups(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number) {
+  if (league.schedule_type !== "head_to_head") return [];
+  const { data: existing, error: existingError } = await supabase
+    .from("matchups")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("week_number", weekNumber);
+  if (existingError) throw existingError;
+  if (existing?.length) return existing;
+  const { data: members, error: memberError } = await supabase
+    .from("league_members")
+    .select("id")
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (memberError) throw memberError;
+  const rotated = [...(members || []).slice(weekNumber - 1), ...(members || []).slice(0, weekNumber - 1)];
+  const rows = [];
+  for (let index = 0; index < rotated.length - 1; index += 2) {
+    rows.push({
+      league_id: league.id,
+      week_number: weekNumber,
+      home_member_id: rotated[index].id,
+      away_member_id: rotated[index + 1].id,
+      home_score: 0,
+      away_score: 0,
+    });
+  }
+  if (!rows.length) return [];
+  const { data, error } = await supabase.from("matchups").insert(rows).select("*");
+  if (error) throw error;
+  return data || [];
+}
+
+async function createMembershipAndStanding(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  user: { id: string; email?: string | null; user_metadata?: Json },
+  teamName?: string,
+) {
+  if (!user.email) throw new Error("Authenticated user is missing an email address");
+  const profile = await ensureProfile(supabase, user);
+  const { count: existingCount, error: existingError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .or(`profile_id.eq.${user.id},user_email.eq.${user.email}`);
+  if (existingError) throw existingError;
+  if ((existingCount || 0) > 0) throw new Error("You are already in this league.");
+
+  const { count: memberCount, error: memberCountError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (memberCountError) throw memberCountError;
+  if ((memberCount || 0) >= Number(league.max_members || 0)) throw new Error("League is full.");
+
+  const role = String(profile.role || "manager").toLowerCase();
+  const { count: activeCount, error: activeCountError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("user_email", user.email)
+    .eq("is_active", true)
+    .eq("is_ai", false);
+  if (activeCountError) throw activeCountError;
+  if (role !== "admin" && role !== "premium" && (activeCount || 0) >= 1) {
+    throw new Error("Your league limit is full. Premium managers can join up to 4 leagues.");
+  }
+  if ((role === "premium" || role === "manager") && (activeCount || 0) >= PREMIUM_LEAGUE_LIMIT) {
+    throw new Error("Your league limit is full. Premium managers can join up to 4 leagues.");
+  }
+
+  const { data: member, error: memberError } = await supabase
+    .from("league_members")
+    .insert({
+      league_id: league.id,
+      profile_id: user.id,
+      user_email: user.email,
+      team_name: teamName || `${profile.profile_name || profile.display_name || "Manager"}'s Team`,
+      role_in_league: "MANAGER",
+      is_active: true,
+      is_ai: false,
+    })
+    .select("*")
+    .single();
+  if (memberError) throw memberError;
+
+  await supabase.from("standings").insert({ league_id: league.id, league_member_id: member.id });
+  return member;
+}
+
+async function nextAiTeamName(supabase: ReturnType<typeof createClient>, leagueId: unknown) {
+  const { data: parts } = await supabase.from("ai_team_name_parts").select("part_type,value");
+  const firsts = (parts || []).filter((part) => part.part_type === "FIRST").map((part) => part.value);
+  const lasts = (parts || []).filter((part) => part.part_type === "LAST").map((part) => part.value);
+  const safeFirsts = firsts.length ? firsts : AI_FIRST_NAMES;
+  const safeLasts = lasts.length ? lasts : AI_LAST_NAMES;
+  const { data: used } = await supabase.from("used_ai_team_names").select("name").eq("league_id", leagueId);
+  const usedNames = new Set((used || []).map((row) => row.name));
+
+  for (const first of safeFirsts) {
+    for (const last of safeLasts) {
+      const name = `${first} ${last}`;
+      if (usedNames.has(name)) continue;
+      const { error } = await supabase.from("used_ai_team_names").insert({ league_id: leagueId, name });
+      if (!error) return name;
+    }
+  }
+  throw new Error("No unused AI team names remain.");
+}
+
+async function paidLeagueJoinFeeMaxCents(supabase: ReturnType<typeof createClient>) {
+  const { data } = await supabase
+    .from("site_settings")
+    .select("value")
+    .eq("key", "PAID_LEAGUE_JOIN_FEE_MAX_CENTS")
+    .maybeSingle();
+  const rawValue = data?.value;
+  const parsed = typeof rawValue === "number"
+    ? rawValue
+    : typeof rawValue === "string"
+      ? Number(rawValue)
+      : Number((rawValue as Json | undefined)?.amount_cents || (rawValue as Json | undefined)?.value || PAID_JOIN_FEE_DEFAULT_MAX_CENTS);
+  return Number.isFinite(parsed) && parsed >= PAID_JOIN_FEE_MIN_CENTS ? parsed : PAID_JOIN_FEE_DEFAULT_MAX_CENTS;
+}
+
+async function validateJoinFee(supabase: ReturnType<typeof createClient>, leagueTier: string, payload: Json) {
+  const isPaidLeague = leagueTier === "PAID";
+  const joinFeeCents = Number(payload.join_fee_cents || 0);
+  const joinFeeCurrency = String(payload.join_fee_currency || "usd").toLowerCase();
+
+  if (!Number.isInteger(joinFeeCents) || joinFeeCents < 0) {
+    throw new Error("Join fee must be a valid USD amount.");
+  }
+
+  if (!isPaidLeague) {
+    if (joinFeeCents !== 0) throw new Error("Free leagues cannot have a join fee.");
+    return { joinFeeCents: 0, joinFeeCurrency: "usd" };
+  }
+
+  const maxCents = await paidLeagueJoinFeeMaxCents(supabase);
+  if (joinFeeCurrency !== "usd") throw new Error("Paid league join fee currency must be USD.");
+  if (joinFeeCents < PAID_JOIN_FEE_MIN_CENTS) throw new Error("Paid league join fee must be at least $5.00.");
+  if (joinFeeCents > maxCents) throw new Error(`Paid league join fee cannot exceed $${(maxCents / 100).toFixed(2)}.`);
+  return { joinFeeCents, joinFeeCurrency };
+}
+
+async function createLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null; user_metadata?: Json }, payload: Json) {
+  const profile = await ensureProfile(supabase, user);
+  const role = String(profile.role || "manager").toLowerCase();
+  const leagueTier = String(payload.league_tier || "FREE").toUpperCase();
+  const maxMembers = Number(payload.max_members || 8);
+  const isPaidLeague = leagueTier === "PAID";
+  const minMembers = 4;
+  const maxAllowedMembers = isPaidLeague ? 16 : 8;
+
+  if (maxMembers < minMembers || maxMembers > maxAllowedMembers) {
+    throw new Error(`${leagueTier} leagues must have between ${minMembers} and ${maxAllowedMembers} teams.`);
+  }
+  const { joinFeeCents, joinFeeCurrency } = await validateJoinFee(supabase, leagueTier, payload);
+
+  const { count: membershipCount, error: membershipCountError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("user_email", user.email)
+    .eq("is_active", true)
+    .eq("is_ai", false);
+  if (membershipCountError) throw membershipCountError;
+
+  const { count: createdCount, error: createdCountError } = await supabase
+    .from("leagues")
+    .select("id", { count: "exact", head: true })
+    .or(`commissioner_id.eq.${user.id},commissioner_email.eq.${user.email}`);
+  if (createdCountError) throw createdCountError;
+
+  const activeMemberships = membershipCount || 0;
+  const createdLeagues = createdCount || 0;
+  const canCreate = role === "admin"
+    || (role === "premium" && activeMemberships < PREMIUM_LEAGUE_LIMIT && createdLeagues < PREMIUM_LEAGUE_LIMIT)
+    || (role === "manager" && !isPaidLeague && activeMemberships === 0 && createdLeagues === 0)
+    || (role === "manager" && isPaidLeague && activeMemberships < PREMIUM_LEAGUE_LIMIT && createdLeagues < PREMIUM_LEAGUE_LIMIT);
+
+  if (!canCreate) {
+    throw new Error("Your league limit is full. Premium managers can create or join up to 4 leagues.");
+  }
+
+  const playSettings = normalizeLeaguePlaySettings(payload);
+  const { data: league, error: leagueError } = await supabase
+    .from("leagues")
+    .insert({
+      name: payload.name,
+      description: payload.description ?? null,
+      commissioner_id: user.id,
+      commissioner_email: payload.commissioner_email || user.email,
+      league_tier: leagueTier,
+      is_public: payload.is_public ?? true,
+      is_sponsored: payload.is_sponsored ?? false,
+      league_status: payload.league_status || "RECRUITING",
+      mode: playSettings.mode,
+      draft_mode: playSettings.draft_mode,
+      player_retention_mode: playSettings.player_retention_mode,
+      schedule_type: playSettings.schedule_type,
+      ranking_system: playSettings.ranking_system,
+      advancement_mode: playSettings.advancement_mode,
+      playoff_mode: playSettings.playoff_mode,
+      playoff_start_week: playSettings.playoff_start_week,
+      playoff_team_count: playSettings.playoff_team_count,
+      schedule_config: playSettings.schedule_config,
+      season_length_weeks: payload.season_length_weeks || 8,
+      max_members: payload.max_members || 8,
+      join_fee_cents: joinFeeCents,
+      join_fee_currency: joinFeeCurrency,
+      source_season_year: payload.source_season_year || new Date().getFullYear() - 1,
+      scoring_rules: payload.scoring_rules || DEFAULT_SCORING_RULES,
+      roster_rules: payload.roster_rules || DEFAULT_ROSTER_RULES,
+      draft_config: payload.draft_config || DEFAULT_DRAFT_CONFIG,
+      header_image_url: payload.header_image_url ?? null,
+    })
+    .select("*")
+    .single();
+  if (leagueError) throw leagueError;
+
+  const { data: member, error: memberError } = await supabase
+    .from("league_members")
+    .insert({
+      league_id: league.id,
+      profile_id: user.id,
+      user_email: user.email,
+      team_name: payload.team_name || `${profile.display_name || user.email?.split("@")[0]}'s Team`,
+      role_in_league: "COMMISSIONER",
+      is_active: true,
+    })
+    .select("*")
+    .single();
+  if (memberError) throw memberError;
+
+  await supabase.from("standings").insert({
+    league_id: league.id,
+    league_member_id: member.id,
+  });
+
+  if (isPaidLeague && role === "manager") {
+    await supabase
+      .from("profiles")
+      .update({ role: "premium" })
+      .eq("id", user.id);
+  }
+
+  return { league, member };
+}
+
+async function joinLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null; user_metadata?: Json }, payload: Json) {
+  const { data: league, error } = await supabase
+    .from("leagues")
+    .select("*")
+    .eq("id", payload.league_id)
+    .is("archived_at", null)
+    .single();
+  if (error) throw error;
+  if (!league.is_public) throw new Error("This league requires an invite code.");
+  const member = await createMembershipAndStanding(supabase, league, user, payload.team_name as string | undefined);
+  return { league, member };
+}
+
+async function joinLeagueByInvite(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null; user_metadata?: Json }, payload: Json) {
+  const code = String(payload.code || "").trim().toUpperCase();
+  const { data: invite, error: inviteError } = await supabase
+    .from("league_invites")
+    .select("*, leagues(*)")
+    .eq("code", code)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (inviteError) throw inviteError;
+  if (!invite) throw new Error("Invite code is invalid or inactive.");
+  if (invite.expires_at && new Date(invite.expires_at).getTime() < Date.now()) throw new Error("Invite code has expired.");
+  if (invite.max_uses && Number(invite.used_count || 0) >= Number(invite.max_uses)) throw new Error("Invite code has no uses remaining.");
+  if (invite.leagues?.archived_at) throw new Error("This league is archived.");
+
+  const member = await createMembershipAndStanding(supabase, invite.leagues, user, payload.team_name as string | undefined);
+  await supabase
+    .from("league_invites")
+    .update({ used_count: Number(invite.used_count || 0) + 1, updated_date: new Date().toISOString() })
+    .eq("id", invite.id);
+  return { league: invite.leagues, member };
+}
+
+async function createLeagueInvite(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  await requireLeagueControl(supabase, user, payload.league_id);
+  const code = String(payload.code || makeInviteCode()).trim().toUpperCase();
+  const { data: invite, error } = await supabase
+    .from("league_invites")
+    .insert({
+      league_id: payload.league_id,
+      code,
+      created_by: user.id,
+      expires_at: payload.expires_at || null,
+      max_uses: payload.max_uses || null,
+      is_active: true,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { invite };
+}
+
+async function disableLeagueInvite(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: invite, error: inviteError } = await supabase.from("league_invites").select("*").eq("id", payload.invite_id).single();
+  if (inviteError) throw inviteError;
+  await requireLeagueControl(supabase, user, invite.league_id);
+  const { data, error } = await supabase
+    .from("league_invites")
+    .update({ is_active: false, updated_date: new Date().toISOString() })
+    .eq("id", invite.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { invite: data };
+}
+
+async function renameLeagueMemberTeam(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
+  if (memberError) throw memberError;
+  await requireLeagueControl(supabase, user, member.league_id);
+  const { data, error } = await supabase
+    .from("league_members")
+    .update({ team_name: payload.team_name, updated_date: new Date().toISOString() })
+    .eq("id", member.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { member: data };
+}
+
+async function removeLeagueMember(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
+  if (memberError) throw memberError;
+  const { league } = await requireLeagueControl(supabase, user, member.league_id);
+  if (member.user_email === league.commissioner_email || member.role_in_league === "COMMISSIONER") {
+    throw new Error("Transfer commissioner before removing this member.");
+  }
+  const { data, error } = await supabase
+    .from("league_members")
+    .update({ is_active: false, updated_date: new Date().toISOString() })
+    .eq("id", member.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { member: data };
+}
+
+async function transferCommissioner(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: target, error: targetError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
+  if (targetError) throw targetError;
+  const { league } = await requireLeagueControl(supabase, user, target.league_id);
+  if (!target.is_active || target.is_ai) throw new Error("Commissioner must be an active human member.");
+  await supabase.from("league_members").update({ role_in_league: "MANAGER" }).eq("league_id", league.id).eq("role_in_league", "COMMISSIONER");
+  const { data: member, error: memberError } = await supabase
+    .from("league_members")
+    .update({ role_in_league: "COMMISSIONER", updated_date: new Date().toISOString() })
+    .eq("id", target.id)
+    .select("*")
+    .single();
+  if (memberError) throw memberError;
+  const { data: updatedLeague, error: leagueError } = await supabase
+    .from("leagues")
+    .update({ commissioner_id: target.profile_id, commissioner_email: target.user_email, updated_date: new Date().toISOString() })
+    .eq("id", league.id)
+    .select("*")
+    .single();
+  if (leagueError) throw leagueError;
+  return { league: updatedLeague, member };
+}
+
+async function addAiTeam(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { count, error: countError } = await supabase.from("league_members").select("id", { count: "exact", head: true }).eq("league_id", league.id).eq("is_active", true);
+  if (countError) throw countError;
+  if ((count || 0) >= Number(league.max_members || 0)) throw new Error("League is full.");
+  const persona = AI_PERSONAS.has(String(payload.ai_persona || payload.persona || "BALANCED"))
+    ? String(payload.ai_persona || payload.persona || "BALANCED")
+    : "BALANCED";
+  const name = await nextAiTeamName(supabase, league.id);
+  const { data: member, error } = await supabase
+    .from("league_members")
+    .insert({
+      league_id: league.id,
+      user_email: `ai-${league.id}-${crypto.randomUUID()}@offseason.fantasy`,
+      team_name: name,
+      role_in_league: "MANAGER",
+      is_active: true,
+      is_ai: true,
+      ai_persona: persona,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  await supabase.from("standings").insert({ league_id: league.id, league_member_id: member.id });
+  return { member, teamName: name };
+}
+
+async function fillLeagueWithAi(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { count, error: countError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (countError) throw countError;
+  const openSpots = Math.max(0, Number(league.max_members || 0) - (count || 0));
+  const members = [];
+  for (let i = 0; i < openSpots; i += 1) {
+    const result = await addAiTeam(supabase, user, { league_id: league.id, ai_persona: "BALANCED" });
+    members.push(result.member);
+  }
+  return { created: members.length, members };
+}
+
+async function updateAiTeam(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
+  if (memberError) throw memberError;
+  if (!member.is_ai) throw new Error("Only AI teams can be edited here.");
+  await requireLeagueControl(supabase, user, member.league_id);
+  const update: Json = {};
+  if (payload.team_name) update.team_name = payload.team_name;
+  if (AI_PERSONAS.has(String(payload.ai_persona))) update.ai_persona = payload.ai_persona;
+  const { data, error } = await supabase.from("league_members").update({ ...update, updated_date: new Date().toISOString() }).eq("id", member.id).select("*").single();
+  if (error) throw error;
+  return { member: data };
+}
+
+async function removeAiTeam(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
+  if (memberError) throw memberError;
+  if (!member.is_ai) throw new Error("Only AI teams can be removed here.");
+  await requireLeagueControl(supabase, user, member.league_id);
+  const { data, error } = await supabase.from("league_members").update({ is_active: false, updated_date: new Date().toISOString() }).eq("id", member.id).select("*").single();
+  if (error) throw error;
+  return { member: data };
+}
+
+async function archiveLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league, isAdmin } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { count: seasonCount, error: seasonCountError } = await supabase
+    .from("league_seasons")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id);
+  if (seasonCountError) throw seasonCountError;
+
+  const { count: paidMemberCount, error: paidMemberCountError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .eq("is_active", true)
+    .eq("is_ai", false)
+    .neq("role_in_league", "COMMISSIONER");
+  if (paidMemberCountError) throw paidMemberCountError;
+
+  if (!isAdmin && (seasonCount || 0) > 0) throw new Error("League has begun and cannot be deleted by commissioner.");
+  if (!isAdmin && league.league_tier === "PAID" && (paidMemberCount || 0) > 0) {
+    throw new Error("Paid members joined; only an admin can force delete this league.");
+  }
+
+  const { data, error } = await supabase
+    .from("leagues")
+    .update({ archived_at: new Date().toISOString(), archived_by: user.id, archive_reason: payload.archive_reason || "Deleted by commissioner", updated_date: new Date().toISOString() })
+    .eq("id", league.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { league: data };
+}
+
+async function forceDeleteLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  await requireAdmin(supabase, user);
+  const { data: league, error: leagueError } = await supabase
+    .from("leagues")
+    .select("*")
+    .eq("id", payload.league_id)
+    .single();
+  if (leagueError) throw leagueError;
+
+  const { count: paidMemberCount, error: paidMemberCountError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .eq("is_active", true)
+    .eq("is_ai", false)
+    .neq("role_in_league", "COMMISSIONER");
+  if (paidMemberCountError) throw paidMemberCountError;
+
+  const refundPending = league.league_tier === "PAID" && (paidMemberCount || 0) > 0;
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("leagues")
+    .update({
+      archived_at: nowIso,
+      archived_by: user.id,
+      archive_reason: payload.archive_reason || "Admin force delete",
+      refund_status: refundPending ? "PENDING" : "NOT_REQUIRED",
+      refund_required_at: refundPending ? nowIso : null,
+      refund_reason: refundPending ? "Admin force delete after paid members joined" : null,
+      updated_date: nowIso,
+    })
+    .eq("id", league.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { league: data, refund_pending: refundPending };
+}
+
+async function restoreLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  await requireAdmin(supabase, user);
+  const { data, error } = await supabase
+    .from("leagues")
+    .update({ archived_at: null, archived_by: null, archive_reason: null, updated_date: new Date().toISOString() })
+    .eq("id", payload.league_id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { league: data };
+}
+
+async function createOfficialLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null; user_metadata?: Json }, payload: Json) {
+  await requireAdmin(supabase, user);
+  const result = await createLeague(supabase, user, {
+    name: payload.name || "Official Retro League",
+    description: payload.description || "A public league seeded from the current source season.",
+    commissioner_email: user.email,
+    team_name: "Official Commissioner",
+    league_tier: "FREE",
+    is_public: true,
+    is_sponsored: true,
+    mode: payload.mode || "traditional",
+    draft_mode: payload.draft_mode || "season_snake",
+    player_retention_mode: payload.player_retention_mode || "retained",
+    schedule_type: payload.schedule_type || "head_to_head",
+    ranking_system: payload.ranking_system || "standard",
+    advancement_mode: payload.advancement_mode || "manual",
+    playoff_mode: payload.playoff_mode || "roster_only",
+    playoff_start_week: payload.playoff_start_week || 9,
+    playoff_team_count: payload.playoff_team_count || 4,
+    schedule_config: payload.schedule_config || DEFAULT_SCHEDULE_CONFIG,
+    season_length_weeks: 8,
+    max_members: payload.max_members || 8,
+    source_season_year: payload.source_season_year || new Date().getFullYear() - 1,
+    scoring_rules: DEFAULT_SCORING_RULES,
+    roster_rules: DEFAULT_ROSTER_RULES,
+    draft_config: DEFAULT_DRAFT_CONFIG,
+  });
+  await supabase.from("official_leagues").insert({ league_id: result.league.id, label: payload.label || "Official league" });
+  return result;
+}
+
+async function setLeagueStatus(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json, status: string) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const update = status === "PAUSED"
+    ? { league_status: status, paused_at: new Date().toISOString(), updated_date: new Date().toISOString() }
+    : { league_status: status, paused_at: null, updated_date: new Date().toISOString() };
+  const { data, error } = await supabase.from("leagues").update(update).eq("id", league.id).select("*").single();
+  if (error) throw error;
+  return { league: data };
+}
+
+async function startSeason(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const { data: rawLeague, error: leagueError } = await supabase
+    .from("leagues")
+    .select("*")
+    .eq("id", payload.league_id)
+    .single();
+  if (leagueError) throw leagueError;
+  const league = normalizeLeaguePlaySettings(rawLeague);
+
+  const sourceSeasonYear = payload.source_season_year || league.source_season_year || new Date().getFullYear() - 1;
+  const { data: season, error: seasonError } = await supabase
+    .from("league_seasons")
+    .insert({
+      league_id: league.id,
+      status: "ACTIVE",
+      current_week: 1,
+      season_year: new Date().getFullYear(),
+      source_season_year: sourceSeasonYear,
+      reveal_state: "hidden",
+      mode: league.mode,
+    })
+    .select("*")
+    .single();
+  if (seasonError) throw seasonError;
+
+  const { data: week, error: weekError } = await supabase
+    .from("league_weeks")
+    .upsert(
+      {
+        league_id: league.id,
+        week_number: 1,
+        status: league.draft_mode === "weekly_redraft" ? "DRAFT_OPEN" : "LINEUPS_OPEN",
+        reveal_state: "hidden",
+      },
+      { onConflict: "league_id,week_number" },
+    )
+    .select("*")
+    .single();
+  if (weekError) throw weekError;
+
+  await supabase.from("leagues").update({ league_status: "ACTIVE", updated_date: new Date().toISOString() }).eq("id", league.id);
+
+  await ensureWeekRandomization(supabase, league, 1, Number(sourceSeasonYear));
+  await generateGameSchedule(supabase, league);
+  await generateMatchups(supabase, league, 1);
+
+  return { season, week };
+}
+
+async function openWeekDraft(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const weekNumber = Number(payload.week_number || 1);
+  const { data: draft, error: draftError } = await supabase
+    .from("drafts")
+    .insert({
+      league_id: payload.league_id,
+      week_number: weekNumber,
+      status: "OPEN",
+      type: payload.type || "weekly_redraft",
+    })
+    .select("*")
+    .single();
+  if (draftError) throw draftError;
+
+  const { data: room, error: roomError } = await supabase
+    .from("draft_rooms")
+    .insert({
+      draft_id: draft.id,
+      timer_seconds: Number(payload.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds),
+      state: {},
+    })
+    .select("*")
+    .single();
+  if (roomError) throw roomError;
+
+  await supabase.from("league_weeks").upsert(
+    {
+      league_id: payload.league_id,
+      week_number: weekNumber,
+      status: "DRAFT_OPEN",
+      reveal_state: "hidden",
+    },
+    { onConflict: "league_id,week_number" },
+  );
+
+  return { draft, room };
+}
+
+async function submitPick(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const { data: draft } = await supabase
+    .from("drafts")
+    .select("league_id, week_number")
+    .eq("id", payload.draft_id)
+    .maybeSingle();
+
+  const leagueId = payload.league_id || draft?.league_id;
+  const weekNumber = payload.week_number || draft?.week_number;
+  const { data: rawLeague } = leagueId
+    ? await supabase.from("leagues").select("*").eq("id", leagueId).maybeSingle()
+    : { data: null };
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  if (leagueId && league.draft_mode === "weekly_redraft") {
+    const { data: used, error: usedError } = await supabase
+      .from("manager_player_usage")
+      .select("id")
+      .eq("league_id", leagueId)
+      .eq("league_member_id", payload.league_member_id)
+      .eq("player_id", payload.player_id)
+      .maybeSingle();
+    if (usedError) throw usedError;
+    if (used) throw new Error("This manager has already used that player this season.");
+  }
+  const { data: pick, error: pickError } = await supabase
+    .from("draft_picks")
+    .insert({
+      draft_id: payload.draft_id,
+      league_id: leagueId,
+      league_member_id: payload.league_member_id,
+      player_id: payload.player_id,
+      week_number: weekNumber,
+      overall_pick: payload.overall_pick ?? null,
+      round: payload.round ?? null,
+      submitted_at: new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+  if (pickError) throw pickError;
+
+  if (payload.track_usage && leagueId && weekNumber) {
+    await supabase.from("manager_player_usage").upsert(
+      {
+        league_id: leagueId,
+        league_member_id: payload.league_member_id,
+        player_id: payload.player_id,
+        used_in_week: weekNumber,
+      },
+      { onConflict: "league_id,league_member_id,player_id" },
+    );
+  }
+
+  if (payload.slot_type) {
+    await supabase.from("roster_slots").insert({
+      league_member_id: payload.league_member_id,
+      player_id: payload.player_id,
+      slot_type: payload.slot_type,
+      week_number: weekNumber ?? null,
+    });
+  }
+
+  return { pick };
+}
+
+async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const { data: lineup, error } = await supabase
+    .from("lineups")
+    .upsert(
+      {
+        league_id: payload.league_id,
+        league_member_id: payload.league_member_id,
+        week_number: payload.week_number,
+        slots: payload.slots || [],
+        finalized_at: new Date().toISOString(),
+      },
+      { onConflict: "league_id,league_member_id,week_number" },
+    )
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { lineup };
+}
+
+async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const leagueId = payload.league_id;
+  const weekNumber = Number(payload.week_number);
+  const { data: rawLeague, error: leagueError } = await supabase.from("leagues").select("*").eq("id", leagueId).single();
+  if (leagueError) throw leagueError;
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  const randomization = await ensureWeekRandomization(supabase, league, weekNumber, Number(league.source_season_year || new Date().getFullYear() - 1));
+
+  const { data: lineups } = await supabase
+    .from("lineups")
+    .select("*, league_members(team_name)")
+    .eq("league_id", leagueId)
+    .eq("week_number", weekNumber);
+
+  const assignments = (randomization?.assignments || {}) as Record<string, number>;
+  const lineupTotals: Array<{ league_member_id: string; team_name: string | null; total: number; slots: Array<{ player_id: string }> }> = [];
+
+  for (const lineup of lineups || []) {
+    let total = 0;
+    for (const slot of lineup.slots || []) {
+      const playerId = slot.player_id;
+      const sourceWeek = assignments[playerId];
+      const { data: playerWeek } = await supabase
+        .from("player_week_stats")
+        .select("fantasy_points")
+        .eq("player_id", playerId)
+        .eq("week", sourceWeek || weekNumber)
+        .maybeSingle();
+      total += Number(playerWeek?.fantasy_points || 0);
+    }
+    lineupTotals.push({
+      league_member_id: lineup.league_member_id,
+      team_name: lineup.league_members?.team_name || null,
+      total: Number(total.toFixed(2)),
+      slots: lineup.slots || [],
+    });
+  }
+
+  const releases: Array<Json> = [];
+  const { data: existingWeekResults, error: existingWeekResultError } = await supabase
+    .from("league_week_results")
+    .select("id")
+    .eq("league_id", leagueId)
+    .eq("week_number", weekNumber);
+  if (existingWeekResultError) throw existingWeekResultError;
+  if (!(existingWeekResults || []).length) {
+    const isPlayoff = weekNumber >= Number(league.playoff_start_week || 999);
+    for (const lineup of lineupTotals) {
+      for (const slot of lineup.slots || []) {
+        const { data: existing, error: existingError } = await supabase
+          .from("manager_player_usage")
+          .select("*")
+          .eq("league_id", leagueId)
+          .eq("league_member_id", lineup.league_member_id)
+          .eq("player_id", slot.player_id)
+          .maybeSingle();
+        if (existingError) throw existingError;
+        const usageCount = Number(existing?.usage_count || 0) + 1;
+        const usagePayload = {
+          league_id: leagueId,
+          league_member_id: lineup.league_member_id,
+          player_id: slot.player_id,
+          used_in_week: existing?.used_in_week || weekNumber,
+          usage_count: usageCount,
+          first_used_week: existing?.first_used_week || weekNumber,
+          last_used_week: weekNumber,
+          use_context: isPlayoff ? "playoff" : "regular",
+        };
+        if (existing) {
+          const { error } = await supabase.from("manager_player_usage").update(usagePayload).eq("id", existing.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.from("manager_player_usage").insert(usagePayload);
+          if (error) throw error;
+        }
+        if (league.player_retention_mode === "two_use_release" && usageCount >= 2 && !existing?.released_at) {
+          await supabase
+            .from("roster_slots")
+            .delete()
+            .eq("league_member_id", lineup.league_member_id)
+            .eq("player_id", slot.player_id);
+          if (existing) await supabase.from("manager_player_usage").update({ released_at: new Date().toISOString() }).eq("id", existing.id);
+          const { data: release, error: releaseError } = await supabase
+            .from("player_release_events")
+            .insert({
+              league_id: leagueId,
+              league_member_id: lineup.league_member_id,
+              player_id: slot.player_id,
+              week_number: weekNumber,
+              release_reason: "two_use_limit",
+              available_at: new Date().toISOString(),
+            })
+            .select("*")
+            .single();
+          if (releaseError) throw releaseError;
+          releases.push(release);
+        }
+      }
+    }
+  }
+
+  await supabase.from("league_week_results").delete().eq("league_id", leagueId).eq("week_number", weekNumber);
+  const sortedTotals = [...lineupTotals].sort((a, b) => b.total - a.total);
+  const rankPoints = [4, 3, 2, 1];
+  const resultRows = sortedTotals.map((row, index) => ({
+    league_id: leagueId,
+    league_member_id: row.league_member_id,
+    week_number: weekNumber,
+    total_points: row.total,
+    weekly_rank: index + 1,
+    head_to_head_points: 0,
+    rank_points: league.ranking_system === "offl" ? (rankPoints[index] || 0) : 0,
+    league_points: league.schedule_type === "league_wide" || league.ranking_system === "offl" ? (rankPoints[index] || 0) : 0,
+  }));
+
+  const { data: matchups } = await supabase.from("matchups").select("*").eq("league_id", leagueId).eq("week_number", weekNumber);
+  for (const matchup of matchups || []) {
+    const home = resultRows.find((row) => row.league_member_id === matchup.home_member_id);
+    const away = resultRows.find((row) => row.league_member_id === matchup.away_member_id);
+    if (!home || !away) continue;
+    await supabase.from("matchups").update({ home_score: home.total_points, away_score: away.total_points }).eq("id", matchup.id);
+    if (home.total_points > away.total_points) home.head_to_head_points += 4;
+    else if (away.total_points > home.total_points) away.head_to_head_points += 4;
+    else {
+      home.head_to_head_points += 2;
+      away.head_to_head_points += 2;
+    }
+  }
+  for (const row of resultRows) row.league_points = league.ranking_system === "offl" ? row.head_to_head_points + row.rank_points : row.league_points;
+  if (resultRows.length) {
+    const { error: resultError } = await supabase.from("league_week_results").insert(resultRows);
+    if (resultError) throw resultError;
+  }
+
+  const standingsResult = await recalculateStandings(supabase, { league_id: leagueId });
+
+  await supabase
+    .from("league_weeks")
+    .update({ status: "RESOLVED" })
+    .eq("league_id", leagueId)
+    .eq("week_number", weekNumber);
+  await supabase
+    .from("league_game_schedule")
+    .update({ status: "RESOLVED" })
+    .eq("league_id", leagueId)
+    .eq("week_number", weekNumber);
+
+  return {
+    week_number: weekNumber,
+    randomized_assignments: assignments,
+    matchup_totals: lineupTotals,
+    standings_delta: standingsResult.standings,
+    releases,
+    reveal_state: randomization?.reveal_state || "hidden",
+  };
+}
+
+async function advanceWeek(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const { data: rawLeague, error: leagueError } = await supabase.from("leagues").select("*").eq("id", payload.league_id).single();
+  if (leagueError) throw leagueError;
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  const { data: season, error: seasonError } = await supabase
+    .from("league_seasons")
+    .select("*")
+    .eq("league_id", payload.league_id)
+    .order("created_date", { ascending: false })
+    .limit(1)
+    .single();
+  if (seasonError) throw seasonError;
+
+  const nextWeek = Number(season.current_week || 1) + 1;
+  const { data: updatedSeason, error: updateError } = await supabase
+    .from("league_seasons")
+    .update({ current_week: nextWeek })
+    .eq("id", season.id)
+    .select("*")
+    .single();
+  if (updateError) throw updateError;
+
+  const { data: week, error: weekError } = await supabase
+    .from("league_weeks")
+    .upsert(
+      {
+        league_id: payload.league_id,
+        week_number: nextWeek,
+        status: league.draft_mode === "weekly_redraft" ? "DRAFT_OPEN" : "LINEUPS_OPEN",
+        reveal_state: "hidden",
+      },
+      { onConflict: "league_id,week_number" },
+    )
+    .select("*")
+    .single();
+  if (weekError) throw weekError;
+  await ensureWeekRandomization(supabase, league, nextWeek, Number(season.source_season_year || league.source_season_year || new Date().getFullYear() - 1));
+  await generateMatchups(supabase, league, nextWeek);
+
+  return { current_week: nextWeek, season: updatedSeason, week };
+}
+
+async function revealWeekResults(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const { data: randomized, error } = await supabase
+    .from("week_randomizations")
+    .update({ reveal_state: "revealed" })
+    .eq("league_id", payload.league_id)
+    .eq("fantasy_week", payload.week_number)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+
+  await supabase
+    .from("league_weeks")
+    .update({ reveal_state: "revealed" })
+    .eq("league_id", payload.league_id)
+    .eq("week_number", payload.week_number);
+
+  return { revealed: Boolean(randomized), randomized };
+}
+
+async function recalculateStandings(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const leagueId = payload.league_id;
+  const { data: rawLeague, error: leagueError } = await supabase.from("leagues").select("*").eq("id", leagueId).single();
+  if (leagueError) throw leagueError;
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  const { data: members, error: memberError } = await supabase
+    .from("league_members")
+    .select("id")
+    .eq("league_id", leagueId)
+    .eq("is_active", true);
+  if (memberError) throw memberError;
+
+  const { data: results, error: resultError } = await supabase.from("league_week_results").select("*").eq("league_id", leagueId);
+  if (resultError) throw resultError;
+  const { data: matchups, error: matchupError } = await supabase.from("matchups").select("*").eq("league_id", leagueId);
+  if (matchupError) throw matchupError;
+
+  const rows = (members || []).map((member) => {
+    const memberResults = (results || []).filter((row) => row.league_member_id === member.id);
+    const memberMatchups = (matchups || []).filter((matchup) => matchup.home_member_id === member.id || matchup.away_member_id === member.id);
+    let wins = 0;
+    let losses = 0;
+    let ties = 0;
+    let pointsAgainst = 0;
+    for (const matchup of memberMatchups) {
+      const isHome = matchup.home_member_id === member.id;
+      const own = Number(isHome ? matchup.home_score : matchup.away_score);
+      const opp = Number(isHome ? matchup.away_score : matchup.home_score);
+      pointsAgainst += opp;
+      if (own > opp) wins += 1;
+      else if (own < opp) losses += 1;
+      else ties += 1;
+    }
+    return {
+      league_id: leagueId,
+      league_member_id: member.id,
+      wins,
+      losses,
+      ties,
+      points_for: Number(memberResults.reduce((sum, row) => sum + Number(row.total_points || 0), 0).toFixed(2)),
+      points_against: Number(pointsAgainst.toFixed(2)),
+      league_points: Number(memberResults.reduce((sum, row) => sum + Number(row.league_points || 0), 0).toFixed(2)),
+      weekly_rank_points: Number(memberResults.reduce((sum, row) => sum + Number(row.rank_points || 0), 0).toFixed(2)),
+    };
+  });
+
+  if (rows.length) {
+    const { error } = await supabase.from("standings").upsert(rows, {
+      onConflict: "league_id,league_member_id",
+    });
+    if (error) throw error;
+  }
+
+  const { data: standings, error: standingsError } = await supabase
+    .from("standings")
+    .select("*")
+    .eq("league_id", leagueId)
+    .order(league.ranking_system === "offl" ? "league_points" : "wins", { ascending: false })
+    .order(league.ranking_system === "offl" ? "wins" : "points_for", { ascending: false })
+    .order("points_for", { ascending: false });
+  if (standingsError) throw standingsError;
+  return { standings };
+}
+
+export async function handleAction(action: string, request: Request) {
+  if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  try {
+    const payload = await parseRequest(request);
+    const supabase = adminClient();
+    const user = await getUser(request, supabase);
+
+    const result = action === "create_league"
+      ? await createLeague(supabase, user, payload)
+      : action === "join_league"
+        ? await joinLeague(supabase, user, payload)
+        : action === "join_league_by_invite"
+          ? await joinLeagueByInvite(supabase, user, payload)
+          : action === "create_league_invite"
+            ? await createLeagueInvite(supabase, user, payload)
+            : action === "disable_league_invite"
+              ? await disableLeagueInvite(supabase, user, payload)
+              : action === "rename_league_member_team"
+                ? await renameLeagueMemberTeam(supabase, user, payload)
+                : action === "remove_league_member"
+                  ? await removeLeagueMember(supabase, user, payload)
+                  : action === "transfer_commissioner"
+                    ? await transferCommissioner(supabase, user, payload)
+                    : action === "add_ai_team"
+                      ? await addAiTeam(supabase, user, payload)
+                      : action === "fill_league_with_ai"
+                        ? await fillLeagueWithAi(supabase, user, payload)
+                      : action === "update_ai_team"
+                        ? await updateAiTeam(supabase, user, payload)
+                        : action === "remove_ai_team"
+                          ? await removeAiTeam(supabase, user, payload)
+                          : action === "archive_league"
+                            ? await archiveLeague(supabase, user, payload)
+                            : action === "force_delete_league"
+                              ? await forceDeleteLeague(supabase, user, payload)
+                              : action === "restore_league"
+                                ? await restoreLeague(supabase, user, payload)
+                                : action === "create_official_league"
+                                  ? await createOfficialLeague(supabase, user, payload)
+                                  : action === "pause_league"
+                                    ? await setLeagueStatus(supabase, user, payload, "PAUSED")
+                                    : action === "resume_league"
+                                      ? await setLeagueStatus(supabase, user, payload, "ACTIVE")
+      : action === "start_season"
+        ? await startSeason(supabase, payload)
+        : action === "open_week_draft"
+          ? await openWeekDraft(supabase, payload)
+          : action === "submit_pick"
+            ? await submitPick(supabase, payload)
+            : action === "finalize_lineup"
+              ? await finalizeLineup(supabase, payload)
+              : action === "resolve_week"
+                ? await resolveWeek(supabase, payload)
+                : action === "advance_week"
+                  ? await advanceWeek(supabase, payload)
+                  : action === "reveal_week_results"
+                    ? await revealWeekResults(supabase, payload)
+                    : action === "recalculate_standings"
+                      ? await recalculateStandings(supabase, payload)
+                      : null;
+
+    if (!result) return json({ error: `Unknown action: ${action}` }, 404);
+    return json(result);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+  }
+}

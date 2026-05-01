@@ -1,0 +1,37 @@
+import { appClient } from "./appClient";
+
+export const generateAiTeamName = appClient.functions.generateAiTeamName;
+export const processImportJobs = appClient.functions.processImportJobs;
+export const createOfficialLeague = appClient.functions.createOfficialLeague;
+export const fillLeagueWithAI = appClient.functions.fillLeagueWithAI;
+export const importHistoricalStats = appClient.functions.importHistoricalStats;
+export const cleanAll = appClient.functions.cleanAll;
+export const diagnosticPlayerData = appClient.functions.diagnosticPlayerData;
+export const testPagination = appClient.functions.testPagination;
+
+export const createLeague = (payload) => appClient.functions.invoke("create_league", payload);
+export const joinLeague = (payload) => appClient.functions.invoke("join_league", payload);
+export const joinLeagueByInvite = (payload) => appClient.functions.invoke("join_league_by_invite", payload);
+export const createLeagueInvite = (payload) => appClient.functions.invoke("create_league_invite", payload);
+export const disableLeagueInvite = (payload) => appClient.functions.invoke("disable_league_invite", payload);
+export const transferCommissioner = (payload) => appClient.functions.invoke("transfer_commissioner", payload);
+export const removeLeagueMember = (payload) => appClient.functions.invoke("remove_league_member", payload);
+export const renameLeagueMemberTeam = (payload) => appClient.functions.invoke("rename_league_member_team", payload);
+export const addAiTeam = (payload) => appClient.functions.invoke("add_ai_team", payload);
+export const fillLeagueWithAi = (payload) => appClient.functions.invoke("fill_league_with_ai", payload);
+export const updateAiTeam = (payload) => appClient.functions.invoke("update_ai_team", payload);
+export const removeAiTeam = (payload) => appClient.functions.invoke("remove_ai_team", payload);
+export const archiveLeague = (payload) => appClient.functions.invoke("archive_league", payload);
+export const forceDeleteLeague = (payload) => appClient.functions.invoke("force_delete_league", payload);
+export const restoreLeague = (payload) => appClient.functions.invoke("restore_league", payload);
+export const createOfficialLeagueV2 = (payload) => appClient.functions.invoke("create_official_league", payload);
+export const pauseLeague = (payload) => appClient.functions.invoke("pause_league", payload);
+export const resumeLeague = (payload) => appClient.functions.invoke("resume_league", payload);
+export const startSeason = (payload) => appClient.functions.invoke("start_season", payload);
+export const openWeekDraft = (payload) => appClient.functions.invoke("open_week_draft", payload);
+export const submitPick = (payload) => appClient.functions.invoke("submit_pick", payload);
+export const finalizeLineup = (payload) => appClient.functions.invoke("finalize_lineup", payload);
+export const resolveWeek = (payload) => appClient.functions.invoke("resolve_week", payload);
+export const advanceWeek = (payload) => appClient.functions.invoke("advance_week", payload);
+export const revealWeekResults = (payload) => appClient.functions.invoke("reveal_week_results", payload);
+export const recalculateStandings = (payload) => appClient.functions.invoke("recalculate_standings", payload);
