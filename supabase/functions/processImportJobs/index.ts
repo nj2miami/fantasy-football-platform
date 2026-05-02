@@ -692,18 +692,25 @@ async function refreshPlayerAggregates(supabase: Supabase) {
 }
 
 async function scoringRecalculationWeeks(supabase: Supabase, seasonYear?: number | null) {
-  let query = supabase.from("player_week_stats").select("week");
-  if (seasonYear) {
-    query = query.eq("season_year", seasonYear);
-  }
-
-  const { data, error } = await query;
-  if (error) throw error;
-
   const weeks = new Set<number>();
-  for (const row of data || []) {
-    const week = Number(row.week);
-    if (Number.isFinite(week)) weeks.add(week);
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase
+      .from("player_week_stats")
+      .select("week")
+      .order("week", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (seasonYear) {
+      query = query.eq("season_year", seasonYear);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    for (const row of data || []) {
+      const week = Number(row.week);
+      if (Number.isFinite(week)) weeks.add(week);
+    }
+    if (!data || data.length < pageSize) break;
   }
   return [...weeks].sort((a, b) => a - b);
 }

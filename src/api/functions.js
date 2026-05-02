@@ -29,6 +29,10 @@ export const pauseLeague = (payload) => appClient.functions.invoke("pause_league
 export const resumeLeague = (payload) => appClient.functions.invoke("resume_league", payload);
 export const startSeason = (payload) => appClient.functions.invoke("start_season", payload);
 export const openWeekDraft = (payload) => appClient.functions.invoke("open_week_draft", payload);
+export const scheduleDraft = (payload) => appClient.functions.invoke("schedule_draft", payload);
+export const startDraft = (payload) => appClient.functions.invoke("start_draft", payload);
+export const submitDraftPick = (payload) => appClient.functions.invoke("submit_draft_pick", payload);
+export const processDraftTimer = (payload) => appClient.functions.invoke("process_draft_timer", payload);
 export const submitPick = (payload) => appClient.functions.invoke("submit_pick", payload);
 export const finalizeLineup = (payload) => appClient.functions.invoke("finalize_lineup", payload);
 export const resolveWeek = (payload) => appClient.functions.invoke("resolve_week", payload);

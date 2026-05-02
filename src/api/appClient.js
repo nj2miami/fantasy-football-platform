@@ -317,7 +317,9 @@ function createSeedStore() {
     PlayerWeek: buildPlayerWeeks(),
     Draft: [{ id: "draft_arcade_w1", league_id: "league_redraft_arcade", week_number: 1, status: "OPEN", type: "weekly_redraft", created_date: createdDate }],
     DraftRoom: [],
+    DraftTurn: [],
     DraftPick: [],
+    DraftBoardItem: [],
     Roster: [
       { id: "roster_demo_qb", league_member_id: memberId, player_id: "player_allen", slot_type: "QB", week_number: null, created_date: createdDate },
       { id: "roster_demo_off1", league_member_id: memberId, player_id: "player_hill", slot_type: "OFF", week_number: null, created_date: createdDate },
@@ -429,7 +431,9 @@ const entityTableMap = {
   PlayerWeek: "player_week_stats",
   Draft: "drafts",
   DraftRoom: "draft_rooms",
+  DraftTurn: "draft_turns",
   DraftPick: "draft_picks",
+  DraftBoardItem: "draft_board_items",
   Roster: "roster_slots",
   ManagerSeason: "manager_seasons",
   Standing: "standings",
@@ -539,6 +543,8 @@ function readLocalStore() {
     store.PlayerPositionYearCount = store.PlayerPositionYearCount || [];
     store.SeasonScoringRule = store.SeasonScoringRule || [];
     store.DraftRoom = store.DraftRoom || [];
+    store.DraftTurn = store.DraftTurn || [];
+    store.DraftBoardItem = store.DraftBoardItem || [];
     return store;
   }
   const seed = createSeedStore();
@@ -745,7 +751,9 @@ const entityNames = [
   "PlayerWeek",
   "Draft",
   "DraftRoom",
+  "DraftTurn",
   "DraftPick",
+  "DraftBoardItem",
   "Roster",
   "ManagerSeason",
   "Standing",
@@ -969,6 +977,79 @@ async function localEnsureWeekRandomization(league, weekNumber, sourceSeasonYear
       return acc;
     }, {}),
   });
+}
+
+async function localActiveLeagueMembers(leagueId) {
+  return (await entities.LeagueMember.filter({ league_id: leagueId }))
+    .filter((member) => member.is_active !== false)
+    .sort((a, b) => String(a.created_date || "").localeCompare(String(b.created_date || "")));
+}
+
+function shuffleLocalRows(rows) {
+  return [...rows].sort(() => Math.random() - 0.5);
+}
+
+async function localWeeksPlayed(playerId, seasonYear) {
+  const weeks = await entities.PlayerWeek.filter({ player_id: playerId, season_year: Number(seasonYear) });
+  return weeks.length;
+}
+
+async function localDraftEligibility(league, playerId) {
+  return (await localWeeksPlayed(playerId, league.source_season_year || new Date().getFullYear() - 1)) >= Number(league.season_length_weeks || 8) + 4;
+}
+
+async function localBestDraftPlayer(league, draftId, memberId = null) {
+  const picks = await entities.DraftPick.filter({ draft_id: draftId });
+  const pickedIds = new Set(picks.map((pick) => pick.player_id));
+  if (memberId) {
+    const board = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: memberId }, "rank");
+    for (const item of board) {
+      if (!pickedIds.has(item.player_id) && await localDraftEligibility(league, item.player_id)) return item.player_id;
+    }
+  }
+  const players = await entities.Player.list("-avg_points");
+  for (const player of players) {
+    if (!pickedIds.has(player.id) && await localDraftEligibility(league, player.id)) return player.id;
+  }
+  throw new Error("No eligible players remain");
+}
+
+async function localSubmitDraftPick({ draft_id, player_id, auto_pick = false } = {}) {
+  const draft = await entities.Draft.get(draft_id);
+  if (!draft || draft.status !== "OPEN") throw new Error("Draft is not open");
+  const league = normalizeLeaguePlaySettings(await entities.League.get(draft.league_id));
+  const room = (await entities.DraftRoom.filter({ draft_id }))[0];
+  const turn = (await entities.DraftTurn.filter({ draft_id, overall_pick: Number(room?.current_pick || 1) }))[0];
+  if (!turn) throw new Error("Draft turn not found");
+  const picked = await entities.DraftPick.filter({ draft_id, player_id });
+  if (picked[0]) throw new Error("Player has already been drafted");
+  if (!(await localDraftEligibility(league, player_id))) throw new Error("Player is not draft eligible");
+  const player = await entities.Player.get(player_id);
+  const pick = await entities.DraftPick.create({
+    draft_id,
+    league_id: draft.league_id,
+    league_member_id: turn.league_member_id,
+    player_id,
+    week_number: draft.week_number || null,
+    overall_pick: turn.overall_pick,
+    round: turn.round,
+    submitted_at: now(),
+    auto_pick,
+  });
+  await entities.Roster.create({
+    league_member_id: turn.league_member_id,
+    player_id,
+    slot_type: player?.position || "OFF",
+    week_number: null,
+  });
+  const turns = await entities.DraftTurn.filter({ draft_id });
+  const nextPick = Number(room?.current_pick || 1) + 1;
+  if (nextPick > turns.length) {
+    await entities.Draft.update(draft_id, { status: "COMPLETED", completed_at: now() });
+  } else if (room) {
+    await entities.DraftRoom.update(room.id, { current_pick: nextPick, state: { pick_started_at: now() } });
+  }
+  return { pick };
 }
 
 async function localLineupTotals(league, weekNumber) {
@@ -1344,6 +1425,71 @@ const localFunctions = {
     const draft = await entities.Draft.create({ league_id, week_number, status: "OPEN", type: type || league.draft_mode || "weekly_redraft" });
     const room = await entities.DraftRoom.create({ draft_id: draft.id, timer_seconds: timer_seconds || league.draft_config?.timer_seconds || 60, state: {} });
     return { draft, room };
+  },
+  async schedule_draft({ league_id, start, week_number = null, type } = {}) {
+    await localRequireLeagueControl(league_id);
+    const league = normalizeLeaguePlaySettings(await entities.League.get(league_id));
+    const scheduled = new Date(start);
+    if (Number.isNaN(scheduled.getTime())) throw new Error("Draft start date/time is required");
+    const drafts = await entities.Draft.filter({ league_id });
+    const existing = drafts.find((draft) => ["SCHEDULED", "OPEN"].includes(String(draft.status || "").toUpperCase()));
+    if (existing?.status === "OPEN") throw new Error("Cannot reschedule an active draft");
+    const payload = {
+      league_id,
+      week_number,
+      status: "SCHEDULED",
+      type: type || league.draft_config?.type || "snake",
+      start: scheduled.toISOString(),
+    };
+    const draft = existing
+      ? await entities.Draft.update(existing.id, payload)
+      : await entities.Draft.create(payload);
+    return { draft };
+  },
+  async start_draft({ league_id, draft_id } = {}) {
+    await localRequireLeagueControl(league_id);
+    const league = normalizeLeaguePlaySettings(await entities.League.get(league_id));
+    const draft = await entities.Draft.get(draft_id);
+    if (!draft || draft.league_id !== league_id) throw new Error("Draft not found");
+    if (draft.status === "OPEN") return { draft };
+    if (!draft.start || Date.now() < new Date(draft.start).getTime()) throw new Error("Draft cannot start before its scheduled time");
+    const existingTurns = await entities.DraftTurn.filter({ draft_id });
+    if (!existingTurns.length) {
+      const members = shuffleLocalRows(await localActiveLeagueMembers(league_id));
+      const rounds = Math.max(1, Number(league.draft_config?.rounds || DEFAULT_DRAFT_CONFIG.rounds));
+      const isSnake = String(draft.type || league.draft_config?.type || "snake") === "snake";
+      const turns = [];
+      for (let round = 1; round <= rounds; round += 1) {
+        const roundOrder = isSnake && round % 2 === 0 ? [...members].reverse() : members;
+        roundOrder.forEach((member) => {
+          turns.push({ draft_id, overall_pick: turns.length + 1, round, league_member_id: member.id });
+        });
+      }
+      await entities.DraftTurn.bulkCreate(turns);
+    }
+    const existingRoom = (await entities.DraftRoom.filter({ draft_id }))[0];
+    if (existingRoom) {
+      await entities.DraftRoom.update(existingRoom.id, { current_pick: 1, timer_seconds: league.draft_config?.timer_seconds || 60, state: { pick_started_at: now() } });
+    } else {
+      await entities.DraftRoom.create({ draft_id, current_pick: 1, timer_seconds: league.draft_config?.timer_seconds || 60, state: { pick_started_at: now() } });
+    }
+    return { draft: await entities.Draft.update(draft_id, { status: "OPEN", started_at: now() }) };
+  },
+  async submit_draft_pick(payload = {}) {
+    return localSubmitDraftPick(payload);
+  },
+  async process_draft_timer({ draft_id } = {}) {
+    const draft = await entities.Draft.get(draft_id);
+    if (!draft || draft.status !== "OPEN") return { processed: false };
+    const league = normalizeLeaguePlaySettings(await entities.League.get(draft.league_id));
+    const room = (await entities.DraftRoom.filter({ draft_id }))[0];
+    if (!room) return { processed: false };
+    const startedAt = new Date(room.state?.pick_started_at || room.updated_date || room.created_date).getTime();
+    if (Date.now() - startedAt < Number(room.timer_seconds || 60) * 1000) return { processed: false };
+    const turn = (await entities.DraftTurn.filter({ draft_id, overall_pick: Number(room.current_pick || 1) }))[0];
+    const playerId = await localBestDraftPlayer(league, draft_id, turn?.league_member_id);
+    await localSubmitDraftPick({ draft_id, player_id: playerId, auto_pick: true });
+    return { processed: true };
   },
   async submit_pick(payload = {}) {
     const league = payload.league_id ? normalizeLeaguePlaySettings(await entities.League.get(payload.league_id)) : null;
@@ -2044,6 +2190,130 @@ const playerStats = isSupabaseConfigured
       },
     };
 
+async function countPlayerWeeks(playerId, seasonYear) {
+  if (!playerId) return 0;
+  if (isSupabaseConfigured) {
+    const { count, error } = await supabase
+      .from("player_week_stats")
+      .select("id", { count: "exact", head: true })
+      .eq("player_id", playerId)
+      .eq("season_year", Number(seasonYear));
+    if (error) throw mapSupabaseError(error);
+    return count || 0;
+  }
+  return (readLocalStore().PlayerWeek || []).filter((week) =>
+    week.player_id === playerId && Number(week.season_year) === Number(seasonYear)
+  ).length;
+}
+
+async function getLeagueDraftState(leagueId) {
+  if (!leagueId) return null;
+  const [league, members, drafts] = await Promise.all([
+    entities.League.get(leagueId),
+    entities.LeagueMember.filter({ league_id: leagueId }),
+    entities.Draft.filter({ league_id: leagueId }, "-created_date"),
+  ]);
+  if (!league) return null;
+  const activeMembers = members.filter((member) => member.is_active !== false);
+  const draft = drafts.find((row) => ["OPEN", "SCHEDULED"].includes(String(row.status || "").toUpperCase())) || drafts[0] || null;
+  if (!draft) {
+    return { league, members: activeMembers, draft: null, room: null, turns: [], picks: [], rosters: [], board: [], currentTurn: null };
+  }
+  const [rooms, turns, picks, board, rosters] = await Promise.all([
+    entities.DraftRoom.filter({ draft_id: draft.id }),
+    entities.DraftTurn.filter({ draft_id: draft.id }, "overall_pick"),
+    entities.DraftPick.filter({ draft_id: draft.id }, "overall_pick"),
+    entities.DraftBoardItem.filter({ draft_id: draft.id }, "rank"),
+    entities.Roster.list(),
+  ]);
+  const room = rooms[0] || null;
+  const currentTurn = turns.find((turn) => Number(turn.overall_pick) === Number(room?.current_pick || 1)) || null;
+  const playerIds = [...new Set([
+    ...picks.map((pick) => pick.player_id),
+    ...board.map((item) => item.player_id),
+    ...rosters.filter((slot) => activeMembers.some((member) => member.id === slot.league_member_id)).map((slot) => slot.player_id),
+  ])];
+  const allPlayers = playerIds.length
+    ? (await Promise.all(playerIds.map((id) => entities.Player.get(id)))).filter(Boolean)
+    : [];
+  const playersById = new Map(allPlayers.map((player) => [player.id, player]));
+  const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  const boardWithPlayers = await Promise.all(board.map(async (item) => ({
+    ...item,
+    player: playersById.get(item.player_id),
+    weeks_played: await countPlayerWeeks(item.player_id, seasonYear),
+  })));
+  return {
+    league,
+    members: activeMembers,
+    draft,
+    room,
+    turns,
+    currentTurn,
+    picks: picks.map((pick) => ({ ...pick, player: playersById.get(pick.player_id), member: activeMembers.find((member) => member.id === pick.league_member_id) })),
+    rosters: rosters
+      .filter((slot) => activeMembers.some((member) => member.id === slot.league_member_id))
+      .map((slot) => ({ ...slot, player: playersById.get(slot.player_id), member: activeMembers.find((member) => member.id === slot.league_member_id) })),
+    board: boardWithPlayers,
+  };
+}
+
+async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", limit = 80 } = {}) {
+  const league = await entities.League.get(leagueId);
+  if (!league) return [];
+  const draft = draftId ? await entities.Draft.get(draftId) : null;
+  const picks = draft ? await entities.DraftPick.filter({ draft_id: draft.id }) : [];
+  const pickedIds = new Set(picks.map((pick) => pick.player_id));
+  const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
+  const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  const result = await playerPool.listPlayers({
+    seasonYear,
+    searchTerm,
+    sortBy: "-avg_points",
+    limit: Math.max(200, Number(limit || 80)),
+    offset: 0,
+  });
+  const rows = [];
+  for (const player of result.data || []) {
+    if (pickedIds.has(player.id)) continue;
+    const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
+    if (weeksPlayed < requiredWeeks) continue;
+    rows.push({ ...player, weeks_played: weeksPlayed });
+    if (rows.length >= Number(limit || 80)) break;
+  }
+  return rows;
+}
+
+const draftDay = {
+  getState: getLeagueDraftState,
+  listEligiblePlayers: listDraftEligiblePlayers,
+  async addBoardItem({ draftId, leagueMemberId, playerId } = {}) {
+    const existing = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: leagueMemberId, player_id: playerId });
+    if (existing[0]) return existing[0];
+    const board = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: leagueMemberId }, "-rank");
+    return entities.DraftBoardItem.create({
+      draft_id: draftId,
+      league_member_id: leagueMemberId,
+      player_id: playerId,
+      rank: Number(board[0]?.rank || 0) + 1,
+    });
+  },
+  async removeBoardItem(id) {
+    return entities.DraftBoardItem.delete(id);
+  },
+  async setBoardOrder({ draftId, leagueMemberId, playerIds = [] } = {}) {
+    const existing = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: leagueMemberId });
+    for (const item of existing) await entities.DraftBoardItem.delete(item.id);
+    const rows = playerIds.map((playerId, index) => ({
+      draft_id: draftId,
+      league_member_id: leagueMemberId,
+      player_id: playerId,
+      rank: index + 1,
+    }));
+    return entities.DraftBoardItem.bulkCreate(rows);
+  },
+};
+
 export const appClient = {
   isSupabaseConfigured,
   entities,
@@ -2051,6 +2321,7 @@ export const appClient = {
   functions,
   playerPool,
   playerStats,
+  draftDay,
   integrations: {
     Core: {
       UploadFile: uploadFile,

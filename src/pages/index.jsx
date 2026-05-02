@@ -13,6 +13,7 @@ const Profile = lazy(() => import("./Profile"));
 const Admin = lazy(() => import("./Admin"));
 const LeagueManage = lazy(() => import("./LeagueManage"));
 const League = lazy(() => import("./League"));
+const LeagueDraft = lazy(() => import("./LeagueDraft"));
 const Home = lazy(() => import("./Home"));
 const PlayerStats = lazy(() => import("./PlayerStats"));
 const Team = lazy(() => import("./Team"));
@@ -27,6 +28,7 @@ const PAGES = {
     Admin,
     LeagueManage,
     League,
+    LeagueDraft,
     Home,
     PlayerStats,
     Team,
@@ -98,6 +100,7 @@ function PagesContent() {
                     <Route path="/Admin" element={<Admin />} />
                     <Route path="/LeagueManage" element={<LeagueManage />} />
                     <Route path="/League" element={<League />} />
+                    <Route path="/league/draft" element={<LeagueDraft />} />
                     <Route path="/Home" element={<Home />} />
                     <Route path="/PlayerStats" element={<PlayerStats />} />
                     <Route path="/Team" element={<Team />} />

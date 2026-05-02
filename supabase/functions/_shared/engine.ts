@@ -936,6 +936,264 @@ async function openWeekDraft(supabase: ReturnType<typeof createClient>, payload:
   return { draft, room };
 }
 
+async function scheduleDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const start = new Date(String(payload.start || ""));
+  if (Number.isNaN(start.getTime())) throw new Error("Draft start date/time is required");
+
+  const { data: existing, error: existingError } = await supabase
+    .from("drafts")
+    .select("*")
+    .eq("league_id", league.id)
+    .in("status", ["SCHEDULED", "OPEN"])
+    .order("created_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  if (existing?.status === "OPEN") throw new Error("Cannot reschedule an active draft");
+  const payloadDraft = {
+    league_id: league.id,
+    week_number: payload.week_number ? Number(payload.week_number) : null,
+    status: "SCHEDULED",
+    type: payload.type || ((league.draft_config as Json | undefined)?.type) || DEFAULT_DRAFT_CONFIG.type,
+    start: start.toISOString(),
+    updated_date: new Date().toISOString(),
+  };
+
+  const { data: draft, error } = existing
+    ? await supabase.from("drafts").update(payloadDraft).eq("id", existing.id).select("*").single()
+    : await supabase.from("drafts").insert(payloadDraft).select("*").single();
+  if (error) throw error;
+  return { draft };
+}
+
+async function playerWeeksPlayed(supabase: ReturnType<typeof createClient>, playerId: string, seasonYear: number) {
+  const { count, error } = await supabase
+    .from("player_week_stats")
+    .select("id", { count: "exact", head: true })
+    .eq("player_id", playerId)
+    .eq("season_year", seasonYear);
+  if (error) throw error;
+  return count || 0;
+}
+
+async function isDraftEligible(supabase: ReturnType<typeof createClient>, league: Json, playerId: string) {
+  const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
+  const weeks = await playerWeeksPlayed(supabase, playerId, Number(league.source_season_year || new Date().getFullYear() - 1));
+  return weeks >= requiredWeeks;
+}
+
+function shuffleRows<T>(rows: T[]) {
+  const shuffled = [...rows];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = crypto.getRandomValues(new Uint32Array(1))[0] % (index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+async function startDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { data: draft, error: draftError } = await supabase
+    .from("drafts")
+    .select("*")
+    .eq("id", payload.draft_id)
+    .eq("league_id", league.id)
+    .single();
+  if (draftError) throw draftError;
+  if (draft.status === "OPEN") return { draft };
+  const start = draft.start ? new Date(draft.start) : null;
+  if (!start || Date.now() < start.getTime()) throw new Error("Draft cannot start before its scheduled time");
+
+  const { data: members, error: memberError } = await supabase
+    .from("league_members")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("is_active", true)
+    .order("created_date", { ascending: true });
+  if (memberError) throw memberError;
+  if (!members?.length) throw new Error("No active teams are in this league");
+
+  const { count: existingTurns, error: countError } = await supabase
+    .from("draft_turns")
+    .select("id", { count: "exact", head: true })
+    .eq("draft_id", draft.id);
+  if (countError) throw countError;
+
+  if (!existingTurns) {
+    const order = shuffleRows(members);
+    const rounds = Math.max(1, Number((league.draft_config as Json | undefined)?.rounds || DEFAULT_DRAFT_CONFIG.rounds));
+    const isSnake = String(draft.type || (league.draft_config as Json | undefined)?.type || "snake") === "snake";
+    const turns = [];
+    for (let round = 1; round <= rounds; round += 1) {
+      const roundOrder = isSnake && round % 2 === 0 ? [...order].reverse() : order;
+      for (const member of roundOrder) {
+        turns.push({
+          draft_id: draft.id,
+          overall_pick: turns.length + 1,
+          round,
+          league_member_id: member.id,
+        });
+      }
+    }
+    const { error: turnError } = await supabase.from("draft_turns").insert(turns);
+    if (turnError) throw turnError;
+  }
+
+  const { error: roomError } = await supabase.from("draft_rooms").upsert(
+    {
+      draft_id: draft.id,
+      current_pick: 1,
+      timer_seconds: Number((league.draft_config as Json | undefined)?.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds),
+      state: { pick_started_at: new Date().toISOString() },
+    },
+    { onConflict: "draft_id" },
+  );
+  if (roomError) throw roomError;
+
+  const { data: updatedDraft, error: updateError } = await supabase
+    .from("drafts")
+    .update({ status: "OPEN", started_at: new Date().toISOString(), updated_date: new Date().toISOString() })
+    .eq("id", draft.id)
+    .select("*")
+    .single();
+  if (updateError) throw updateError;
+  return { draft: updatedDraft };
+}
+
+async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, league: Json, draftId: string, memberId?: string) {
+  const { data: picks, error: picksError } = await supabase.from("draft_picks").select("player_id").eq("draft_id", draftId);
+  if (picksError) throw picksError;
+  const pickedIds = new Set((picks || []).map((pick) => pick.player_id));
+  const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
+  const sourceYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+
+  if (memberId) {
+    const { data: board, error: boardError } = await supabase
+      .from("draft_board_items")
+      .select("player_id, rank")
+      .eq("draft_id", draftId)
+      .eq("league_member_id", memberId)
+      .order("rank", { ascending: true });
+    if (boardError) throw boardError;
+    for (const item of board || []) {
+      if (pickedIds.has(item.player_id)) continue;
+      if (await isDraftEligible(supabase, league, item.player_id)) return item.player_id;
+    }
+  }
+
+  const { data: players, error: playersError } = await supabase
+    .from("players")
+    .select("id, avg_points")
+    .order("avg_points", { ascending: false })
+    .limit(1000);
+  if (playersError) throw playersError;
+
+  for (const player of players || []) {
+    if (pickedIds.has(player.id)) continue;
+    const weeks = await playerWeeksPlayed(supabase, player.id, sourceYear);
+    if (weeks >= requiredWeeks) return player.id;
+  }
+  throw new Error("No eligible players remain");
+}
+
+async function submitDraftPick(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: draft, error: draftError } = await supabase.from("drafts").select("*, leagues(*)").eq("id", payload.draft_id).single();
+  if (draftError) throw draftError;
+  if (draft.status !== "OPEN") throw new Error("Draft is not open");
+  const league = normalizeLeaguePlaySettings(draft.leagues);
+  const profile = await getProfile(supabase, user);
+
+  const { data: room, error: roomError } = await supabase.from("draft_rooms").select("*").eq("draft_id", draft.id).single();
+  if (roomError) throw roomError;
+  const { data: turn, error: turnError } = await supabase
+    .from("draft_turns")
+    .select("*")
+    .eq("draft_id", draft.id)
+    .eq("overall_pick", room.current_pick)
+    .single();
+  if (turnError) throw turnError;
+
+  const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", turn.league_member_id).single();
+  if (memberError) throw memberError;
+  const isAdmin = String(profile?.role || "").toLowerCase() === "admin";
+  const isCurrentManager = member.profile_id === user.id || member.user_email === user.email;
+  const isCommissioner = draft.leagues?.commissioner_id === user.id || draft.leagues?.commissioner_email === user.email;
+  const isAutoPick = payload.auto_pick === true;
+  if (!isCurrentManager && !isAdmin && !isCommissioner && !isAutoPick) throw new Error("It is not your pick");
+
+  const playerId = String(payload.player_id || "");
+  if (!playerId) throw new Error("Player is required");
+  if (!(await isDraftEligible(supabase, league, playerId))) throw new Error("Player is not draft eligible");
+
+  const { data: player, error: playerError } = await supabase.from("players").select("position").eq("id", playerId).single();
+  if (playerError) throw playerError;
+
+  const { data: pick, error: pickError } = await supabase
+    .from("draft_picks")
+    .insert({
+      draft_id: draft.id,
+      league_id: draft.league_id,
+      league_member_id: turn.league_member_id,
+      player_id: playerId,
+      week_number: draft.week_number,
+      overall_pick: turn.overall_pick,
+      round: turn.round,
+      submitted_at: new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+  if (pickError) throw pickError;
+
+  const { error: rosterError } = await supabase.from("roster_slots").insert({
+    league_member_id: turn.league_member_id,
+    player_id: playerId,
+    slot_type: player.position || "OFF",
+    week_number: null,
+  });
+  if (rosterError) throw rosterError;
+
+  const { count: turnCount, error: turnCountError } = await supabase
+    .from("draft_turns")
+    .select("id", { count: "exact", head: true })
+    .eq("draft_id", draft.id);
+  if (turnCountError) throw turnCountError;
+  const nextPick = Number(room.current_pick || 1) + 1;
+  if (nextPick > Number(turnCount || 0)) {
+    await supabase.from("drafts").update({ status: "COMPLETED", completed_at: new Date().toISOString() }).eq("id", draft.id);
+  } else {
+    await supabase.from("draft_rooms").update({
+      current_pick: nextPick,
+      state: { pick_started_at: new Date().toISOString() },
+      updated_date: new Date().toISOString(),
+    }).eq("draft_id", draft.id);
+  }
+
+  return { pick };
+}
+
+async function processDraftTimer(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { data: draft, error: draftError } = await supabase.from("drafts").select("*, leagues(*)").eq("id", payload.draft_id).single();
+  if (draftError) throw draftError;
+  if (draft.status !== "OPEN") return { processed: false };
+  const { data: room, error: roomError } = await supabase.from("draft_rooms").select("*").eq("draft_id", draft.id).single();
+  if (roomError) throw roomError;
+  const startedAt = new Date(String((room.state as Json | undefined)?.pick_started_at || room.updated_date || room.created_date)).getTime();
+  const timerMs = Number(room.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds) * 1000;
+  if (Date.now() - startedAt < timerMs) return { processed: false };
+
+  const { data: turn, error: turnError } = await supabase
+    .from("draft_turns")
+    .select("*")
+    .eq("draft_id", draft.id)
+    .eq("overall_pick", room.current_pick)
+    .single();
+  if (turnError) throw turnError;
+  const playerId = await bestAvailablePlayer(supabase, normalizeLeaguePlaySettings(draft.leagues), draft.id, turn.league_member_id);
+  return submitDraftPick(supabase, user, { draft_id: draft.id, player_id: playerId, auto_pick: true });
+}
+
 async function submitPick(supabase: ReturnType<typeof createClient>, payload: Json) {
   const { data: draft } = await supabase
     .from("drafts")
@@ -1345,8 +1603,16 @@ export async function handleAction(action: string, request: Request) {
                                     ? await setLeagueStatus(supabase, user, payload, "PAUSED")
                                     : action === "resume_league"
                                       ? await setLeagueStatus(supabase, user, payload, "ACTIVE")
-      : action === "start_season"
-        ? await startSeason(supabase, payload)
+                                      : action === "schedule_draft"
+                                        ? await scheduleDraft(supabase, user, payload)
+                                        : action === "start_draft"
+                                          ? await startDraft(supabase, user, payload)
+                                          : action === "submit_draft_pick"
+                                            ? await submitDraftPick(supabase, user, payload)
+                                            : action === "process_draft_timer"
+                                              ? await processDraftTimer(supabase, user, payload)
+        : action === "start_season"
+          ? await startSeason(supabase, payload)
         : action === "open_week_draft"
           ? await openWeekDraft(supabase, payload)
           : action === "submit_pick"

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, RefreshCw, Eye, FastForward, Lock, Unlock, Pause, Save } from "lucide-react";
+import { CalendarClock, Play, RefreshCw, Eye, FastForward, Lock, Unlock, Pause, Save } from "lucide-react";
 import { toast } from "sonner";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS } from "@/api/appClient";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ export default function LeagueDraftSettings({ league }) {
     schedule_config: { ...DEFAULT_LEAGUE_PLAY_SETTINGS.schedule_config, ...(league.schedule_config || {}) },
   });
   const [sourceSeasonYear, setSourceSeasonYear] = useState(league.source_season_year || new Date().getFullYear() - 1);
+  const [draftStart, setDraftStart] = useState("");
 
   const { data: seasons = [] } = useQuery({
     queryKey: ["league-seasons", league.id],
@@ -30,18 +31,30 @@ export default function LeagueDraftSettings({ league }) {
     queryKey: ["league-game-schedule", league.id],
     queryFn: () => appClient.entities.GameSchedule.filter({ league_id: league.id }, "week_number"),
   });
+  const { data: drafts = [] } = useQuery({
+    queryKey: ["league-drafts", league.id],
+    queryFn: () => appClient.entities.Draft.filter({ league_id: league.id }, "-created_date"),
+  });
 
   const activeSeason = seasons[0];
   const currentWeekNumber = activeSeason?.current_week || 1;
   const currentWeek = weeks.find((week) => Number(week.week_number) === Number(currentWeekNumber));
   const leagueStarted = seasons.length > 0;
   const isPaused = league.league_status === "PAUSED";
+  const scheduledDraft = drafts.find((draft) => ["SCHEDULED", "OPEN"].includes(String(draft.status || "").toUpperCase())) || drafts[0];
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["league", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-seasons", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-weeks", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-drafts", league.id] });
   };
+
+  React.useEffect(() => {
+    if (!scheduledDraft?.start) return;
+    const date = new Date(scheduledDraft.start);
+    setDraftStart(new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16));
+  }, [scheduledDraft?.start]);
 
   const saveDraftMutation = useMutation({
     mutationFn: () => appClient.entities.League.update(league.id, {
@@ -101,6 +114,19 @@ export default function LeagueDraftSettings({ league }) {
       invalidate();
     },
     onError: (error) => toast.error(error.message || "Failed to update week status."),
+  });
+
+  const scheduleDraftMutation = useMutation({
+    mutationFn: () => appClient.functions.invoke("schedule_draft", {
+      league_id: league.id,
+      start: new Date(draftStart).toISOString(),
+      type: draftConfig.type,
+    }),
+    onSuccess: () => {
+      toast.success("Draft scheduled.");
+      invalidate();
+    },
+    onError: (error) => toast.error(error.message || "Failed to schedule draft."),
   });
 
   const run = (action, payload = {}) => actionMutation.mutate({ action, payload: { league_id: league.id, ...payload } });
@@ -281,6 +307,26 @@ export default function LeagueDraftSettings({ league }) {
           ))}
           {!schedules.length && <p className="text-sm font-bold text-gray-600">Schedule rows are generated when the season starts.</p>}
         </div>
+      </div>
+
+      <div className="neo-card bg-white p-6">
+        <h4 className="text-xl font-black uppercase mb-4">Draft Day</h4>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto_auto] md:items-end">
+          <div>
+            <Label className="text-sm font-black uppercase mb-2 block">Draft Start</Label>
+            <Input type="datetime-local" value={draftStart} onChange={(event) => setDraftStart(event.target.value)} className="neo-border font-bold" />
+          </div>
+          <Button onClick={() => scheduleDraftMutation.mutate()} disabled={!draftStart || scheduleDraftMutation.isPending || scheduledDraft?.status === "OPEN"} className="neo-btn bg-[#00D9FF] text-black">
+            <CalendarClock className="w-5 h-5 mr-2" />
+            Schedule Draft
+          </Button>
+          <Button asChild className="neo-btn bg-[#F7B801] text-black">
+            <a href={`/league/draft?id=${league.id}`}>Open Draft Day</a>
+          </Button>
+        </div>
+        <p className="mt-3 text-sm font-bold text-gray-600">
+          Current draft: {scheduledDraft?.start ? new Date(scheduledDraft.start).toLocaleString() : "Unscheduled"} {scheduledDraft?.status ? `(${scheduledDraft.status})` : ""}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Bot, Clock3, Edit, Eye, EyeOff, Shuffle, Trophy } from "lucide-react";
+import { ArrowLeft, Bot, Clock3, Edit, Eye, EyeOff, PenSquare, Shuffle, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import { useAvailablePlayers, useLeagueWeek, useLineup, useReleasedPlayers } from "@/api/hooks";
@@ -265,14 +265,22 @@ export default function League() {
             Back to Leagues
           </Button>
         </Link>
-        {isCommissioner && (
-          <Link to={createPageUrl(`LeagueManage?id=${league.id}`)}>
-            <Button className="neo-btn bg-[#6A4C93] text-white">
-              <Edit className="w-5 h-5 mr-2" />
-              Commissioner View
+        <div className="flex flex-wrap gap-3">
+          <Link to={`/league/draft?id=${league.id}`}>
+            <Button className="neo-btn bg-[#F7B801] text-black">
+              <PenSquare className="w-5 h-5 mr-2" />
+              Draft Day
             </Button>
           </Link>
-        )}
+          {isCommissioner && (
+            <Link to={createPageUrl(`LeagueManage?id=${league.id}`)}>
+              <Button className="neo-btn bg-[#6A4C93] text-white">
+                <Edit className="w-5 h-5 mr-2" />
+                Commissioner View
+              </Button>
+            </Link>
+          )}
+        </div>
       </div>
 
       <div className="neo-card bg-black text-white p-8 mb-8 rotate-[-0.5deg]">

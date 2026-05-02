@@ -21,7 +21,11 @@ export const Draft = appClient.entities.Draft;
 
 export const DraftRoom = appClient.entities.DraftRoom;
 
+export const DraftTurn = appClient.entities.DraftTurn;
+
 export const DraftPick = appClient.entities.DraftPick;
+
+export const DraftBoardItem = appClient.entities.DraftBoardItem;
 
 export const Roster = appClient.entities.Roster;
 
