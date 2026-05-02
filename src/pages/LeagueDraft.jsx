@@ -2,18 +2,15 @@ import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
   ChevronsLeft,
   ChevronsRight,
-  Info,
   Play,
-  Plus,
   Search,
   Trash2,
   Trophy,
   User,
+  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
@@ -97,6 +94,21 @@ function buildRosterNeeds(league, roster) {
         : Math.min(Number(needed), Number(drafted[position] || 0));
       return { position, needed: Number(needed), filled, remaining: Math.max(0, Number(needed) - filled) };
     });
+}
+
+function groupBoardByPosition(board) {
+  const order = ["QB", "RB", "WR", "TE", "K", "DEF", "OFF", "FLEX", "UNK"];
+  const groups = board.reduce((acc, item) => {
+    const position = normalizePosition(item.player?.position);
+    if (!acc[position]) acc[position] = [];
+    acc[position].push(item);
+    return acc;
+  }, {});
+  return Object.entries(groups).sort(([a], [b]) => {
+    const indexA = order.indexOf(a);
+    const indexB = order.indexOf(b);
+    return (indexA === -1 ? order.length : indexA) - (indexB === -1 ? order.length : indexB);
+  });
 }
 
 function playPickChime() {
@@ -213,28 +225,61 @@ function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
 
 function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBusy, isInBoard, isDrafted }) {
   return (
-    <div className="neo-border grid grid-cols-1 gap-3 bg-gray-50 p-3 lg:grid-cols-[minmax(190px,1fr)_300px_auto] lg:items-center">
-      <div className="min-w-0">
+    <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_260px_auto] md:items-center">
+      <div className="min-w-0 pr-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <p className="truncate text-sm font-black uppercase sm:text-base">{playerName(player)}</p>
+          <button
+            type="button"
+            onClick={() => onStats(player)}
+            className="block max-w-full truncate text-left text-sm font-black uppercase underline decoration-2 underline-offset-2 sm:text-base"
+          >
+            {playerName(player)}
+          </button>
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
         </div>
-        <p className="text-xs font-bold uppercase text-gray-500">{player.position || "--"} | {player.team || "FA"}</p>
+        <p className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
+          <span>{player.position || "--"} | {player.team || "FA"}</span>
+          <button
+            type="button"
+            onClick={() => (isInBoard ? onRemove(player) : onAdd(player))}
+            disabled={isBusy}
+            className="font-black text-[#00A6D6] underline decoration-2 underline-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
+          >
+            {isInBoard ? "Remove from Board" : "Add to Draft Board"}
+          </button>
+        </p>
       </div>
       <PlayerMiniStats player={player} weeksPlayed={player.weeks_played} />
-      <div className="flex flex-wrap gap-2 lg:justify-end">
-        <Button onClick={() => onStats(player)} className="neo-btn bg-white p-2 text-black" title="Open player stats">
-          <Info className="h-4 w-4" />
-        </Button>
-        <Button
-          onClick={() => (isInBoard ? onRemove(player) : onAdd(player))}
-          disabled={isBusy}
-          className={`neo-btn px-3 text-black ${isInBoard ? "bg-white" : "bg-[#00D9FF]"}`}
-        >
-          {isInBoard ? "Remove" : <><Plus className="mr-1 h-4 w-4" />Board</>}
-        </Button>
-        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isBusy} className="neo-btn bg-[#F7B801] px-4 text-black">
+      <div className="flex flex-nowrap md:justify-end">
+        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isBusy} className="neo-btn whitespace-nowrap bg-[#F7B801] px-4 text-black">
           Draft
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) {
+  const player = item.player;
+  return (
+    <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(170px,1fr)_220px_auto] md:items-center lg:grid-cols-1 xl:grid-cols-[minmax(170px,1fr)_220px_auto]">
+      <div className="min-w-0 pr-2">
+        <button
+          type="button"
+          onClick={() => onStats(player)}
+          className="block max-w-full truncate text-left text-sm font-black uppercase underline decoration-2 underline-offset-2 sm:text-base"
+        >
+          {playerName(player)}
+        </button>
+        <p className="text-xs font-bold uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
+      </div>
+      <PlayerMiniStats player={player} weeksPlayed={item.weeks_played} />
+      <div className="flex flex-nowrap gap-2 md:justify-end lg:justify-start xl:justify-end">
+        <Button onClick={() => onRemove(item.id)} disabled={isBusy} className="neo-btn bg-red-500 p-2 text-white" title="Remove from draft board">
+          <Trash2 className="h-4 w-4" />
+        </Button>
+        <Button onClick={() => onDraft(item.player_id)} disabled={!canDraft || isBusy} className="neo-btn bg-[#F7B801] p-2 text-black" title="Draft player">
+          <Check className="h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -252,6 +297,9 @@ export default function LeagueDraft() {
   const [sortBy, setSortBy] = React.useState("-avg_points");
   const [page, setPage] = React.useState(0);
   const [selectedPlayer, setSelectedPlayer] = React.useState(null);
+  const [boardDraftNotice, setBoardDraftNotice] = React.useState(null);
+  const previousBoardRef = React.useRef(new Map());
+  const notifiedPickIdsRef = React.useRef(new Set());
 
   const { data: user, isLoading: isUserLoading } = useQuery({
     queryKey: ["draft-user"],
@@ -346,6 +394,39 @@ export default function LeagueDraft() {
     setPage(0);
   };
 
+  React.useEffect(() => {
+    if (!state?.draft?.id || !currentMember?.id) return;
+
+    const currentBoardMap = new Map(
+      (state.board || [])
+        .filter((item) => item.league_member_id === currentMember.id)
+        .map((item) => [item.player_id, item])
+    );
+    const previousBoardMap = previousBoardRef.current;
+    const draftedFromBoard = (state.picks || []).find((pick) => {
+      const pickKey = pick.id || `${pick.draft_id}-${pick.player_id}-${pick.overall_pick}`;
+      return (
+        pick.league_member_id !== currentMember.id &&
+        previousBoardMap.has(pick.player_id) &&
+        !notifiedPickIdsRef.current.has(pickKey)
+      );
+    });
+
+    if (draftedFromBoard) {
+      const pickKey = draftedFromBoard.id || `${draftedFromBoard.draft_id}-${draftedFromBoard.player_id}-${draftedFromBoard.overall_pick}`;
+      notifiedPickIdsRef.current.add(pickKey);
+      const boardItem = previousBoardMap.get(draftedFromBoard.player_id);
+      const draftingMember = state.members?.find((member) => member.id === draftedFromBoard.league_member_id);
+      setBoardDraftNotice({
+        player: draftedFromBoard.player || boardItem?.player,
+        teamName: memberName(draftingMember),
+        pickNumber: draftedFromBoard.overall_pick,
+      });
+    }
+
+    previousBoardRef.current = currentBoardMap;
+  }, [currentMember?.id, state?.board, state?.draft?.id, state?.members, state?.picks]);
+
   if (isLoading || isUserLoading) {
     return <div className="mx-auto max-w-5xl px-4"><div className="neo-card bg-white p-8 text-center font-black uppercase">Loading Draft...</div></div>;
   }
@@ -386,22 +467,12 @@ export default function LeagueDraft() {
   const board = (state.board || []).filter((item) => item.league_member_id === currentMember?.id && !pickedIds.has(item.player_id));
   const roster = (state.rosters || []).filter((slot) => slot.league_member_id === currentMember?.id);
   const boardPlayerIds = new Set(board.map((item) => item.player_id));
+  const boardGroups = groupBoardByPosition(board);
   const rosterNeeds = buildRosterNeeds(state.league, roster);
   const eligiblePlayers = eligibleResult.data || [];
   const commissioner = state.commissionerProfile;
   const commissionerName = commissioner?.display_name || commissioner?.profile_name || "Commissioner";
   const commissionerProfileUrl = commissioner?.profile_name ? createPageUrl(`Profile?name=${encodeURIComponent(commissioner.profile_name)}`) : null;
-
-  const moveBoardItem = (index, direction) => {
-    const next = [...board];
-    const target = index + direction;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    boardMutation.mutate({
-      action: "order",
-      payload: { draftId, leagueMemberId: currentMember.id, playerIds: next.map((item) => item.player_id) },
-    });
-  };
 
   const addToBoard = (player) => {
     boardMutation.mutate({ action: "add", payload: { draftId, leagueMemberId: currentMember?.id, playerId: player.id } });
@@ -498,21 +569,25 @@ export default function LeagueDraft() {
         <aside className="space-y-8">
           <section className="neo-card bg-white p-5">
             <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">My Draft Board</h2>
-            <div className="space-y-3">
-              {board.map((item, index) => (
-                <div key={item.id} className="neo-border bg-gray-50 p-3">
-                  <div className="mb-2 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-black uppercase">{playerName(item.player)}</p>
-                      <p className="text-xs font-bold text-gray-500">{item.player?.team || "FA"} | {item.player?.position || "--"}</p>
-                    </div>
-                    <div className="flex flex-none gap-1">
-                      <Button onClick={() => moveBoardItem(index, -1)} disabled={index === 0 || boardMutation.isPending} className="neo-btn bg-white p-2 text-black"><ArrowUp className="h-4 w-4" /></Button>
-                      <Button onClick={() => moveBoardItem(index, 1)} disabled={index === board.length - 1 || boardMutation.isPending} className="neo-btn bg-white p-2 text-black"><ArrowDown className="h-4 w-4" /></Button>
-                      <Button onClick={() => boardMutation.mutate({ action: "remove", payload: { id: item.id } })} disabled={boardMutation.isPending} className="neo-btn bg-red-500 p-2 text-white"><Trash2 className="h-4 w-4" /></Button>
-                    </div>
+            <div>
+              {boardGroups.map(([position, items]) => (
+                <div key={position} className="mb-5 last:mb-0">
+                  <div className="mb-1 border-b-4 border-black pb-1">
+                    <h3 className="text-sm font-black uppercase text-gray-700">{position}</h3>
                   </div>
-                  <PlayerMiniStats player={item.player} weeksPlayed={item.weeks_played} />
+                  <div>
+                    {items.map((item) => (
+                      <BoardPlayerRow
+                        key={item.id}
+                        item={item}
+                        canDraft={isMyTurn}
+                        onDraft={(playerId) => pickMutation.mutate(playerId)}
+                        onRemove={(id) => boardMutation.mutate({ action: "remove", payload: { id } })}
+                        onStats={setSelectedPlayer}
+                        isBusy={boardMutation.isPending || pickMutation.isPending}
+                      />
+                    ))}
+                  </div>
                 </div>
               ))}
               {!board.length && <p className="text-sm font-bold text-gray-500">Add players from the eligible list to protect your draft plan.</p>}
@@ -585,7 +660,7 @@ export default function LeagueDraft() {
               </div>
             </div>
 
-            <div className="space-y-3">
+            <div>
               {eligiblePlayers.map((player) => (
                 <DraftPlayerRow
                   key={player.id}
@@ -597,7 +672,7 @@ export default function LeagueDraft() {
                   onStats={setSelectedPlayer}
                   isInBoard={boardPlayerIds.has(player.id)}
                   isDrafted={pickedIds.has(player.id)}
-                  isBusy={!draftId || !currentMember || boardMutation.isPending || pickMutation.isPending}
+                  isBusy={!draftId || !currentMember || boardMutation.isPending}
                 />
               ))}
               {!eligiblePlayers.length && (
@@ -632,6 +707,29 @@ export default function LeagueDraft() {
           {!roster.length && <p className="text-sm font-bold text-gray-500">Draft picks will appear here.</p>}
         </div>
       </section>
+
+      <Dialog open={!!boardDraftNotice} onOpenChange={(open) => {
+        if (!open) setBoardDraftNotice(null);
+      }}>
+        <DialogContent className="max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-black uppercase text-orange-600">Board Player Drafted</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="neo-border bg-[#EFFBFF] p-4">
+              <p className="text-sm font-black uppercase text-gray-500">Player Taken</p>
+              <p className="mt-1 text-2xl font-black uppercase">{playerName(boardDraftNotice?.player)}</p>
+              <p className="mt-2 font-bold text-gray-700">
+                Drafted by <span className="font-black">{boardDraftNotice?.teamName || "another team"}</span>
+                {boardDraftNotice?.pickNumber ? ` at pick ${boardDraftNotice.pickNumber}.` : "."}
+              </p>
+            </div>
+            <Button onClick={() => setBoardDraftNotice(null)} className="neo-btn w-full bg-black text-white">
+              Got It
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <PlayerStatsDialog
         player={selectedPlayer}

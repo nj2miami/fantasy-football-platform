@@ -1042,6 +1042,8 @@ async function localSubmitDraftPick({ draft_id, player_id, auto_pick = false } =
     slot_type: player?.position || "OFF",
     week_number: null,
   });
+  const boardItems = await entities.DraftBoardItem.filter({ draft_id, player_id });
+  await Promise.all(boardItems.map((item) => entities.DraftBoardItem.delete(item.id)));
   const turns = await entities.DraftTurn.filter({ draft_id });
   const nextPick = Number(room?.current_pick || 1) + 1;
   if (nextPick > turns.length) {

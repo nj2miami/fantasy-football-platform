@@ -1154,6 +1154,13 @@ async function submitDraftPick(supabase: ReturnType<typeof createClient>, user: 
   });
   if (rosterError) throw rosterError;
 
+  const { error: boardCleanupError } = await supabase
+    .from("draft_board_items")
+    .delete()
+    .eq("draft_id", draft.id)
+    .eq("player_id", playerId);
+  if (boardCleanupError) throw boardCleanupError;
+
   const { count: turnCount, error: turnCountError } = await supabase
     .from("draft_turns")
     .select("id", { count: "exact", head: true })
