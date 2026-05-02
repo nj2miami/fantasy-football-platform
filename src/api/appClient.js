@@ -145,6 +145,7 @@ const buildPlayerWeeks = () =>
         season_year: player.source_season_year,
         week,
         team: player.team,
+        opponent_team: "OPP",
         fantasy_points: Number(Math.max(0, base).toFixed(2)),
         passing_yards: player.position === "QB" ? 210 + week * 8 : 0,
         passing_tds: player.position === "QB" ? (week % 4) + 1 : 0,
@@ -155,6 +156,33 @@ const buildPlayerWeeks = () =>
       };
     })
   );
+
+const buildPlayerSeasonStats = (playerWeeks = buildPlayerWeeks()) => {
+  const grouped = new Map();
+  playerWeeks.forEach((week) => {
+    const key = `${week.player_id}:${week.season_year}`;
+    const current = grouped.get(key) || { player_id: week.player_id, season_year: week.season_year, total: 0, high: null, low: null, count: 0 };
+    const points = Number(week.fantasy_points || 0);
+    current.total += points;
+    current.high = current.high === null ? points : Math.max(current.high, points);
+    current.low = current.low === null ? points : Math.min(current.low, points);
+    current.count += 1;
+    grouped.set(key, current);
+  });
+
+  return [...grouped.values()].map((group) => ({
+    id: `ps_${group.player_id}_${group.season_year}`,
+    player_id: group.player_id,
+    season_year: group.season_year,
+    totals: {},
+    total_points: group.total,
+    avg_points: group.count ? group.total / group.count : 0,
+    high_score: group.high ?? 0,
+    low_score: group.low ?? 0,
+    weeks_played: group.count,
+    created_date: now(),
+  }));
+};
 
 const buildWeekRandomizations = () =>
   Array.from({ length: 8 }, (_, index) => ({
@@ -314,6 +342,7 @@ function createSeedStore() {
     ],
     Player: playerSeed,
     PlayerWeek: buildPlayerWeeks(),
+    PlayerSeasonStats: buildPlayerSeasonStats(),
     Draft: [{ id: "draft_arcade_w1", league_id: "league_redraft_arcade", week_number: 1, status: "OPEN", type: "weekly_redraft", created_date: createdDate }],
     DraftRoom: [],
     DraftPick: [],
@@ -426,6 +455,7 @@ const entityTableMap = {
   Matchup: "matchups",
   Player: "players",
   PlayerWeek: "player_week_stats",
+  PlayerSeasonStats: "player_season_stats",
   Draft: "drafts",
   DraftRoom: "draft_rooms",
   DraftPick: "draft_picks",
@@ -537,6 +567,7 @@ function readLocalStore() {
     store.PlayoffRosterDecision = store.PlayoffRosterDecision || [];
     store.PlayerPositionYearCount = store.PlayerPositionYearCount || [];
     store.SeasonScoringRule = store.SeasonScoringRule || [];
+    store.PlayerSeasonStats = store.PlayerSeasonStats || buildPlayerSeasonStats(store.PlayerWeek || []);
     store.DraftRoom = store.DraftRoom || [];
     return store;
   }
@@ -742,6 +773,7 @@ const entityNames = [
   "Matchup",
   "Player",
   "PlayerWeek",
+  "PlayerSeasonStats",
   "Draft",
   "DraftRoom",
   "DraftPick",
@@ -1752,6 +1784,7 @@ function localCalculateFantasyPoints(stats = {}, position = "OFF", rules = DEFAU
 
 function localRefreshPlayerAggregates(store) {
   const grouped = new Map();
+  const seasonGrouped = new Map();
   (store.PlayerWeek || []).forEach((week) => {
     const current = grouped.get(week.player_id) || { total: 0, high: null, low: null, count: 0, years: new Set() };
     const points = Number(week.fantasy_points || 0);
@@ -1761,6 +1794,16 @@ function localRefreshPlayerAggregates(store) {
     current.count += 1;
     if (week.season_year) current.years.add(Number(week.season_year));
     grouped.set(week.player_id, current);
+
+    if (week.season_year) {
+      const seasonKey = `${week.player_id}:${week.season_year}`;
+      const seasonCurrent = seasonGrouped.get(seasonKey) || { player_id: week.player_id, season_year: Number(week.season_year), total: 0, high: null, low: null, count: 0 };
+      seasonCurrent.total += points;
+      seasonCurrent.high = seasonCurrent.high === null ? points : Math.max(seasonCurrent.high, points);
+      seasonCurrent.low = seasonCurrent.low === null ? points : Math.min(seasonCurrent.low, points);
+      seasonCurrent.count += 1;
+      seasonGrouped.set(seasonKey, seasonCurrent);
+    }
   });
 
   store.Player = (store.Player || []).map((player) => {
@@ -1778,6 +1821,18 @@ function localRefreshPlayerAggregates(store) {
       updated_date: now(),
     };
   });
+  store.PlayerSeasonStats = [...seasonGrouped.values()].map((aggregate) => ({
+    id: `ps_${aggregate.player_id}_${aggregate.season_year}`,
+    player_id: aggregate.player_id,
+    season_year: aggregate.season_year,
+    totals: {},
+    total_points: aggregate.total,
+    avg_points: aggregate.count ? aggregate.total / aggregate.count : 0,
+    high_score: aggregate.high ?? 0,
+    low_score: aggregate.low ?? 0,
+    weeks_played: aggregate.count,
+    updated_date: now(),
+  }));
   store.PlayerPositionYearCount = buildLocalPlayerPositionYearCounts(store);
 }
 
@@ -1909,12 +1964,131 @@ const playerPool = isSupabaseConfigured
       },
     };
 
+function normalizePlayerWeekSummary(week) {
+  return {
+    id: week.id,
+    player_id: week.player_id,
+    season_year: Number(week.season_year || 0),
+    season: Number(week.season_year || 0),
+    week: Number(week.week || 0),
+    team: week.team || null,
+    opponent_team: week.opponent_team || week.raw_stats?.opponent_team || null,
+    fantasy_points: Number(week.fantasy_points || 0),
+  };
+}
+
+function localPlayerSeasonAggregate(store, playerId, seasonYear = null) {
+  if (seasonYear) {
+    const existing = (store.PlayerSeasonStats || []).find(
+      (row) => row.player_id === playerId && Number(row.season_year) === Number(seasonYear)
+    );
+    if (existing) return existing;
+  }
+
+  const player = (store.Player || []).find((row) => row.id === playerId);
+  if (!player) return null;
+  return {
+    player_id: player.id,
+    season_year: seasonYear ? Number(seasonYear) : null,
+    total_points: player.total_points || 0,
+    avg_points: player.avg_points || 0,
+    high_score: player.high_score || 0,
+    low_score: player.low_score || 0,
+    weeks_played: (store.PlayerWeek || []).filter((week) =>
+      week.player_id === playerId && (!seasonYear || Number(week.season_year) === Number(seasonYear))
+    ).length,
+  };
+}
+
+const playerStats = isSupabaseConfigured
+  ? {
+      async getAggregate({ playerId, seasonYear = null } = {}) {
+        if (!playerId) return null;
+        if (seasonYear) {
+          const { data, error } = await supabase
+            .from("player_season_stats")
+            .select("player_id,season_year,total_points,avg_points,high_score,low_score,weeks_played")
+            .eq("player_id", playerId)
+            .eq("season_year", Number(seasonYear))
+            .maybeSingle();
+          if (error) throw mapSupabaseError(error);
+          return data || null;
+        }
+
+        const { data, error } = await supabase
+          .from("players")
+          .select("id,total_points,avg_points,high_score,low_score")
+          .eq("id", playerId)
+          .maybeSingle();
+        if (error) throw mapSupabaseError(error);
+        if (!data) return null;
+        return {
+          player_id: data.id,
+          season_year: null,
+          total_points: data.total_points || 0,
+          avg_points: data.avg_points || 0,
+          high_score: data.high_score || 0,
+          low_score: data.low_score || 0,
+          weeks_played: null,
+        };
+      },
+      async listWeeklySummaries({ playerId } = {}) {
+        if (!playerId) return [];
+        const { data, error } = await supabase
+          .from("player_week_stats")
+          .select("id,player_id,season_year,week,team,opponent_team,fantasy_points")
+          .eq("player_id", playerId)
+          .order("season_year", { ascending: true })
+          .order("week", { ascending: true });
+        if (error) throw mapSupabaseError(error);
+        return (data || []).map(normalizePlayerWeekSummary);
+      },
+      async getWeekDetail({ playerWeekId, playerId, seasonYear, week } = {}) {
+        let query = supabase.from("player_week_stats").select("*");
+        if (playerWeekId) query = query.eq("id", playerWeekId);
+        else {
+          query = query
+            .eq("player_id", playerId)
+            .eq("season_year", Number(seasonYear))
+            .eq("week", Number(week));
+        }
+        const { data, error } = await query.maybeSingle();
+        if (error) throw mapSupabaseError(error);
+        return data ? { ...(data.raw_stats || {}), ...data, season: data.season_year } : null;
+      },
+    }
+  : {
+      async getAggregate({ playerId, seasonYear = null } = {}) {
+        return localPlayerSeasonAggregate(readLocalStore(), playerId, seasonYear);
+      },
+      async listWeeklySummaries({ playerId } = {}) {
+        const store = readLocalStore();
+        return (store.PlayerWeek || [])
+          .filter((week) => week.player_id === playerId)
+          .map(normalizePlayerWeekSummary)
+          .sort((a, b) => {
+            if (a.season_year !== b.season_year) return a.season_year - b.season_year;
+            return a.week - b.week;
+          });
+      },
+      async getWeekDetail({ playerWeekId, playerId, seasonYear, week } = {}) {
+        const store = readLocalStore();
+        const detail = (store.PlayerWeek || []).find((row) =>
+          playerWeekId
+            ? row.id === playerWeekId
+            : row.player_id === playerId && Number(row.season_year) === Number(seasonYear) && Number(row.week) === Number(week)
+        );
+        return detail ? { ...(detail.raw_stats || {}), ...detail, season: detail.season_year } : null;
+      },
+    };
+
 export const appClient = {
   isSupabaseConfigured,
   entities,
   auth,
   functions,
   playerPool,
+  playerStats,
   integrations: {
     Core: {
       UploadFile: uploadFile,

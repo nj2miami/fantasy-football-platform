@@ -184,13 +184,6 @@ function buildScoringSections(week, rules = DEFAULT_SCORING_RULES, playerPositio
   })).filter((section) => section.lines.length > 0);
 }
 
-function scoringSectionsTotal(sections) {
-  return sections.reduce(
-    (sectionSum, section) => sectionSum + section.lines.reduce((lineSum, line) => lineSum + Number(line.points || 0), 0),
-    0
-  );
-}
-
 export default function PlayerStats() {
   const location = useLocation();
   const playerId = new URLSearchParams(location.search).get("id");
@@ -209,21 +202,15 @@ export default function PlayerStats() {
     queryKey: ['player-weeks', player?.id],
     queryFn: async () => {
       if (!player?.id) return [];
-
-      const playerWeeks = await appClient.entities.PlayerWeek.filter({ player_id: player.id }, "season_year,week");
-
-      return playerWeeks
-        .map((week) => ({
-          ...(week.raw_stats || {}),
-          ...week,
-          season: week.season_year || week.raw_stats?.season,
-        }))
-        .sort((a, b) => {
-          if (a.season !== b.season) return Number(a.season || 0) - Number(b.season || 0);
-          return Number(a.week || 0) - Number(b.week || 0);
-        });
+      return appClient.playerStats.listWeeklySummaries({ playerId: player.id });
     },
     enabled: !!player?.id
+  });
+
+  const { data: aggregateStats } = useQuery({
+    queryKey: ["player-stats-aggregate", player?.id],
+    queryFn: () => appClient.playerStats.getAggregate({ playerId: player.id }),
+    enabled: !!player?.id,
   });
 
   const { data: headshotUrl } = useQuery({
@@ -248,53 +235,15 @@ export default function PlayerStats() {
     );
   }, [seasonScoringRules]);
 
-  const displayWeeks = React.useMemo(() => {
-    return weeks.map((week) => {
-      const seasonYear = Number(week.season || week.season_year || 0);
-      const rules = scoringRulesBySeason.get(seasonYear) || mergeScoringRules();
-      const sections = buildScoringSections(week, rules, player?.position);
-      return {
-        ...week,
-        calculated_fantasy_points: scoringSectionsTotal(sections),
-      };
-    });
-  }, [player?.position, scoringRulesBySeason, weeks]);
-
-  // Compute stats from weeks if not available on player
-  const computedStats = React.useMemo(() => {
-    if (weeks.length === 0) {
-      return {
-        avg_points: 0,
-        total_points: 0,
-        high_score: 0,
-        low_score: 0,
-        weeks_played: 0
-      };
-    }
-
-    const points = displayWeeks.map((w) => w.calculated_fantasy_points || 0);
-    const totalPoints = points.reduce((sum, p) => sum + p, 0);
-    const avgPoints = points.length > 0 ? totalPoints / points.length : 0;
-    const highScore = points.length > 0 ? Math.max(...points) : 0;
-    const lowScore = points.length > 0 ? Math.min(...points) : 0;
-
-    return {
-      avg_points: avgPoints,
-      total_points: totalPoints,
-      high_score: highScore,
-      low_score: lowScore,
-      weeks_played: displayWeeks.length
-    };
-  }, [displayWeeks, weeks.length]);
-
+  const displayWeeks = weeks;
   const stats = {
-    avg_points: player?.avg_points ?? computedStats.avg_points ?? 0,
-    total_points: player?.total_points ?? computedStats.total_points ?? 0,
-    high_score: player?.high_score ?? computedStats.high_score ?? 0,
-    low_score: player?.low_score ?? computedStats.low_score ?? 0
+    avg_points: aggregateStats?.avg_points ?? player?.avg_points ?? 0,
+    total_points: aggregateStats?.total_points ?? player?.total_points ?? 0,
+    high_score: aggregateStats?.high_score ?? player?.high_score ?? 0,
+    low_score: aggregateStats?.low_score ?? player?.low_score ?? 0
   };
 
-  const activeWeeks = displayWeeks.filter((week) => Number(week.calculated_fantasy_points || 0) !== 0).length;
+  const activeWeeks = displayWeeks.filter((week) => Number(week.fantasy_points || 0) !== 0).length;
   const selectedWeekIndex = selectedWeek
     ? displayWeeks.findIndex((week) => (
       (week.id && selectedWeek.id && week.id === selectedWeek.id)
@@ -309,17 +258,31 @@ export default function PlayerStats() {
   const nextWeek = selectedWeekIndex >= 0 && selectedWeekIndex < displayWeeks.length - 1
     ? displayWeeks[selectedWeekIndex + 1]
     : null;
+  const {
+    data: selectedWeekDetail,
+    isLoading: isLoadingSelectedWeekDetail,
+    isError: isSelectedWeekDetailError,
+  } = useQuery({
+    queryKey: ["player-week-detail", selectedWeek?.id, selectedWeek?.player_id, selectedWeek?.season_year, selectedWeek?.week],
+    queryFn: () => appClient.playerStats.getWeekDetail({
+      playerWeekId: selectedWeek?.id,
+      playerId: selectedWeek?.player_id || player?.id,
+      seasonYear: selectedWeek?.season_year || selectedWeek?.season,
+      week: selectedWeek?.week,
+    }),
+    enabled: Boolean(selectedWeek && player?.id),
+  });
   const selectedScoringRules = React.useMemo(() => {
     const seasonYear = Number(selectedWeek?.season || selectedWeek?.season_year || 0);
     return scoringRulesBySeason.get(seasonYear) || mergeScoringRules();
   }, [scoringRulesBySeason, selectedWeek]);
   const selectedScoringSections = React.useMemo(() => {
-    if (!selectedWeek) return [];
-    return buildScoringSections(selectedWeek, selectedScoringRules, player?.position);
-  }, [player?.position, selectedScoringRules, selectedWeek]);
+    if (!selectedWeekDetail) return [];
+    return buildScoringSections(selectedWeekDetail, selectedScoringRules, player?.position);
+  }, [player?.position, selectedScoringRules, selectedWeekDetail]);
   const selectedCalculatedPoints = React.useMemo(
-    () => scoringSectionsTotal(selectedScoringSections),
-    [selectedScoringSections]
+    () => Number(selectedWeekDetail?.fantasy_points ?? selectedWeek?.fantasy_points ?? 0),
+    [selectedWeek, selectedWeekDetail]
   );
 
   if (isLoadingPlayer) {
@@ -443,7 +406,7 @@ export default function PlayerStats() {
                     <td className="p-3 font-bold">Week {week.week}</td>
                     <td className="p-3 font-bold">{week.team || 'N/A'}</td>
                     <td className="p-3 font-bold">{week.opponent_team || 'N/A'}</td>
-                    <td className="p-3 font-black text-right text-lg">{(week.calculated_fantasy_points || 0).toFixed(2)}</td>
+                    <td className="p-3 font-black text-right text-lg">{Number(week.fantasy_points || 0).toFixed(2)}</td>
                     <td className="p-3 text-center">
                       <Button
                         onClick={() => setSelectedWeek(week)}
@@ -476,7 +439,7 @@ export default function PlayerStats() {
                   {player.player_display_name || player.full_name}
                 </h3>
                 <p className="text-lg font-bold text-gray-600">
-                  {selectedWeek.season} • Week {selectedWeek.week} • {selectedWeek.team || 'N/A'}
+                  {selectedWeek.season} | Week {selectedWeek.week} | {selectedWeek.team || 'N/A'}
                 </p>
               </div>
               <Button onClick={() => setSelectedWeek(null)} className="neo-btn bg-black text-white">
@@ -506,30 +469,41 @@ export default function PlayerStats() {
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px_1fr] lg:items-start">
-              <div className="neo-border bg-[#F7B801] p-6">
-                <p className="mb-2 text-sm font-black uppercase text-black">Fantasy Points</p>
-                <p className="text-5xl font-black text-black">{selectedCalculatedPoints.toFixed(2)}</p>
+            {isLoadingSelectedWeekDetail ? (
+              <div className="neo-border bg-gray-50 p-8 text-center">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-black border-t-transparent"></div>
+                <p className="mt-3 font-black uppercase text-gray-600">Loading week detail...</p>
               </div>
+            ) : isSelectedWeekDetailError || !selectedWeekDetail ? (
+              <div className="neo-border bg-red-50 p-8 text-center">
+                <p className="font-black uppercase text-red-700">Could not load week detail.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px_1fr] lg:items-start">
+                <div className="neo-border bg-[#F7B801] p-6">
+                  <p className="mb-2 text-sm font-black uppercase text-black">Fantasy Points</p>
+                  <p className="text-5xl font-black text-black">{selectedCalculatedPoints.toFixed(2)}</p>
+                </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {selectedScoringSections.map((section) => (
-                  <div key={section.title} className="neo-border p-4 bg-gray-50">
-                    <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
-                    <div className="space-y-2 text-sm">
-                      {section.lines.map((line) => (
-                        <ScoredLine
-                          key={line.label}
-                          label={line.label}
-                          value={line.value}
-                          points={line.points}
-                        />
-                      ))}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {selectedScoringSections.map((section) => (
+                    <div key={section.title} className="neo-border p-4 bg-gray-50">
+                      <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
+                      <div className="space-y-2 text-sm">
+                        {section.lines.map((line) => (
+                          <ScoredLine
+                            key={line.label}
+                            label={line.label}
+                            value={line.value}
+                            points={line.points}
+                          />
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}

@@ -104,8 +104,6 @@ const numberFields = [
   "gwfg_att",
   "gwfg_missed",
   "gwfg_blocked",
-  "fantasy_points",
-  "fantasy_points_ppr",
 ];
 
 const textStatFields = [
@@ -427,7 +425,7 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) 
   return offensivePoints;
 }
 
-function buildWeeklyRow(row: Json, rules: Json = DEFAULT_SCORING_RULES) {
+function buildWeeklyRow(row: Json) {
   const payload: Json = {
     player_id: row.player_id,
     season: toNumber(row.season),
@@ -440,7 +438,6 @@ function buildWeeklyRow(row: Json, rules: Json = DEFAULT_SCORING_RULES) {
 
   for (const field of numberFields) payload[field] = toNumber(row[field]);
   for (const field of textStatFields) payload[field] = row[field] ? String(row[field]) : null;
-  payload.fantasy_points = calculateFantasyPoints(row, rules);
   return payload;
 }
 
@@ -513,7 +510,6 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
   const csv = await response.text();
   const parsedRows = parseCsv(csv).filter((row) => String(row.season_type || "").toUpperCase() === "REG");
   const playerMap = new Map<string, Json>();
-  const weeklyRows: Json[] = [];
 
   for (const row of parsedRows) {
     if (!row.player_id || !row.game_id) continue;
@@ -525,7 +521,6 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
       headshot_storage_path: existing?.headshot_storage_path || null,
       headshot_public_url: existing?.headshot_public_url || null,
     });
-    weeklyRows.push(buildWeeklyRow(row, scoringRules));
   }
 
   const players = [...playerMap.values()];
@@ -541,9 +536,6 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
       }
     }
   }
-
-  await upsertBatches(supabase, "player_master", players, "player_id");
-  await upsertBatches(supabase, "weekly_player_stats", weeklyRows, "player_id,season,week,season_type,game_id");
 
   const aggregateMap = new Map<string, { total: number; high: number; low: number | null; count: number }>();
   for (const row of parsedRows) {
@@ -574,6 +566,19 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
     };
   });
   await upsertBatches(supabase, "players", legacyPlayers, "player_key");
+  for (const player of players) {
+    const headshotUpdate: Json = {};
+    if (player.headshot_url) headshotUpdate.headshot_url = player.headshot_url;
+    if (player.headshot_storage_path) headshotUpdate.headshot_storage_path = player.headshot_storage_path;
+    if (player.headshot_public_url) headshotUpdate.headshot_public_url = player.headshot_public_url;
+    if (!Object.keys(headshotUpdate).length) continue;
+
+    const { error: headshotUpdateError } = await supabase
+      .from("players")
+      .update(headshotUpdate)
+      .eq("player_key", player.player_id);
+    if (headshotUpdateError) throw headshotUpdateError;
+  }
 
   const { data: storedPlayers, error: storedPlayerError } = await supabase
     .from("players")
@@ -599,19 +604,20 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
         season_year: toNumber(row.season),
         week: toNumber(row.week),
         team: row.team || null,
+        opponent_team: row.opponent_team || null,
         fantasy_points: calculateFantasyPoints(row, scoringRules),
         passing_yards: toNumber(row.passing_yards) ?? 0,
         passing_tds: toNumber(row.passing_tds) ?? 0,
         rushing_yards: toNumber(row.rushing_yards) ?? 0,
         receiving_yards: toNumber(row.receiving_yards) ?? 0,
         touchdowns,
-        raw_stats: buildWeeklyRow(row, scoringRules),
+        raw_stats: buildWeeklyRow(row),
       };
     })
     .filter(Boolean) as Json[];
   await upsertBatches(supabase, "player_week_stats", legacyWeeks, "player_id,season_year,week");
 
-  return { season, players: players.length, weeks: weeklyRows.length };
+  return { season, players: players.length, weeks: legacyWeeks.length };
 }
 
 async function refreshGlobalCounts(supabase: Supabase) {
@@ -686,26 +692,16 @@ async function refreshPlayerAggregates(supabase: Supabase) {
 }
 
 async function scoringRecalculationWeeks(supabase: Supabase, seasonYear?: number | null) {
-  let legacyQuery = supabase.from("player_week_stats").select("week");
-  let nflverseQuery = supabase.from("weekly_player_stats").select("week");
+  let query = supabase.from("player_week_stats").select("week");
   if (seasonYear) {
-    legacyQuery = legacyQuery.eq("season_year", seasonYear);
-    nflverseQuery = nflverseQuery.eq("season", seasonYear);
+    query = query.eq("season_year", seasonYear);
   }
 
-  const [{ data: legacyWeeks, error: legacyError }, { data: nflverseWeeks, error: nflverseError }] = await Promise.all([
-    legacyQuery,
-    nflverseQuery,
-  ]);
-  if (legacyError) throw legacyError;
-  if (nflverseError) throw nflverseError;
+  const { data, error } = await query;
+  if (error) throw error;
 
   const weeks = new Set<number>();
-  for (const row of legacyWeeks || []) {
-    const week = Number(row.week);
-    if (Number.isFinite(week)) weeks.add(week);
-  }
-  for (const row of nflverseWeeks || []) {
+  for (const row of data || []) {
     const week = Number(row.week);
     if (Number.isFinite(week)) weeks.add(week);
   }
@@ -798,9 +794,8 @@ Deno.serve(async (request) => {
     }
 
     if (parameters.fresh_start) {
-      await supabase.from("weekly_player_stats").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-      await supabase.from("player_master").delete().neq("player_id", "");
-      await appendJobLog(supabase, job, "Fresh start cleared player_master and weekly_player_stats.");
+      await supabase.from("player_week_stats").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await appendJobLog(supabase, job, "Fresh start cleared player_week_stats.");
     }
 
     const results = [];
@@ -814,7 +809,7 @@ Deno.serve(async (request) => {
       results.push(await importSeason(supabase, year, sourceUrl, downloadHeadshots));
     }
 
-    await refreshGlobalCounts(supabase);
+    await refreshPlayerAggregates(supabase);
 
     const importedPlayers = results.reduce((sum, result) => sum + result.players, 0);
     const importedWeeks = results.reduce((sum, result) => sum + result.weeks, 0);

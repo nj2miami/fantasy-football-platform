@@ -43,16 +43,16 @@ Deno.serve(async (request) => {
     if (!playerId) throw new Error("Missing player_key");
 
     const supabase = adminClient();
-    const { data: master, error } = await supabase
-      .from("player_master")
-      .select("player_id, headshot_url, headshot_storage_path, headshot_public_url")
-      .eq("player_id", playerId)
+    const { data: player, error } = await supabase
+      .from("players")
+      .select("id, player_key, headshot_url, headshot_storage_path, headshot_public_url")
+      .eq("player_key", playerId)
       .maybeSingle();
     if (error) throw error;
-    if (!master?.headshot_url && !master?.headshot_public_url) return json({ headshot_url: null });
-    if (master.headshot_public_url) return json({ headshot_url: master.headshot_public_url });
+    if (!player?.headshot_url && !player?.headshot_public_url) return json({ headshot_url: null });
+    if (player.headshot_public_url) return json({ headshot_url: player.headshot_public_url });
 
-    const response = await fetch(master.headshot_url);
+    const response = await fetch(player.headshot_url);
     if (!response.ok) throw new Error(`Headshot download failed: ${response.status}`);
 
     const contentType = response.headers.get("content-type") || "image/jpeg";
@@ -68,9 +68,9 @@ Deno.serve(async (request) => {
     const publicUrl = data.publicUrl;
 
     const { error: updateError } = await supabase
-      .from("player_master")
+      .from("players")
       .update({ headshot_storage_path: path, headshot_public_url: publicUrl })
-      .eq("player_id", playerId);
+      .eq("id", player.id);
     if (updateError) throw updateError;
 
     return json({ headshot_url: publicUrl, headshot_storage_path: path });
@@ -78,4 +78,3 @@ Deno.serve(async (request) => {
     return json({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
 });
-
