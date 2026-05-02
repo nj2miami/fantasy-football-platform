@@ -421,6 +421,9 @@ export default function LeagueDraft() {
       <div className="neo-card mb-5 bg-black p-5 text-white">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_0.9fr_0.9fr] lg:items-stretch">
           <section className="flex flex-col justify-center">
+            <p className="mb-1 text-xs font-black uppercase tracking-wide text-[#00D9FF] sm:text-sm">
+              {state.members?.length || 0} Teams | {state.league.source_season_year || seasonYear} Player Pool
+            </p>
             <h1 className="text-3xl font-black uppercase text-[#FF6B35]">{state.league.name} Draft Day</h1>
             <p className="mt-2 text-lg font-black">Start: {formatDateTime(state.draft?.start)}</p>
             <p className="text-sm font-black uppercase text-[#00D9FF]">{countdown}</p>
@@ -483,18 +486,43 @@ export default function LeagueDraft() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_380px]">
-        <main className="space-y-8">
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[380px_minmax(0,1fr)]">
+        <aside className="space-y-8">
+          <section className="neo-card bg-white p-5">
+            <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">My Draft Board</h2>
+            <div className="space-y-3">
+              {board.map((item, index) => (
+                <div key={item.id} className="neo-border bg-gray-50 p-3">
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate font-black uppercase">{playerName(item.player)}</p>
+                      <p className="text-xs font-bold text-gray-500">{item.player?.team || "FA"} | {item.player?.position || "--"}</p>
+                    </div>
+                    <div className="flex flex-none gap-1">
+                      <Button onClick={() => moveBoardItem(index, -1)} disabled={index === 0 || boardMutation.isPending} className="neo-btn bg-white p-2 text-black"><ArrowUp className="h-4 w-4" /></Button>
+                      <Button onClick={() => moveBoardItem(index, 1)} disabled={index === board.length - 1 || boardMutation.isPending} className="neo-btn bg-white p-2 text-black"><ArrowDown className="h-4 w-4" /></Button>
+                      <Button onClick={() => boardMutation.mutate({ action: "remove", payload: { id: item.id } })} disabled={boardMutation.isPending} className="neo-btn bg-red-500 p-2 text-white"><Trash2 className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                  <PlayerMiniStats player={item.player} weeksPlayed={item.weeks_played} />
+                </div>
+              ))}
+              {!board.length && <p className="text-sm font-bold text-gray-500">Add players from the eligible list to protect your draft plan.</p>}
+            </div>
+          </section>
+        </aside>
+
+        <main className="min-w-0 space-y-8">
           <section className={`neo-card bg-white p-5 ${isMyTurn ? "shadow-[8px_8px_0_#F7B801]" : ""}`}>
-            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start">
+            <div className="mb-4 space-y-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <h2 className="text-2xl font-black uppercase text-orange-600">{isMyTurn ? "DRAFT NOW" : "Eligible Players"}</h2>
                   <p className="text-sm font-bold text-gray-600">Minimum weeks required: {requiredWeeks}{isMyTurn ? ` | ${pickRemaining}s remaining` : ""}</p>
                 </div>
-                <div className="neo-border bg-[#EFFBFF] p-3">
+                <div className="neo-border bg-[#EFFBFF] p-3 lg:ml-auto lg:max-w-md">
                   <p className="mb-2 text-xs font-black uppercase text-gray-500">Players Needed</p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 lg:justify-end">
                     {rosterNeeds.map((need) => (
                       <span key={need.position} className={`neo-border px-2 py-1 text-xs font-black uppercase ${need.remaining ? "bg-white text-black" : "bg-[#D7F8E8] text-black"}`}>
                         {need.position} {need.remaining}
@@ -503,7 +531,7 @@ export default function LeagueDraft() {
                   </div>
                 </div>
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-3 lg:flex-row">
                 <div className="relative min-w-0 sm:w-72">
                   <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
                   <Input
@@ -580,45 +608,20 @@ export default function LeagueDraft() {
             </div>
           </section>
         </main>
-
-        <aside className="space-y-8">
-          <section className="neo-card bg-white p-5">
-            <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">My Draft Board</h2>
-            <div className="space-y-3">
-              {board.map((item, index) => (
-                <div key={item.id} className="neo-border bg-gray-50 p-3">
-                  <div className="mb-2 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-black uppercase">{playerName(item.player)}</p>
-                      <p className="text-xs font-bold text-gray-500">{item.player?.team || "FA"} | {item.player?.position || "--"}</p>
-                    </div>
-                    <div className="flex flex-none gap-1">
-                      <Button onClick={() => moveBoardItem(index, -1)} disabled={index === 0 || boardMutation.isPending} className="neo-btn bg-white p-2 text-black"><ArrowUp className="h-4 w-4" /></Button>
-                      <Button onClick={() => moveBoardItem(index, 1)} disabled={index === board.length - 1 || boardMutation.isPending} className="neo-btn bg-white p-2 text-black"><ArrowDown className="h-4 w-4" /></Button>
-                      <Button onClick={() => boardMutation.mutate({ action: "remove", payload: { id: item.id } })} disabled={boardMutation.isPending} className="neo-btn bg-red-500 p-2 text-white"><Trash2 className="h-4 w-4" /></Button>
-                    </div>
-                  </div>
-                  <PlayerMiniStats player={item.player} weeksPlayed={item.weeks_played} />
-                </div>
-              ))}
-              {!board.length && <p className="text-sm font-bold text-gray-500">Add players from the eligible list to protect your draft plan.</p>}
-            </div>
-          </section>
-
-          <section className="neo-card bg-white p-5">
-            <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">Roster</h2>
-            <div className="space-y-2">
-              {roster.map((slot) => (
-                <div key={slot.id} className="neo-border bg-gray-50 p-3">
-                  <p className="truncate font-black uppercase">{playerName(slot.player)}</p>
-                  <p className="text-xs font-bold text-gray-500">{slot.slot_type}</p>
-                </div>
-              ))}
-              {!roster.length && <p className="text-sm font-bold text-gray-500">Draft picks will appear here.</p>}
-            </div>
-          </section>
-        </aside>
       </div>
+
+      <section className="neo-card mt-8 bg-white p-5">
+        <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">Roster</h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {roster.map((slot) => (
+            <div key={slot.id} className="neo-border bg-gray-50 p-3">
+              <p className="truncate font-black uppercase">{playerName(slot.player)}</p>
+              <p className="text-xs font-bold text-gray-500">{slot.slot_type}</p>
+            </div>
+          ))}
+          {!roster.length && <p className="text-sm font-bold text-gray-500">Draft picks will appear here.</p>}
+        </div>
+      </section>
 
       <PlayerStatsDialog
         player={selectedPlayer}
