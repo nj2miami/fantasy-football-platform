@@ -173,6 +173,41 @@ function json(body: unknown, status = 200) {
   });
 }
 
+function errorDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { message: error.message, name: error.name, stack: error.stack };
+  }
+
+  if (error && typeof error === "object") {
+    const source = error as Record<string, unknown>;
+    const details = {
+      message: source.message,
+      code: source.code,
+      details: source.details,
+      hint: source.hint,
+      name: source.name,
+    };
+    const visible = Object.fromEntries(
+      Object.entries(details).filter(([, value]) => value !== undefined && value !== null && value !== "")
+    );
+    return Object.keys(visible).length ? visible : source;
+  }
+
+  return { message: String(error) };
+}
+
+function errorMessage(error: unknown) {
+  const details = errorDetails(error);
+  if (typeof details.message === "string" && details.message) {
+    const extras = ["code", "details", "hint"]
+      .map((key) => details[key] ? `${key}: ${details[key]}` : "")
+      .filter(Boolean)
+      .join(" | ");
+    return extras ? `${details.message} (${extras})` : details.message;
+  }
+  return JSON.stringify(details);
+}
+
 async function parseRequest(request: Request) {
   try {
     return await request.json();
@@ -747,14 +782,15 @@ Deno.serve(async (request) => {
 
     return json({ processed: 1, results });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
+    const details = errorDetails(error);
     if (job?.id) {
       await updateJob(supabase, String(job.id), {
         status: "FAILED",
         error_details: message,
-        logs: [...(Array.isArray(job.logs) ? job.logs : []), `Import failed: ${message}`],
+        logs: [...(Array.isArray(job.logs) ? job.logs : []), `Job failed: ${message}`],
       });
     }
-    return json({ error: message, job_id: job?.id || null }, 400);
+    return json({ error: message, details, job_id: job?.id || null }, 400);
   }
 });
