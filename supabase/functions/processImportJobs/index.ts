@@ -120,6 +120,7 @@ const textStatFields = [
 
 type Json = Record<string, unknown>;
 type Supabase = ReturnType<typeof createClient>;
+const STALLED_JOB_MINUTES = 30;
 
 const DEFAULT_SCORING_RULES: Json = {
   OFFENSE: {
@@ -205,7 +206,10 @@ async function requireAdmin(request: Request, supabase: Supabase) {
 
 async function updateJob(supabase: Supabase, jobId: string | null, patch: Json) {
   if (!jobId) return;
-  const { error } = await supabase.from("import_jobs").update(patch).eq("id", jobId);
+  const { error } = await supabase
+    .from("import_jobs")
+    .update({ ...patch, updated_date: new Date().toISOString() })
+    .eq("id", jobId);
   if (error) throw error;
 }
 
@@ -232,6 +236,34 @@ async function findJob(supabase: Supabase, requestedJobId?: string) {
     .maybeSingle();
   if (error) throw error;
   return data;
+}
+
+async function clearStalledJobs(supabase: Supabase, preserveJobId?: string) {
+  const cutoff = new Date(Date.now() - STALLED_JOB_MINUTES * 60 * 1000).toISOString();
+  let query = supabase
+    .from("import_jobs")
+    .select("*")
+    .in("status", ["PENDING", "RUNNING"])
+    .or(`updated_date.lt.${cutoff},and(updated_date.is.null,created_date.lt.${cutoff})`);
+
+  if (preserveJobId) query = query.neq("id", preserveJobId);
+
+  const { data: stalledJobs, error } = await query;
+  if (error) throw error;
+
+  for (const stalledJob of stalledJobs || []) {
+    const logs = Array.isArray(stalledJob.logs) ? stalledJob.logs : [];
+    await updateJob(supabase, String(stalledJob.id), {
+      status: "FAILED",
+      progress: Number(stalledJob.progress || 0),
+      summary: "Stale job cleared before starting new work.",
+      error_details: `Job was still ${stalledJob.status} after ${STALLED_JOB_MINUTES} minutes and was marked failed on worker startup.`,
+      logs: [
+        ...logs,
+        `Stale job cleared: still ${stalledJob.status} after ${STALLED_JOB_MINUTES} minutes.`,
+      ],
+    });
+  }
 }
 
 function parseCsv(text: string) {
@@ -643,6 +675,7 @@ Deno.serve(async (request) => {
   try {
     await requireAdmin(request, supabase);
     const payload = await parseRequest(request);
+    await clearStalledJobs(supabase, payload.job_id ? String(payload.job_id) : undefined);
     job = await findJob(supabase, payload.job_id ? String(payload.job_id) : undefined);
     if (!job) return json({ processed: 0 });
 
@@ -650,7 +683,8 @@ Deno.serve(async (request) => {
     const startYear = Number(parameters.start_year || parameters.season || parameters.source_season_year || new Date().getFullYear() - 1);
     const endYear = Number(parameters.end_year || startYear);
     const downloadHeadshots = parameters.download_headshots !== false;
-    const jobType = String(job.job_type || parameters.job_type || "HISTORICAL_STATS").toUpperCase();
+    const requestedJobType = payload.job_id && payload.job_type ? payload.job_type : null;
+    const jobType = String(requestedJobType || job.job_type || parameters.job_type || "HISTORICAL_STATS").toUpperCase();
 
     await appendJobLog(supabase, job, jobType === "HISTORICAL_STATS"
       ? `Starting nflverse player import for ${startYear}-${endYear}.`

@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 
 const STORAGE_KEY = "retro_fantasy_football_store_v2";
 const CURRENT_USER_KEY = "retro_fantasy_football_current_user_v2";
+const STALLED_IMPORT_JOB_MINUTES = 30;
 const now = () => new Date().toISOString();
 
 export const DEFAULT_SCORING_RULES = {
@@ -548,6 +549,29 @@ function readLocalStore() {
 function writeLocalStore(store) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  }
+}
+
+async function clearLocalStalledImportJobs(preserveJobId = null) {
+  const cutoff = Date.now() - STALLED_IMPORT_JOB_MINUTES * 60 * 1000;
+  const jobs = await entities.ImportJob.list("-created_date");
+  const staleJobs = jobs.filter((job) => {
+    if (preserveJobId && String(job.id) === String(preserveJobId)) return false;
+    if (!["PENDING", "RUNNING"].includes(String(job.status || "").toUpperCase())) return false;
+    const timestamp = new Date(job.updated_date || job.created_date || 0).getTime();
+    return Number.isFinite(timestamp) && timestamp < cutoff;
+  });
+
+  for (const job of staleJobs) {
+    await entities.ImportJob.update(job.id, {
+      status: "FAILED",
+      summary: "Stale job cleared before starting new work.",
+      error_details: `Job was still ${job.status} after ${STALLED_IMPORT_JOB_MINUTES} minutes and was marked failed on worker startup.`,
+      logs: [
+        ...(Array.isArray(job.logs) ? job.logs : []),
+        `Stale job cleared: still ${job.status} after ${STALLED_IMPORT_JOB_MINUTES} minutes.`,
+      ],
+    });
   }
 }
 
@@ -1447,8 +1471,9 @@ const localFunctions = {
     return localFunctions.fillLeagueWithAI(payload);
   },
   async processImportJobs(payload = {}) {
-    const jobs = await entities.ImportJob.list("-created_date");
     const requestedJobId = payload?.job_id ? String(payload.job_id) : null;
+    await clearLocalStalledImportJobs(requestedJobId);
+    const jobs = await entities.ImportJob.list("-created_date");
     const pending = requestedJobId
       ? jobs.find((job) => String(job.id) === requestedJobId)
       : jobs.find((job) => job.status === "PENDING" || job.status === "RUNNING");
