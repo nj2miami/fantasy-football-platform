@@ -2208,16 +2208,27 @@ async function countPlayerWeeks(playerId, seasonYear) {
 
 async function getLeagueDraftState(leagueId) {
   if (!leagueId) return null;
-  const [league, members, drafts] = await Promise.all([
+  const [league, members, drafts, profiles] = await Promise.all([
     entities.League.get(leagueId),
     entities.LeagueMember.filter({ league_id: leagueId }),
     entities.Draft.filter({ league_id: leagueId }, "-created_date"),
+    entities.UserProfile.list(),
   ]);
   if (!league) return null;
-  const activeMembers = members.filter((member) => member.is_active !== false);
+  const profilesByEmail = new Map((profiles || []).map((profile) => [profile.user_email, profile]));
+  const decorateMember = (member) => {
+    const profile = profilesByEmail.get(member.user_email) || null;
+    return {
+      ...member,
+      profile,
+      display_name: member.team_name || profile?.display_name || profile?.profile_name || (member.is_ai ? "AI Manager" : "Manager"),
+    };
+  };
+  const activeMembers = members.filter((member) => member.is_active !== false).map(decorateMember);
+  const commissionerProfile = profilesByEmail.get(league.commissioner_email) || null;
   const draft = drafts.find((row) => ["OPEN", "SCHEDULED"].includes(String(row.status || "").toUpperCase())) || drafts[0] || null;
   if (!draft) {
-    return { league, members: activeMembers, draft: null, room: null, turns: [], picks: [], rosters: [], board: [], currentTurn: null };
+    return { league, commissionerProfile, members: activeMembers, draft: null, room: null, turns: [], picks: [], rosters: [], board: [], currentTurn: null };
   }
   const [rooms, turns, picks, board, rosters] = await Promise.all([
     entities.DraftRoom.filter({ draft_id: draft.id }),
@@ -2245,6 +2256,7 @@ async function getLeagueDraftState(leagueId) {
   })));
   return {
     league,
+    commissionerProfile,
     members: activeMembers,
     draft,
     room,
@@ -2258,30 +2270,44 @@ async function getLeagueDraftState(leagueId) {
   };
 }
 
-async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", limit = 80 } = {}) {
+async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", sortBy = "-avg_points", limit = 10, offset = 0 } = {}) {
   const league = await entities.League.get(leagueId);
-  if (!league) return [];
+  if (!league) return { data: [], hasMore: false, totalCount: 0 };
   const draft = draftId ? await entities.Draft.get(draftId) : null;
   const picks = draft ? await entities.DraftPick.filter({ draft_id: draft.id }) : [];
   const pickedIds = new Set(picks.map((pick) => pick.player_id));
   const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
   const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
-  const result = await playerPool.listPlayers({
-    seasonYear,
-    searchTerm,
-    sortBy: "-avg_points",
-    limit: Math.max(200, Number(limit || 80)),
-    offset: 0,
-  });
+  const pageSize = Math.max(1, Number(limit || 10));
+  const start = Math.max(0, Number(offset || 0));
+  const target = start + pageSize;
+  const scanLimit = 100;
   const rows = [];
-  for (const player of result.data || []) {
-    if (pickedIds.has(player.id)) continue;
-    const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
-    if (weeksPlayed < requiredWeeks) continue;
-    rows.push({ ...player, weeks_played: weeksPlayed });
-    if (rows.length >= Number(limit || 80)) break;
+  let scanOffset = 0;
+  let hasPoolMore = true;
+  while (rows.length <= target && hasPoolMore) {
+    const result = await playerPool.listPlayers({
+      seasonYear,
+      searchTerm,
+      sortBy,
+      limit: scanLimit,
+      offset: scanOffset,
+    });
+    for (const player of result.data || []) {
+      if (pickedIds.has(player.id)) continue;
+      const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
+      if (weeksPlayed < requiredWeeks) continue;
+      rows.push({ ...player, weeks_played: weeksPlayed });
+      if (rows.length > target) break;
+    }
+    hasPoolMore = Boolean(result.hasMore) && (result.data || []).length > 0;
+    scanOffset += scanLimit;
   }
-  return rows;
+  return {
+    data: rows.slice(start, start + pageSize),
+    hasMore: rows.length > target || hasPoolMore,
+    totalCount: rows.length,
+  };
 }
 
 const draftDay = {
