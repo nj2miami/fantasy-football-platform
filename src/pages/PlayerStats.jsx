@@ -217,7 +217,6 @@ export default function PlayerStats() {
           ...(week.raw_stats || {}),
           ...week,
           season: week.season_year || week.raw_stats?.season,
-          fantasy_points: Number(week.fantasy_points || week.raw_stats?.fantasy_points_ppr || week.raw_stats?.fantasy_points || 0),
         }))
         .sort((a, b) => {
           if (a.season !== b.season) return Number(a.season || 0) - Number(b.season || 0);
@@ -240,6 +239,27 @@ export default function PlayerStats() {
     queryFn: () => appClient.entities.SeasonScoringRule.list("-season_year"),
   });
 
+  const scoringRulesBySeason = React.useMemo(() => {
+    return new Map(
+      seasonScoringRules.map((row) => [
+        Number(row.season_year),
+        mergeScoringRules(row.rules),
+      ])
+    );
+  }, [seasonScoringRules]);
+
+  const displayWeeks = React.useMemo(() => {
+    return weeks.map((week) => {
+      const seasonYear = Number(week.season || week.season_year || 0);
+      const rules = scoringRulesBySeason.get(seasonYear) || mergeScoringRules();
+      const sections = buildScoringSections(week, rules, player?.position);
+      return {
+        ...week,
+        calculated_fantasy_points: scoringSectionsTotal(sections),
+      };
+    });
+  }, [player?.position, scoringRulesBySeason, weeks]);
+
   // Compute stats from weeks if not available on player
   const computedStats = React.useMemo(() => {
     if (weeks.length === 0) {
@@ -252,7 +272,7 @@ export default function PlayerStats() {
       };
     }
 
-    const points = weeks.map((w) => w.fantasy_points || 0);
+    const points = displayWeeks.map((w) => w.calculated_fantasy_points || 0);
     const totalPoints = points.reduce((sum, p) => sum + p, 0);
     const avgPoints = points.length > 0 ? totalPoints / points.length : 0;
     const highScore = points.length > 0 ? Math.max(...points) : 0;
@@ -263,9 +283,9 @@ export default function PlayerStats() {
       total_points: totalPoints,
       high_score: highScore,
       low_score: lowScore,
-      weeks_played: weeks.length
+      weeks_played: displayWeeks.length
     };
-  }, [weeks]);
+  }, [displayWeeks, weeks.length]);
 
   const stats = {
     avg_points: player?.avg_points ?? computedStats.avg_points ?? 0,
@@ -274,9 +294,9 @@ export default function PlayerStats() {
     low_score: player?.low_score ?? computedStats.low_score ?? 0
   };
 
-  const activeWeeks = weeks.filter((week) => Number(week.fantasy_points || 0) !== 0).length;
+  const activeWeeks = displayWeeks.filter((week) => Number(week.calculated_fantasy_points || 0) !== 0).length;
   const selectedWeekIndex = selectedWeek
-    ? weeks.findIndex((week) => (
+    ? displayWeeks.findIndex((week) => (
       (week.id && selectedWeek.id && week.id === selectedWeek.id)
       || (
         Number(week.season || 0) === Number(selectedWeek.season || 0)
@@ -285,15 +305,14 @@ export default function PlayerStats() {
       )
     ))
     : -1;
-  const previousWeek = selectedWeekIndex > 0 ? weeks[selectedWeekIndex - 1] : null;
-  const nextWeek = selectedWeekIndex >= 0 && selectedWeekIndex < weeks.length - 1
-    ? weeks[selectedWeekIndex + 1]
+  const previousWeek = selectedWeekIndex > 0 ? displayWeeks[selectedWeekIndex - 1] : null;
+  const nextWeek = selectedWeekIndex >= 0 && selectedWeekIndex < displayWeeks.length - 1
+    ? displayWeeks[selectedWeekIndex + 1]
     : null;
   const selectedScoringRules = React.useMemo(() => {
     const seasonYear = Number(selectedWeek?.season || selectedWeek?.season_year || 0);
-    const seasonRule = seasonScoringRules.find((row) => Number(row.season_year) === seasonYear);
-    return mergeScoringRules(seasonRule?.rules);
-  }, [seasonScoringRules, selectedWeek]);
+    return scoringRulesBySeason.get(seasonYear) || mergeScoringRules();
+  }, [scoringRulesBySeason, selectedWeek]);
   const selectedScoringSections = React.useMemo(() => {
     if (!selectedWeek) return [];
     return buildScoringSections(selectedWeek, selectedScoringRules, player?.position);
@@ -302,8 +321,6 @@ export default function PlayerStats() {
     () => scoringSectionsTotal(selectedScoringSections),
     [selectedScoringSections]
   );
-  const selectedStoredPoints = Number(selectedWeek?.fantasy_points || 0);
-  const selectedPointsDiffer = Math.abs(selectedCalculatedPoints - selectedStoredPoints) >= 0.01;
 
   if (isLoadingPlayer) {
     return (
@@ -420,13 +437,13 @@ export default function PlayerStats() {
                 </tr>
               </thead>
               <tbody>
-                {weeks.map((week, idx) => (
+                {displayWeeks.map((week, idx) => (
                   <tr key={idx} className="border-b-2 border-gray-200 hover:bg-gray-50">
                     <td className="p-3 font-bold">{week.season}</td>
                     <td className="p-3 font-bold">Week {week.week}</td>
                     <td className="p-3 font-bold">{week.team || 'N/A'}</td>
                     <td className="p-3 font-bold">{week.opponent_team || 'N/A'}</td>
-                    <td className="p-3 font-black text-right text-lg">{(week.fantasy_points || 0).toFixed(2)}</td>
+                    <td className="p-3 font-black text-right text-lg">{(week.calculated_fantasy_points || 0).toFixed(2)}</td>
                     <td className="p-3 text-center">
                       <Button
                         onClick={() => setSelectedWeek(week)}
@@ -477,7 +494,7 @@ export default function PlayerStats() {
                 Prev Week
               </Button>
               <p className="text-center text-sm font-black uppercase text-gray-500">
-                Stat Record {selectedWeekIndex + 1} of {weeks.length}
+                Stat Record {selectedWeekIndex + 1} of {displayWeeks.length}
               </p>
               <Button
                 onClick={() => nextWeek && setSelectedWeek(nextWeek)}
@@ -493,11 +510,6 @@ export default function PlayerStats() {
               <div className="neo-border bg-[#F7B801] p-6">
                 <p className="mb-2 text-sm font-black uppercase text-black">Fantasy Points</p>
                 <p className="text-5xl font-black text-black">{selectedCalculatedPoints.toFixed(2)}</p>
-                {selectedPointsDiffer && (
-                  <p className="mt-3 text-xs font-black uppercase text-black/70">
-                    Stored: {selectedStoredPoints.toFixed(2)}
-                  </p>
-                )}
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
