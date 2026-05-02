@@ -36,6 +36,8 @@ as $$
     (select value from public.global_settings where key = 'SCORING_RULES' limit 1),
     '{
       "OFFENSE": {
+        "completion": 0.2,
+        "incompletion": -0.3,
         "passing_yard": 0.04,
         "passing_td": 4,
         "passing_int": -2,
@@ -77,6 +79,32 @@ as $$
     }'::jsonb
   );
 $$;
+
+update public.global_settings
+set value = jsonb_set(
+    jsonb_set(value, '{OFFENSE,completion}', '0.2'::jsonb, true),
+    '{OFFENSE,incompletion}', '-0.3'::jsonb, true
+  ),
+  updated_date = now()
+where key = 'SCORING_RULES'
+  and jsonb_typeof(value -> 'OFFENSE') = 'object';
+
+update public.site_settings
+set value = jsonb_set(
+    jsonb_set(value, '{OFFENSE,completion}', '0.2'::jsonb, true),
+    '{OFFENSE,incompletion}', '-0.3'::jsonb, true
+  ),
+  updated_date = now()
+where key = 'SCORING_RULES'
+  and jsonb_typeof(value -> 'OFFENSE') = 'object';
+
+update public.season_scoring_rules
+set rules = jsonb_set(
+    jsonb_set(rules, '{OFFENSE,completion}', '0.2'::jsonb, true),
+    '{OFFENSE,incompletion}', '-0.3'::jsonb, true
+  ),
+  updated_date = now()
+where jsonb_typeof(rules -> 'OFFENSE') = 'object';
 
 insert into public.season_scoring_rules (season_year, rules)
 select distinct pws.season_year, public.default_scoring_rules()
@@ -142,6 +170,8 @@ as $$
         public.player_stat_number(stats, 'fumble_recovery_tds') +
         public.player_stat_number(stats, 'special_teams_tds')) * public.scoring_rule_number(rules, 'DEFENSE', 'touchdown', 6)
     else
+      public.player_stat_number(stats, 'completions') * public.scoring_rule_number(rules, 'OFFENSE', 'completion', 0.2) +
+      greatest(public.player_stat_number(stats, 'attempts') - public.player_stat_number(stats, 'completions'), 0) * public.scoring_rule_number(rules, 'OFFENSE', 'incompletion', -0.3) +
       public.player_stat_number(stats, 'passing_yards') * public.scoring_rule_number(rules, 'OFFENSE', 'passing_yard', 0.04) +
       public.player_stat_number(stats, 'passing_tds') * public.scoring_rule_number(rules, 'OFFENSE', 'passing_td', 4) +
       public.player_stat_number(stats, 'passing_interceptions') * public.scoring_rule_number(rules, 'OFFENSE', 'passing_int', -2) +
@@ -157,6 +187,7 @@ as $$
         public.player_stat_number(stats, 'receiving_fumbles')) * public.scoring_rule_number(rules, 'OFFENSE', 'fumble', -1) +
       (public.player_stat_number(stats, 'rushing_fumbles_lost') +
         public.player_stat_number(stats, 'receiving_fumbles_lost')) * public.scoring_rule_number(rules, 'OFFENSE', 'fumble_lost', -2) +
+      public.player_stat_number(stats, 'fumble_recovery_tds') * public.scoring_rule_number(rules, 'OFFENSE', 'rushing_td', 6) +
       (public.player_stat_number(stats, 'passing_2pt_conversions') +
         public.player_stat_number(stats, 'rushing_2pt_conversions') +
         public.player_stat_number(stats, 'receiving_2pt_conversions')) * public.scoring_rule_number(rules, 'OFFENSE', 'two_pt_conversion', 2) +

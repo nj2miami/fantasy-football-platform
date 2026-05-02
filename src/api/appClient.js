@@ -6,6 +6,8 @@ const now = () => new Date().toISOString();
 
 export const DEFAULT_SCORING_RULES = {
   OFFENSE: {
+    completion: 0.2,
+    incompletion: -0.3,
     passing_yard: 0.04,
     passing_td: 4,
     passing_int: -2,
@@ -1698,6 +1700,8 @@ function localCalculateFantasyPoints(stats = {}, position = "OFF", rules = DEFAU
   }
 
   return (
+    n("completions") * localRuleNumber(rules, "OFFENSE", "completion", 0.2) +
+    Math.max(n("attempts") - n("completions"), 0) * localRuleNumber(rules, "OFFENSE", "incompletion", -0.3) +
     n("passing_yards") * localRuleNumber(rules, "OFFENSE", "passing_yard", 0.04) +
     n("passing_tds") * localRuleNumber(rules, "OFFENSE", "passing_td", 4) +
     n("passing_interceptions") * localRuleNumber(rules, "OFFENSE", "passing_int", -2) +
@@ -1711,6 +1715,7 @@ function localCalculateFantasyPoints(stats = {}, position = "OFF", rules = DEFAU
     n("receiving_first_downs") * localRuleNumber(rules, "OFFENSE", "receiving_first_down", 0.5) +
     (n("rushing_fumbles") + n("receiving_fumbles")) * localRuleNumber(rules, "OFFENSE", "fumble", -1) +
     (n("rushing_fumbles_lost") + n("receiving_fumbles_lost")) * localRuleNumber(rules, "OFFENSE", "fumble_lost", -2) +
+    n("fumble_recovery_tds") * localRuleNumber(rules, "OFFENSE", "rushing_td", 6) +
     (n("passing_2pt_conversions") + n("rushing_2pt_conversions") + n("receiving_2pt_conversions")) * localRuleNumber(rules, "OFFENSE", "two_pt_conversion", 2) +
     (n("rushing_yards") + n("receiving_yards") >= 100 ? localRuleNumber(rules, "OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
     (n("passing_yards") >= 300 ? localRuleNumber(rules, "OFFENSE", "bonus_300_pass_yards", 3) : 0)

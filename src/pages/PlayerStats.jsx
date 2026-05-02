@@ -2,7 +2,7 @@
 import React from "react";
 import { useLocation, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { appClient } from "@/api/appClient";
+import { appClient, DEFAULT_SCORING_RULES } from "@/api/appClient";
 import { createPageUrl } from "@/utils";
 import { ArrowLeft, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -83,63 +83,91 @@ function ScoredLine({ label, value, points }) {
   );
 }
 
-function buildScoringSections(week) {
+function mergeScoringRules(rules) {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_SCORING_RULES).map(([category, defaultRules]) => [
+      category,
+      {
+        ...defaultRules,
+        ...((rules || {})[category] || {}),
+      },
+    ])
+  );
+}
+
+function scoringRuleNumber(rules, category, key, fallback) {
+  const parsed = Number(rules?.[category]?.[key]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildScoringSections(week, rules = DEFAULT_SCORING_RULES, playerPosition = "OFF") {
   const n = (field) => statNumber(week[field]);
+  const r = (category, key, fallback) => scoringRuleNumber(rules, category, key, fallback);
+  const completions = n("completions");
+  const attempts = n("attempts");
+  const incompletions = Math.max(attempts - completions, 0);
+  const completionEfficiencyPoints =
+    completions * r("OFFENSE", "completion", 0.2) +
+    incompletions * r("OFFENSE", "incompletion", -0.3);
+  const isDefense = String(playerPosition || "").toUpperCase() === "DEF";
   const passing = [
-    { label: "Completions/Attempts", value: `${n("completions")}/${n("attempts")}`, points: 0 },
-    { label: "Passing Yards", value: n("passing_yards"), points: n("passing_yards") * 0.04 },
-    { label: "Passing TDs", value: n("passing_tds"), points: n("passing_tds") * 4 },
-    { label: "Interceptions", value: n("passing_interceptions"), points: n("passing_interceptions") * -2 },
-    { label: "First Downs", value: n("passing_first_downs"), points: n("passing_first_downs") * 0.5 },
-    { label: "2PT Conv", value: n("passing_2pt_conversions"), points: n("passing_2pt_conversions") * 2 },
+    { label: "Completion Efficiency", value: `${completions}/${attempts}`, points: completionEfficiencyPoints },
+    { label: "Passing Yards", value: n("passing_yards"), points: n("passing_yards") * r("OFFENSE", "passing_yard", 0.04) },
+    { label: "Passing TDs", value: n("passing_tds"), points: n("passing_tds") * r("OFFENSE", "passing_td", 4) },
+    { label: "Interceptions", value: n("passing_interceptions"), points: n("passing_interceptions") * r("OFFENSE", "passing_int", -2) },
+    { label: "First Downs", value: n("passing_first_downs"), points: n("passing_first_downs") * r("OFFENSE", "passing_first_down", 0.5) },
+    { label: "2PT Conv", value: n("passing_2pt_conversions"), points: n("passing_2pt_conversions") * r("OFFENSE", "two_pt_conversion", 2) },
   ];
   const rushing = [
     { label: "Carries", value: n("carries"), points: 0 },
-    { label: "Rushing Yards", value: n("rushing_yards"), points: n("rushing_yards") * 0.1 },
-    { label: "Rushing TDs", value: n("rushing_tds"), points: n("rushing_tds") * 6 },
-    { label: "First Downs", value: n("rushing_first_downs"), points: n("rushing_first_downs") * 0.5 },
-    { label: "Fumbles", value: n("rushing_fumbles"), points: n("rushing_fumbles") * -1 },
-    { label: "Fumbles Lost", value: n("rushing_fumbles_lost"), points: n("rushing_fumbles_lost") * -2 },
-    { label: "2PT Conv", value: n("rushing_2pt_conversions"), points: n("rushing_2pt_conversions") * 2 },
+    { label: "Rushing Yards", value: n("rushing_yards"), points: n("rushing_yards") * r("OFFENSE", "rushing_yard", 0.1) },
+    { label: "Rushing TDs", value: n("rushing_tds"), points: n("rushing_tds") * r("OFFENSE", "rushing_td", 6) },
+    { label: "First Downs", value: n("rushing_first_downs"), points: n("rushing_first_downs") * r("OFFENSE", "rushing_first_down", 0.5) },
+    { label: "Fumbles", value: n("rushing_fumbles"), points: n("rushing_fumbles") * r("OFFENSE", "fumble", -1) },
+    { label: "Fumbles Lost", value: n("rushing_fumbles_lost"), points: n("rushing_fumbles_lost") * r("OFFENSE", "fumble_lost", -2) },
+    { label: "2PT Conv", value: n("rushing_2pt_conversions"), points: n("rushing_2pt_conversions") * r("OFFENSE", "two_pt_conversion", 2) },
   ];
   const receiving = [
-    { label: "Receptions/Targets", value: `${n("receptions")}/${n("targets")}`, points: n("receptions") },
-    { label: "Receiving Yards", value: n("receiving_yards"), points: n("receiving_yards") * 0.1 },
-    { label: "Receiving TDs", value: n("receiving_tds"), points: n("receiving_tds") * 6 },
-    { label: "First Downs", value: n("receiving_first_downs"), points: n("receiving_first_downs") * 0.5 },
-    { label: "Fumbles", value: n("receiving_fumbles"), points: n("receiving_fumbles") * -1 },
-    { label: "Fumbles Lost", value: n("receiving_fumbles_lost"), points: n("receiving_fumbles_lost") * -2 },
-    { label: "2PT Conv", value: n("receiving_2pt_conversions"), points: n("receiving_2pt_conversions") * 2 },
+    { label: "Receptions/Targets", value: `${n("receptions")}/${n("targets")}`, points: n("receptions") * r("OFFENSE", "reception", 1) },
+    { label: "Receiving Yards", value: n("receiving_yards"), points: n("receiving_yards") * r("OFFENSE", "receiving_yard", 0.1) },
+    { label: "Receiving TDs", value: n("receiving_tds"), points: n("receiving_tds") * r("OFFENSE", "receiving_td", 6) },
+    { label: "First Downs", value: n("receiving_first_downs"), points: n("receiving_first_downs") * r("OFFENSE", "receiving_first_down", 0.5) },
+    { label: "Fumbles", value: n("receiving_fumbles"), points: n("receiving_fumbles") * r("OFFENSE", "fumble", -1) },
+    { label: "Fumbles Lost", value: n("receiving_fumbles_lost"), points: n("receiving_fumbles_lost") * r("OFFENSE", "fumble_lost", -2) },
+    { label: "2PT Conv", value: n("receiving_2pt_conversions"), points: n("receiving_2pt_conversions") * r("OFFENSE", "two_pt_conversion", 2) },
   ];
   const defense = [
-    { label: "Solo Tackles", value: n("def_tackles_solo"), points: n("def_tackles_solo") * 1 },
-    { label: "Assist Tackles", value: n("def_tackle_assists"), points: n("def_tackle_assists") * 0.5 },
-    { label: "TFL", value: n("def_tackles_for_loss"), points: n("def_tackles_for_loss") * 1 },
-    { label: "Sacks", value: n("def_sacks"), points: n("def_sacks") * 4 },
-    { label: "QB Hits", value: n("def_qb_hits"), points: n("def_qb_hits") * 0.5 },
-    { label: "Interceptions", value: n("def_interceptions"), points: n("def_interceptions") * 3 },
-    { label: "Pass Defended", value: n("def_pass_defended"), points: n("def_pass_defended") * 1 },
-    { label: "Fumbles Forced", value: n("def_fumbles_forced"), points: n("def_fumbles_forced") * 2 },
-    { label: "Safeties", value: n("def_safeties"), points: n("def_safeties") * 2 },
-    { label: "Def TDs", value: n("def_tds"), points: n("def_tds") * 6 },
+    { label: "Solo Tackles", value: n("def_tackles_solo"), points: n("def_tackles_solo") * r("DEFENSE", "solo_tackle", 1.5) },
+    { label: "Assist Tackles", value: n("def_tackle_assists"), points: n("def_tackle_assists") * r("DEFENSE", "assist_tackle", 0.75) },
+    { label: "TFL", value: n("def_tackles_for_loss"), points: n("def_tackles_for_loss") * r("DEFENSE", "tackle_for_loss", 1) },
+    { label: "Sacks", value: n("def_sacks"), points: n("def_sacks") * r("DEFENSE", "sack", 3) },
+    { label: "QB Hits", value: n("def_qb_hits"), points: n("def_qb_hits") * r("DEFENSE", "qb_hit", 0.5) },
+    { label: "Interceptions", value: n("def_interceptions"), points: n("def_interceptions") * r("DEFENSE", "interception", 4) },
+    { label: "Pass Defended", value: n("def_pass_defended"), points: n("def_pass_defended") * r("DEFENSE", "pass_defended", 1) },
+    { label: "Fumbles Forced", value: n("def_fumbles_forced"), points: n("def_fumbles_forced") * r("DEFENSE", "fumble_forced", 2) },
+    { label: "Safeties", value: n("def_safeties"), points: n("def_safeties") * r("DEFENSE", "safety", 2) },
+    { label: "Def TDs", value: n("def_tds"), points: n("def_tds") * r("DEFENSE", "touchdown", 6) },
   ];
   const kicking = [
     { label: "FG Made/Att", value: `${n("fg_made")}/${n("fg_att")}`, points: 0 },
-    { label: "FG 0-19 Made", value: n("fg_made_0_19"), points: n("fg_made_0_19") * 3 },
-    { label: "FG 20-29 Made", value: n("fg_made_20_29"), points: n("fg_made_20_29") * 3 },
-    { label: "FG 30-39 Made", value: n("fg_made_30_39"), points: n("fg_made_30_39") * 3 },
-    { label: "FG 40-49 Made", value: n("fg_made_40_49"), points: n("fg_made_40_49") * 4 },
-    { label: "FG 50-59 Made", value: n("fg_made_50_59"), points: n("fg_made_50_59") * 5 },
-    { label: "FG 60+ Made", value: n("fg_made_60_"), points: n("fg_made_60_") * 6 },
-    { label: "XP Made/Att", value: `${n("pat_made")}/${n("pat_att") || n("pat_made") + n("pat_missed")}`, points: n("pat_made") },
-    { label: "Game-Winning FG Bonus", value: n("gwfg_made"), points: n("gwfg_made") * 3 },
-    { label: "FG Missed Penalty", value: n("fg_missed"), points: n("fg_missed") * -1 },
-    { label: "XP Missed Penalty", value: n("pat_missed"), points: n("pat_missed") * -1 },
+    { label: "FG 0-19 Made", value: n("fg_made_0_19"), points: n("fg_made_0_19") * r("KICKER", "fg_0_39", 3) },
+    { label: "FG 20-29 Made", value: n("fg_made_20_29"), points: n("fg_made_20_29") * r("KICKER", "fg_0_39", 3) },
+    { label: "FG 30-39 Made", value: n("fg_made_30_39"), points: n("fg_made_30_39") * r("KICKER", "fg_0_39", 3) },
+    { label: "FG 40-49 Made", value: n("fg_made_40_49"), points: n("fg_made_40_49") * r("KICKER", "fg_40_49", 4) },
+    { label: "FG 50-59 Made", value: n("fg_made_50_59"), points: n("fg_made_50_59") * r("KICKER", "fg_50_plus", 5) },
+    { label: "FG 60+ Made", value: n("fg_made_60_"), points: n("fg_made_60_") * r("KICKER", "fg_50_plus", 5) },
+    { label: "XP Made/Att", value: `${n("pat_made")}/${n("pat_att") || n("pat_made") + n("pat_missed")}`, points: n("pat_made") * r("KICKER", "xp_made", 1) },
+    { label: "FG Missed Penalty", value: n("fg_missed"), points: n("fg_missed") * r("KICKER", "fg_miss", -1) },
+    { label: "XP Missed Penalty", value: n("pat_missed"), points: n("pat_missed") * r("KICKER", "xp_miss", -1) },
   ];
   const fumbles = [
-    { label: "Own Recovered", value: n("fumble_recovery_own"), points: n("fumble_recovery_own") * 2 },
-    { label: "Opp Recovered", value: n("fumble_recovery_opp"), points: n("fumble_recovery_opp") * 2 },
-    { label: "Recovery TDs", value: n("fumble_recovery_tds"), points: n("fumble_recovery_tds") * 6 },
+    { label: "Own Recovered", value: n("fumble_recovery_own"), points: isDefense ? n("fumble_recovery_own") * r("DEFENSE", "fumble_recovered", 2) : 0 },
+    { label: "Opp Recovered", value: n("fumble_recovery_opp"), points: isDefense ? n("fumble_recovery_opp") * r("DEFENSE", "fumble_recovered", 2) : 0 },
+    { label: "Recovery TDs", value: n("fumble_recovery_tds"), points: n("fumble_recovery_tds") * (isDefense ? r("DEFENSE", "touchdown", 6) : r("OFFENSE", "rushing_td", 6)) },
+  ];
+  const bonuses = [
+    { label: "300 Pass Yards", value: n("passing_yards") >= 300 ? 1 : 0, points: n("passing_yards") >= 300 ? r("OFFENSE", "bonus_300_pass_yards", 3) : 0 },
+    { label: "100 Rush/Rec Yards", value: n("rushing_yards") + n("receiving_yards") >= 100 ? 1 : 0, points: n("rushing_yards") + n("receiving_yards") >= 100 ? r("OFFENSE", "bonus_100_rush_rec_yards", 3) : 0 },
   ];
   return [
     ["Passing", passing],
@@ -148,6 +176,7 @@ function buildScoringSections(week) {
     ["Defense", defense],
     ["Kicking", kicking],
     ["Fumbles", fumbles],
+    ["Bonuses", bonuses],
   ].map(([title, lines]) => ({
     title,
     lines: lines.filter((line) => {
@@ -201,6 +230,11 @@ export default function PlayerStats() {
     cacheTime: 24 * 60 * 60 * 1000,
   });
 
+  const { data: seasonScoringRules = [] } = useQuery({
+    queryKey: ["player-season-scoring-rules"],
+    queryFn: () => appClient.entities.SeasonScoringRule.list("-season_year"),
+  });
+
   // Compute stats from weeks if not available on player
   const computedStats = React.useMemo(() => {
     if (weeks.length === 0) {
@@ -250,6 +284,11 @@ export default function PlayerStats() {
   const nextWeek = selectedWeekIndex >= 0 && selectedWeekIndex < weeks.length - 1
     ? weeks[selectedWeekIndex + 1]
     : null;
+  const selectedScoringRules = React.useMemo(() => {
+    const seasonYear = Number(selectedWeek?.season || selectedWeek?.season_year || 0);
+    const seasonRule = seasonScoringRules.find((row) => Number(row.season_year) === seasonYear);
+    return mergeScoringRules(seasonRule?.rules);
+  }, [seasonScoringRules, selectedWeek]);
 
   if (isLoadingPlayer) {
     return (
@@ -442,7 +481,7 @@ export default function PlayerStats() {
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {buildScoringSections(selectedWeek).map((section) => (
+                {buildScoringSections(selectedWeek, selectedScoringRules, player.position).map((section) => (
                   <div key={section.title} className="neo-border p-4 bg-gray-50">
                     <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
                     <div className="space-y-2 text-sm">

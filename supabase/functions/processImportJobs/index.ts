@@ -123,6 +123,8 @@ type Supabase = ReturnType<typeof createClient>;
 
 const DEFAULT_SCORING_RULES: Json = {
   OFFENSE: {
+    completion: 0.2,
+    incompletion: -0.3,
     passing_yard: 0.04,
     passing_td: 4,
     passing_int: -2,
@@ -335,6 +337,8 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) 
   }
 
   const offensivePoints =
+    n(row, "completions") * rule(rules, "OFFENSE", "completion", 0.2) +
+    Math.max(n(row, "attempts") - n(row, "completions"), 0) * rule(rules, "OFFENSE", "incompletion", -0.3) +
     n(row, "passing_yards") * rule(rules, "OFFENSE", "passing_yard", 0.04) +
     n(row, "passing_tds") * rule(rules, "OFFENSE", "passing_td", 4) +
     n(row, "passing_interceptions") * rule(rules, "OFFENSE", "passing_int", -2) +
@@ -348,6 +352,7 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) 
     n(row, "receiving_first_downs") * rule(rules, "OFFENSE", "receiving_first_down", 0.5) +
     (n(row, "rushing_fumbles") + n(row, "receiving_fumbles")) * rule(rules, "OFFENSE", "fumble", -1) +
     (n(row, "rushing_fumbles_lost") + n(row, "receiving_fumbles_lost")) * rule(rules, "OFFENSE", "fumble_lost", -2) +
+    n(row, "fumble_recovery_tds") * rule(rules, "OFFENSE", "rushing_td", 6) +
     (n(row, "passing_2pt_conversions") + n(row, "rushing_2pt_conversions") + n(row, "receiving_2pt_conversions")) * rule(rules, "OFFENSE", "two_pt_conversion", 2) +
     (n(row, "rushing_yards") + n(row, "receiving_yards") >= 100 ? rule(rules, "OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
     (n(row, "passing_yards") >= 300 ? rule(rules, "OFFENSE", "bonus_300_pass_yards", 3) : 0);

@@ -8,6 +8,8 @@ const corsHeaders = {
 
 const DEFAULT_SCORING_RULES = {
   OFFENSE: {
+    completion: 0.2,
+    incompletion: -0.3,
     passing_yard: 0.04,
     passing_td: 4,
     passing_int: -2,
