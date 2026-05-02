@@ -7,7 +7,6 @@ import {
   ArrowUp,
   ChevronsLeft,
   ChevronsRight,
-  Clock3,
   Info,
   Play,
   Plus,
@@ -25,6 +24,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const PAGE_SIZE = 10;
+const POSITION_OPTIONS = ["ALL", "QB", "RB", "WR", "TE", "K", "DEF"];
+const DEFAULT_ROSTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1 };
 
 function formatDateTime(value) {
   if (!value) return "Unscheduled";
@@ -69,6 +70,33 @@ function getPickRemaining(room, nowMs) {
   if (!startedAt) return timerSeconds;
   const elapsed = Math.floor((nowMs - new Date(startedAt).getTime()) / 1000);
   return Math.max(0, timerSeconds - elapsed);
+}
+
+function normalizePosition(position) {
+  const value = String(position || "").toUpperCase();
+  if (value === "D/ST" || value === "DST") return "DEF";
+  return value || "UNK";
+}
+
+function buildRosterNeeds(league, roster) {
+  const starters = league?.roster_rules?.starters;
+  const required = starters && typeof starters === "object" && Object.keys(starters).length
+    ? Object.fromEntries(Object.entries(starters).map(([key, value]) => [String(key).toUpperCase(), Number(value || 0)]))
+    : DEFAULT_ROSTER_NEEDS;
+  const drafted = roster.reduce((counts, slot) => {
+    const position = normalizePosition(slot.player?.position || slot.slot_type);
+    counts[position] = (counts[position] || 0) + 1;
+    return counts;
+  }, {});
+  const offenseDrafted = ["RB", "WR", "TE"].reduce((sum, position) => sum + Number(drafted[position] || 0), 0);
+  return Object.entries(required)
+    .filter(([, needed]) => Number(needed) > 0)
+    .map(([position, needed]) => {
+      const filled = position === "OFF" || position === "FLEX"
+        ? Math.min(Number(needed), offenseDrafted)
+        : Math.min(Number(needed), Number(drafted[position] || 0));
+      return { position, needed: Number(needed), filled, remaining: Math.max(0, Number(needed) - filled) };
+    });
 }
 
 function playPickChime() {
@@ -130,27 +158,34 @@ function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto bg-white">
         <DialogHeader>
-          <DialogTitle className="text-2xl font-black uppercase">{playerName(player)}</DialogTitle>
+          <DialogTitle className="text-2xl font-black uppercase">Player Stats</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-4 sm:flex-row">
-          <div className="flex items-center gap-4 sm:w-56 sm:flex-col sm:items-start">
-            <div className="neo-border flex h-24 w-24 flex-none items-center justify-center overflow-hidden bg-gray-100">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-[220px_1fr]">
+          <div className="space-y-4">
+            <div>
+              <p className="text-2xl font-black uppercase leading-tight">{playerName(player)}</p>
+              <p className="mt-1 text-sm font-black uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
+            </div>
+            <div className="neo-border flex aspect-square w-full items-center justify-center overflow-hidden bg-gray-100">
               {headshot ? <img src={headshot} alt="" className="h-full w-full object-cover" /> : <User className="h-10 w-10 text-gray-400" />}
             </div>
-            <div>
-              <p className="font-black uppercase">{player?.position || "--"} | {player?.team || "FA"}</p>
-              <p className="text-sm font-bold text-gray-500">{seasonYear || "Season"} stats</p>
+            <div className="neo-border bg-[#EFFBFF] p-3">
+              <p className="text-xs font-black uppercase text-gray-500">{seasonYear || "Season"} Stats</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs font-black uppercase">
+                <div className="neo-border bg-white p-2"><p className="text-gray-500">Avg</p><p className="text-lg">{statValue(stats.avg_points)}</p></div>
+                <div className="neo-border bg-white p-2"><p className="text-gray-500">Total</p><p className="text-lg">{statValue(stats.total_points)}</p></div>
+                <div className="neo-border bg-white p-2"><p className="text-gray-500">High</p><p className="text-lg">{statValue(stats.high_score)}</p></div>
+                <div className="neo-border bg-white p-2"><p className="text-gray-500">Low</p><p className="text-lg">{statValue(stats.low_score)}</p></div>
+              </div>
             </div>
           </div>
           <div className="min-w-0 flex-1">
-            <PlayerMiniStats player={stats} weeksPlayed={aggregate?.weeks_played ?? player?.weeks_played ?? weeks.length} />
+            <p className="mb-2 text-sm font-black uppercase text-gray-500">{aggregate?.weeks_played ?? player?.weeks_played ?? weeks.length} Stat Weeks</p>
             <div className="mt-4 overflow-hidden neo-border">
               <table className="w-full text-left text-sm">
                 <thead className="bg-black text-white">
                   <tr>
-                    <th className="p-2 font-black uppercase">Season</th>
                     <th className="p-2 font-black uppercase">Week</th>
-                    <th className="p-2 font-black uppercase">Team</th>
                     <th className="p-2 font-black uppercase">Opp</th>
                     <th className="p-2 text-right font-black uppercase">Pts</th>
                   </tr>
@@ -158,15 +193,13 @@ function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
                 <tbody>
                   {weeks.map((week) => (
                     <tr key={week.id || `${week.season_year}-${week.week}`} className="border-t-2 border-black/10">
-                      <td className="p-2 font-bold">{week.season_year}</td>
-                      <td className="p-2 font-bold">{week.week}</td>
-                      <td className="p-2 font-bold">{week.team || "--"}</td>
+                      <td className="p-2 font-bold">Week {week.week}</td>
                       <td className="p-2 font-bold">{week.opponent_team || "--"}</td>
                       <td className="p-2 text-right font-black">{statValue(week.fantasy_points)}</td>
                     </tr>
                   ))}
                   {!weeks.length && (
-                    <tr><td colSpan={5} className="p-4 text-center text-sm font-bold text-gray-500">No weekly stats found.</td></tr>
+                    <tr><td colSpan={3} className="p-4 text-center text-sm font-bold text-gray-500">No weekly stats found.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -178,11 +211,14 @@ function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
   );
 }
 
-function DraftPlayerRow({ player, canDraft, onAdd, onDraft, onStats, isBusy }) {
+function DraftPlayerRow({ player, canDraft, onAdd, onDraft, onStats, isBusy, isInBoard }) {
   return (
     <div className="neo-border grid grid-cols-1 gap-3 bg-gray-50 p-3 lg:grid-cols-[minmax(190px,1fr)_300px_auto] lg:items-center">
       <div className="min-w-0">
-        <p className="truncate text-sm font-black uppercase sm:text-base">{playerName(player)}</p>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-black uppercase sm:text-base">{playerName(player)}</p>
+          {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
+        </div>
         <p className="text-xs font-bold uppercase text-gray-500">{player.position || "--"} | {player.team || "FA"}</p>
       </div>
       <PlayerMiniStats player={player} weeksPlayed={player.weeks_played} />
@@ -190,7 +226,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onDraft, onStats, isBusy }) {
         <Button onClick={() => onStats(player)} className="neo-btn bg-white p-2 text-black" title="Open player stats">
           <Info className="h-4 w-4" />
         </Button>
-        <Button onClick={() => onAdd(player)} disabled={isBusy} className="neo-btn bg-[#00D9FF] p-2 text-black" title="Add to draft board">
+        <Button onClick={() => onAdd(player)} disabled={isBusy || isInBoard} className="neo-btn bg-[#00D9FF] p-2 text-black" title="Add to draft board">
           <Plus className="h-4 w-4" />
         </Button>
         {canDraft && (
@@ -210,12 +246,12 @@ export default function LeagueDraft() {
   const nowMs = useNowMs();
   const [searchInput, setSearchInput] = React.useState("");
   const [searchTerm, setSearchTerm] = React.useState("");
+  const [positionFilter, setPositionFilter] = React.useState("ALL");
   const [sortBy, setSortBy] = React.useState("-avg_points");
   const [page, setPage] = React.useState(0);
-  const [scheduleValue, setScheduleValue] = React.useState("");
   const [selectedPlayer, setSelectedPlayer] = React.useState(null);
 
-  const { data: user } = useQuery({
+  const { data: user, isLoading: isUserLoading } = useQuery({
     queryKey: ["draft-user"],
     queryFn: () => appClient.auth.me(),
   });
@@ -251,26 +287,20 @@ export default function LeagueDraft() {
   }, [draftId, leagueId, queryClient]);
 
   const { data: eligibleResult = { data: [], hasMore: false }, isFetching: isEligibleFetching } = useQuery({
-    queryKey: ["draft-eligible-players", leagueId, draftId, searchTerm, sortBy, page],
+    queryKey: ["draft-eligible-players", leagueId, draftId, searchTerm, positionFilter, sortBy, page],
     queryFn: () => appClient.draftDay.listEligiblePlayers({
       leagueId,
       draftId,
       searchTerm,
+      position: positionFilter,
       sortBy,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     }),
-    enabled: !!leagueId,
+    enabled: !!leagueId && !!currentMember,
     keepPreviousData: true,
     refetchInterval: isOpen ? 10000 : false,
   });
-
-  React.useEffect(() => {
-    if (state?.draft?.start) {
-      const date = new Date(state.draft.start);
-      setScheduleValue(new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16));
-    }
-  }, [state?.draft?.start]);
 
   React.useEffect(() => {
     if (!isOpen || !draftId) return undefined;
@@ -279,19 +309,6 @@ export default function LeagueDraft() {
     }, 10000);
     return () => window.clearInterval(timer);
   }, [draftId, invalidate, isOpen]);
-
-  const scheduleMutation = useMutation({
-    mutationFn: () => appClient.functions.invoke("schedule_draft", {
-      league_id: leagueId,
-      start: new Date(scheduleValue).toISOString(),
-      type: state?.league?.draft_config?.type || "snake",
-    }),
-    onSuccess: () => {
-      toast.success("Draft scheduled.");
-      invalidate();
-    },
-    onError: (error) => toast.error(error.message || "Failed to schedule draft."),
-  });
 
   const startMutation = useMutation({
     mutationFn: () => appClient.functions.invoke("start_draft", { league_id: leagueId, draft_id: draftId }),
@@ -327,17 +344,47 @@ export default function LeagueDraft() {
     setPage(0);
   };
 
-  if (isLoading) {
+  if (isLoading || isUserLoading) {
     return <div className="mx-auto max-w-5xl px-4"><div className="neo-card bg-white p-8 text-center font-black uppercase">Loading Draft...</div></div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="mx-auto max-w-3xl px-4">
+        <div className="neo-card bg-white p-8 text-center">
+          <h1 className="text-3xl font-black uppercase text-orange-600">Login Required</h1>
+          <p className="mt-2 font-bold text-gray-600">You need to be logged in to view this draft room.</p>
+          <Link to={createPageUrl("Login")}>
+            <Button className="neo-btn mt-5 bg-black text-white">Log In</Button>
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   if (!state?.league) {
     return <div className="text-center text-2xl font-bold text-red-500">League not found.</div>;
   }
 
+  if (!currentMember) {
+    return (
+      <div className="mx-auto max-w-3xl px-4">
+        <div className="neo-card bg-white p-8 text-center">
+          <h1 className="text-3xl font-black uppercase text-orange-600">League Access Only</h1>
+          <p className="mt-2 font-bold text-gray-600">Only active members of this league can view the draft room.</p>
+          <Link to={createPageUrl(`League?id=${leagueId}`)}>
+            <Button className="neo-btn mt-5 bg-black text-white">Back to League</Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const pickedIds = new Set((state.picks || []).map((pick) => pick.player_id));
   const board = (state.board || []).filter((item) => item.league_member_id === currentMember?.id && !pickedIds.has(item.player_id));
   const roster = (state.rosters || []).filter((slot) => slot.league_member_id === currentMember?.id);
+  const boardPlayerIds = new Set(board.map((item) => item.player_id));
+  const rosterNeeds = buildRosterNeeds(state.league, roster);
   const eligiblePlayers = eligibleResult.data || [];
   const commissioner = state.commissionerProfile;
   const commissionerName = commissioner?.display_name || commissioner?.profile_name || "Commissioner";
@@ -371,92 +418,90 @@ export default function LeagueDraft() {
         )}
       </div>
 
-      <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <section className="neo-card bg-black p-5 text-white">
-          <p className="text-sm font-black uppercase text-[#00D9FF]">{state.league.name}</p>
-          <h1 className="text-3xl font-black uppercase text-[#FF6B35]">Draft Day</h1>
-          <div className="mt-4 neo-border bg-white p-4 text-black">
-            <p className="text-xs font-black uppercase text-gray-500">Draft Start</p>
-            <p className="text-lg font-black">{formatDateTime(state.draft?.start)}</p>
-            <p className="mt-2 text-2xl font-black">{countdown}</p>
-          </div>
-          {isCommissioner && !isOpen && (
-            <div className="mt-4 flex flex-col gap-3">
-              <Input type="datetime-local" value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} className="neo-border bg-white font-bold text-black" />
-              <Button onClick={() => scheduleMutation.mutate()} disabled={!scheduleValue || scheduleMutation.isPending} className="neo-btn bg-[#00D9FF] text-black">
-                <Clock3 className="mr-2 h-5 w-5" />Schedule Draft
-              </Button>
-            </div>
-          )}
-        </section>
+      <div className="neo-card mb-5 bg-black p-5 text-white">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_0.9fr_0.9fr] lg:items-stretch">
+          <section className="flex flex-col justify-center">
+            <h1 className="text-3xl font-black uppercase text-[#FF6B35]">{state.league.name} Draft Day</h1>
+            <p className="mt-2 text-lg font-black">Start: {formatDateTime(state.draft?.start)}</p>
+            <p className="text-sm font-black uppercase text-[#00D9FF]">{countdown}</p>
+          </section>
 
-        <section className="neo-card flex flex-col justify-between bg-white p-5">
-          <p className="text-xs font-black uppercase text-gray-500">Commissioner</p>
-          <div className="mt-4 flex items-center gap-4">
-            <div className="neo-border flex h-20 w-20 flex-none items-center justify-center overflow-hidden bg-gray-100">
-              {commissioner?.avatar_url ? <img src={commissioner.avatar_url} alt="" className="h-full w-full object-cover" /> : <User className="h-8 w-8 text-gray-400" />}
+          <section className="neo-border flex items-center gap-4 bg-white p-4 text-black">
+            <div className="flex h-16 w-16 flex-none items-center justify-center overflow-hidden neo-border bg-gray-100">
+              {commissioner?.avatar_url ? <img src={commissioner.avatar_url} alt="" className="h-full w-full object-cover" /> : <User className="h-7 w-7 text-gray-400" />}
             </div>
             <div className="min-w-0">
-              <p className="truncate text-2xl font-black uppercase">{commissionerName}</p>
+              <p className="text-xs font-black uppercase text-gray-500">Commissioner</p>
+              <p className="truncate text-xl font-black uppercase">{commissionerName}</p>
               {commissionerProfileUrl ? (
                 <Link to={commissionerProfileUrl} className="text-sm font-black uppercase text-[#00A6D6] underline">View Profile</Link>
               ) : (
                 <p className="text-sm font-bold text-gray-500">Profile pending</p>
               )}
             </div>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-black uppercase">
-            {(state.members || []).slice(0, 6).map((member) => (
-              <div key={member.id} className="neo-border truncate bg-gray-50 p-2">{memberName(member)}</div>
-            ))}
-          </div>
-        </section>
+          </section>
 
-        <section className={`neo-card p-5 ${isMyTurn ? "bg-[#F7B801] text-black" : "bg-white"}`}>
-          <p className="text-xs font-black uppercase text-gray-500">On The Clock</p>
-          <p className="mt-2 text-3xl font-black uppercase">{isMyTurn ? "DRAFT NOW" : memberName(currentTurnMember) || "Waiting"}</p>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="neo-border bg-white p-3 text-black">
-              <p className="text-xs font-black uppercase text-gray-500">Pick</p>
-              <p className="text-2xl font-black">{state.room?.current_pick || 1}</p>
+          <section className={`neo-border p-4 ${isMyTurn ? "bg-[#F7B801] text-black" : "bg-white text-black"}`}>
+            <p className="text-xs font-black uppercase text-gray-500">On The Clock</p>
+            <p className="mt-1 truncate text-2xl font-black uppercase">{isMyTurn ? "DRAFT NOW" : memberName(currentTurnMember) || "Waiting"}</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="neo-border bg-gray-50 p-2">
+                <p className="text-xs font-black uppercase text-gray-500">Pick</p>
+                <p className="text-xl font-black">{state.room?.current_pick || 1}</p>
+              </div>
+              <div className="neo-border bg-gray-50 p-2">
+                <p className="text-xs font-black uppercase text-gray-500">Timer</p>
+                <p className="text-xl font-black">{isOpen ? `${pickRemaining}s` : "--"}</p>
+              </div>
             </div>
-            <div className="neo-border bg-white p-3 text-black">
-              <p className="text-xs font-black uppercase text-gray-500">Timer</p>
-              <p className="text-2xl font-black">{isOpen ? `${pickRemaining}s` : "--"}</p>
-            </div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
 
-      {isOpen && (
-        <section className="neo-card mb-8 bg-white p-4">
-          <h2 className="mb-3 flex items-center gap-2 text-xl font-black uppercase text-orange-600">
-            <Trophy className="h-5 w-5" />Draft Order
-          </h2>
-          <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-            {(state.turns || []).map((turn) => {
-              const member = state.members.find((item) => item.id === turn.league_member_id);
-              const pick = state.picks.find((item) => Number(item.overall_pick) === Number(turn.overall_pick));
-              const isCurrent = Number(turn.overall_pick) === Number(state.room?.current_pick);
-              return (
-                <div key={turn.id} className={`neo-border w-44 p-2 text-xs ${isCurrent ? "bg-[#F7B801]" : pick ? "bg-[#D7F8E8]" : "bg-gray-50"}`}>
-                  <p className="font-black uppercase">#{turn.overall_pick} R{turn.round}</p>
-                  <p className="truncate font-black">{memberName(member)}</p>
-                  <p className="truncate font-bold text-gray-600">{pick ? playerName(pick.player) : "Pending"}</p>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
+      <section className="neo-card mb-8 bg-white p-4">
+        <h2 className="mb-3 flex items-center gap-2 text-xl font-black uppercase text-orange-600">
+          <Trophy className="h-5 w-5" />Draft Order
+        </h2>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(state.turns?.length ? state.turns : state.members || []).map((turnOrMember, index) => {
+            const isTurn = Boolean(turnOrMember.league_member_id);
+            const turn = isTurn ? turnOrMember : null;
+            const member = isTurn ? state.members.find((item) => item.id === turn.league_member_id) : turnOrMember;
+            const pick = turn ? state.picks.find((item) => Number(item.overall_pick) === Number(turn.overall_pick)) : null;
+            const isCurrent = turn && Number(turn.overall_pick) === Number(state.room?.current_pick);
+            return (
+              <div key={turn?.id || member?.id || index} className={`neo-border w-44 flex-none p-2 text-xs ${isCurrent ? "bg-[#F7B801]" : pick ? "bg-[#D7F8E8]" : "bg-gray-50"}`}>
+                <p className="font-black uppercase">{turn ? `#${turn.overall_pick} R${turn.round}` : `Team ${index + 1}`}</p>
+                <p className="truncate font-black">{memberName(member)}</p>
+                <p className="truncate font-bold text-gray-600">{pick ? playerName(pick.player) : turn ? "Pending" : "Registered"}</p>
+              </div>
+            );
+          })}
+          {!state.turns?.length && !state.members?.length && (
+            <div className="neo-border bg-gray-50 p-3 text-sm font-bold text-gray-500">Teams will appear here as managers join.</div>
+          )}
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_380px]">
         <main className="space-y-8">
           <section className={`neo-card bg-white p-5 ${isMyTurn ? "shadow-[8px_8px_0_#F7B801]" : ""}`}>
             <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-              <div>
-                <h2 className="text-2xl font-black uppercase text-orange-600">{isMyTurn ? "DRAFT NOW" : "Eligible Players"}</h2>
-                <p className="text-sm font-bold text-gray-600">Minimum weeks required: {requiredWeeks}{isMyTurn ? ` | ${pickRemaining}s remaining` : ""}</p>
+              <div className="flex flex-col gap-3 md:flex-row md:items-start">
+                <div>
+                  <h2 className="text-2xl font-black uppercase text-orange-600">{isMyTurn ? "DRAFT NOW" : "Eligible Players"}</h2>
+                  <p className="text-sm font-bold text-gray-600">Minimum weeks required: {requiredWeeks}{isMyTurn ? ` | ${pickRemaining}s remaining` : ""}</p>
+                </div>
+                <div className="neo-border bg-[#EFFBFF] p-3">
+                  <p className="mb-2 text-xs font-black uppercase text-gray-500">Players Needed</p>
+                  <div className="flex flex-wrap gap-2">
+                    {rosterNeeds.map((need) => (
+                      <span key={need.position} className={`neo-border px-2 py-1 text-xs font-black uppercase ${need.remaining ? "bg-white text-black" : "bg-[#D7F8E8] text-black"}`}>
+                        {need.position} {need.remaining}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <div className="relative min-w-0 sm:w-72">
@@ -471,6 +516,19 @@ export default function LeagueDraft() {
                     className="neo-border pl-11 font-bold"
                   />
                 </div>
+                <Select value={positionFilter} onValueChange={(value) => {
+                  setPositionFilter(value);
+                  setPage(0);
+                }}>
+                  <SelectTrigger className="neo-border w-full font-bold sm:w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {POSITION_OPTIONS.map((position) => (
+                      <SelectItem key={position} value={position}>{position === "ALL" ? "All Pos" : position}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Select value={sortBy} onValueChange={(value) => {
                   setSortBy(value);
                   setPage(0);
@@ -500,6 +558,7 @@ export default function LeagueDraft() {
                   onAdd={addToBoard}
                   onDraft={(playerId) => pickMutation.mutate(playerId)}
                   onStats={setSelectedPlayer}
+                  isInBoard={boardPlayerIds.has(player.id)}
                   isBusy={!draftId || !currentMember || pickedIds.has(player.id) || boardMutation.isPending || pickMutation.isPending}
                 />
               ))}

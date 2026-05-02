@@ -2270,7 +2270,7 @@ async function getLeagueDraftState(leagueId) {
   };
 }
 
-async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", sortBy = "-avg_points", limit = 10, offset = 0 } = {}) {
+async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", position = "ALL", sortBy = "-avg_points", limit = 10, offset = 0 } = {}) {
   const league = await entities.League.get(leagueId);
   if (!league) return { data: [], hasMore: false, totalCount: 0 };
   const draft = draftId ? await entities.Draft.get(draftId) : null;
@@ -2288,6 +2288,7 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", so
   while (rows.length <= target && hasPoolMore) {
     const result = await playerPool.listPlayers({
       seasonYear,
+      position,
       searchTerm,
       sortBy,
       limit: scanLimit,
