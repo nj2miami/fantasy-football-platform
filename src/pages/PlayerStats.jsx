@@ -43,14 +43,15 @@ const TEAM_DETAILS = {
 };
 
 async function loadPlayerHeadshot(player) {
-  const playerKey = player?.player_key || player?.player_id;
-  if (!playerKey) return null;
+  const existingUrl = player?.headshot_public_url || player?.headshot_url;
+  const playerKey = player?.player_key || player?.player_id || player?.id;
+  if (!playerKey) return existingUrl || null;
   try {
     const response = await appClient.functions.invoke("load_player_headshot", { player_key: playerKey });
-    return response?.data?.headshot_url || null;
+    return response?.data?.headshot_url || existingUrl || null;
   } catch (error) {
     console.warn("[PlayerStats] Headshot load failed:", error);
-    return null;
+    return existingUrl || null;
   }
 }
 
@@ -214,9 +215,10 @@ export default function PlayerStats() {
   });
 
   const { data: headshotUrl } = useQuery({
-    queryKey: ["player-headshot", player?.player_key || player?.player_id],
+    queryKey: ["player-headshot", player?.player_key || player?.player_id || player?.id],
     queryFn: () => loadPlayerHeadshot(player),
-    enabled: Boolean(player?.player_key || player?.player_id),
+    enabled: Boolean(player?.player_key || player?.player_id || player?.id || player?.headshot_public_url || player?.headshot_url),
+    initialData: player?.headshot_public_url || player?.headshot_url || null,
     staleTime: 24 * 60 * 60 * 1000,
     cacheTime: 24 * 60 * 60 * 1000,
   });

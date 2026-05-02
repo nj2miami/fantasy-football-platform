@@ -34,21 +34,37 @@ function contentExtension(contentType: string | null) {
   return "jpg";
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
     const payload = await parseRequest(request);
-    const playerId = String(payload.player_key || payload.player_id || "").trim();
-    if (!playerId) throw new Error("Missing player_key");
+    const playerLookup = String(payload.player_key || payload.player_id || "").trim();
+    if (!playerLookup) throw new Error("Missing player_key");
 
     const supabase = adminClient();
-    const { data: player, error } = await supabase
+    const { data: keyPlayer, error } = await supabase
       .from("players")
       .select("id, player_key, headshot_url, headshot_storage_path, headshot_public_url")
-      .eq("player_key", playerId)
+      .eq("player_key", playerLookup)
       .maybeSingle();
     if (error) throw error;
+
+    let player = keyPlayer;
+    if (!player && isUuid(playerLookup)) {
+      const { data: idPlayer, error: idError } = await supabase
+        .from("players")
+        .select("id, player_key, headshot_url, headshot_storage_path, headshot_public_url")
+        .eq("id", playerLookup)
+        .maybeSingle();
+      if (idError) throw idError;
+      player = idPlayer;
+    }
+
     if (!player?.headshot_url && !player?.headshot_public_url) return json({ headshot_url: null });
     if (player.headshot_public_url) return json({ headshot_url: player.headshot_public_url });
 
@@ -56,7 +72,8 @@ Deno.serve(async (request) => {
     if (!response.ok) throw new Error(`Headshot download failed: ${response.status}`);
 
     const contentType = response.headers.get("content-type") || "image/jpeg";
-    const path = `players/${playerId}.${contentExtension(contentType)}`;
+    const storageKey = player.player_key || player.id;
+    const path = `players/${storageKey}.${contentExtension(contentType)}`;
     const bytes = await response.arrayBuffer();
     const { error: uploadError } = await supabase.storage.from("headshots").upload(path, bytes, {
       contentType,
