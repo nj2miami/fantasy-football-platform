@@ -1446,9 +1446,12 @@ const localFunctions = {
   async fill_league_with_ai(payload = {}) {
     return localFunctions.fillLeagueWithAI(payload);
   },
-  async processImportJobs() {
+  async processImportJobs(payload = {}) {
     const jobs = await entities.ImportJob.list("-created_date");
-    const pending = jobs.find((job) => job.status === "PENDING" || job.status === "RUNNING");
+    const requestedJobId = payload?.job_id ? String(payload.job_id) : null;
+    const pending = requestedJobId
+      ? jobs.find((job) => String(job.id) === requestedJobId)
+      : jobs.find((job) => job.status === "PENDING" || job.status === "RUNNING");
     if (!pending) return { processed: 0 };
     if (String(pending.job_type || "").toUpperCase() === "SCORING_UPDATE") {
       const seasonYear = pending.parameters?.season_year ? Number(pending.parameters.season_year) : null;

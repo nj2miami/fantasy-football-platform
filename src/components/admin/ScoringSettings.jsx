@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { appClient, DEFAULT_SCORING_RULES } from "@/api/appClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { Calculator, Save } from "lucide-react";
+import { Calculator, CheckCircle, Loader2, Save, XCircle } from "lucide-react";
 
 const cloneRules = (rules) => JSON.parse(JSON.stringify(rules || DEFAULT_SCORING_RULES));
 
@@ -30,12 +32,22 @@ const ScoringRuleInput = ({ label, value, onChange }) => (
   </div>
 );
 
+const activeJobStatuses = new Set(["PENDING", "RUNNING"]);
+
+const StatusIcon = ({ status }) => {
+  if (status === "COMPLETED") return <CheckCircle className="h-5 w-5 text-green-600" />;
+  if (status === "FAILED") return <XCircle className="h-5 w-5 text-red-600" />;
+  return <Loader2 className="h-5 w-5 animate-spin text-[#00D9FF]" />;
+};
+
 export default function ScoringSettings() {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState("default");
   const [selectedSeason, setSelectedSeason] = useState("");
   const [scoringRules, setScoringRules] = useState(DEFAULT_SCORING_RULES);
   const [lastSaved, setLastSaved] = useState(null);
+  const [recalculationJobId, setRecalculationJobId] = useState(null);
+  const [isRecalculationOpen, setIsRecalculationOpen] = useState(false);
 
   const { data: defaultSetting, isLoading: isLoadingDefault } = useQuery({
     queryKey: ["scoring-settings"],
@@ -72,6 +84,16 @@ export default function ScoringSettings() {
     () => seasonRules.find((row) => Number(row.season_year) === Number(selectedSeason)) || null,
     [seasonRules, selectedSeason]
   );
+
+  const { data: recalculationJob, refetch: refetchRecalculationJob } = useQuery({
+    queryKey: ["scoring-recalculation-job", recalculationJobId],
+    queryFn: () => appClient.entities.ImportJob.get(recalculationJobId),
+    enabled: Boolean(recalculationJobId),
+    refetchInterval: (query) => {
+      const job = query.state.data;
+      return activeJobStatuses.has(job?.status) ? 1500 : false;
+    },
+  });
 
   useEffect(() => {
     if (!selectedSeason && seasonOptions.length > 0) {
@@ -150,17 +172,32 @@ export default function ScoringSettings() {
             : "Scoring recalculation requested for all stored season rules.",
         ],
       });
-      await appClient.functions.invoke("processImportJobs", {});
+      setRecalculationJobId(job.id);
+      setIsRecalculationOpen(true);
+      queryClient.setQueryData(["scoring-recalculation-job", job.id], job);
+      try {
+        await appClient.functions.invoke("processImportJobs", { job_id: job.id });
+      } catch (error) {
+        const failedJob = await appClient.entities.ImportJob.get(job.id).catch(() => null);
+        if (failedJob) {
+          queryClient.setQueryData(["scoring-recalculation-job", job.id], failedJob);
+        }
+        throw error;
+      }
       return job;
     },
-    onSuccess: () => {
-      toast.success("Fantasy point recalculation started.");
+    onSuccess: (job) => {
+      toast.success("Fantasy point recalculation finished.");
       queryClient.invalidateQueries({ queryKey: ["latest-import-job"] });
+      queryClient.invalidateQueries({ queryKey: ["scoring-recalculation-job", job.id] });
       queryClient.invalidateQueries({ queryKey: ["player-weeks"] });
       queryClient.invalidateQueries({ queryKey: ["player-pool"] });
+      queryClient.invalidateQueries({ queryKey: ["player-stats"] });
     },
-    onError: (error) => {
-      toast.error("Failed to start recalculation: " + error.message);
+    onError: async (error) => {
+      await refetchRecalculationJob();
+      queryClient.invalidateQueries({ queryKey: ["latest-import-job"] });
+      toast.error("Recalculation failed. Open the progress modal for details: " + error.message);
     },
   });
 
@@ -169,6 +206,10 @@ export default function ScoringSettings() {
   };
 
   const isLoading = isLoadingDefault || isLoadingYears || isLoadingSeasonRules;
+  const modalStatus = recalculationJob?.status || (recalculateMutation.isPending ? "RUNNING" : "PENDING");
+  const modalLogs = Array.isArray(recalculationJob?.logs) ? recalculationJob.logs : [];
+  const modalProgress = recalculationJob?.progress ?? (activeJobStatuses.has(modalStatus) ? 5 : 0);
+  const isModalJobActive = activeJobStatuses.has(modalStatus) || recalculateMutation.isPending;
 
   if (isLoading) {
     return <div className="h-96 neo-border bg-gray-100 animate-pulse" />;
@@ -284,6 +325,81 @@ export default function ScoringSettings() {
           </Button>
         </div>
       )}
+
+      <Dialog
+        open={isRecalculationOpen}
+        onOpenChange={(open) => {
+          if (!open && isModalJobActive) return;
+          setIsRecalculationOpen(open);
+        }}
+      >
+        <DialogContent className="neo-card max-w-2xl bg-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3 text-2xl font-black uppercase">
+              <StatusIcon status={modalStatus} />
+              Recalculate Fantasy Points
+            </DialogTitle>
+            <DialogDescription className="font-bold text-gray-600">
+              {lastSaved?.mode === "season" && lastSaved.season
+                ? `Applying saved scoring rules to ${lastSaved.season}.`
+                : "Applying saved season scoring rules to stored player stats."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm font-black uppercase md:grid-cols-4">
+              <div className="neo-border bg-gray-50 p-3">
+                <p className="text-gray-500">Status</p>
+                <p>{modalStatus}</p>
+              </div>
+              <div className="neo-border bg-gray-50 p-3">
+                <p className="text-gray-500">Job</p>
+                <p>{recalculationJob?.job_type || "SCORING_UPDATE"}</p>
+              </div>
+              <div className="neo-border bg-gray-50 p-3">
+                <p className="text-gray-500">Progress</p>
+                <p>{modalProgress}%</p>
+              </div>
+              <div className="neo-border bg-gray-50 p-3">
+                <p className="text-gray-500">Scope</p>
+                <p>{recalculationJob?.parameters?.season_year || lastSaved?.season || "All"}</p>
+              </div>
+            </div>
+
+            <Progress value={modalProgress} className="h-4 neo-border rounded-none bg-gray-200" />
+
+            {recalculationJob?.summary && (
+              <div className="neo-border bg-green-50 p-3 text-sm font-bold text-green-800">
+                {recalculationJob.summary}
+              </div>
+            )}
+
+            {recalculationJob?.error_details && (
+              <div className="neo-border bg-red-50 p-3 text-sm font-bold text-red-800">
+                {recalculationJob.error_details}
+              </div>
+            )}
+
+            <div className="h-64 overflow-y-auto neo-border bg-[#111] p-4 font-mono text-sm text-white">
+              {modalLogs.length > 0 ? (
+                modalLogs.map((log, index) => (
+                  <p key={`${index}-${log}`} className="whitespace-pre-wrap">{`> ${log}`}</p>
+                ))
+              ) : (
+                <p className="text-gray-400">Waiting for job logs...</p>
+              )}
+            </div>
+
+            <Button
+              onClick={() => setIsRecalculationOpen(false)}
+              disabled={isModalJobActive}
+              className="neo-btn w-full bg-black py-4 text-white disabled:opacity-50"
+            >
+              {isModalJobActive ? "Recalculation Running..." : "Close"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

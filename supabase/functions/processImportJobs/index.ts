@@ -721,6 +721,6 @@ Deno.serve(async (request) => {
         logs: [...(Array.isArray(job.logs) ? job.logs : []), `Import failed: ${message}`],
       });
     }
-    return json({ error: message }, 400);
+    return json({ error: message, job_id: job?.id || null }, 400);
   }
 });
