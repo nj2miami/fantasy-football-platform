@@ -27,16 +27,6 @@ alter table if exists public.weekly_player_stats
   drop column if exists fantasy_points,
   drop column if exists fantasy_points_ppr;
 
-alter table public.player_season_stats
-  add column if not exists total_points numeric not null default 0,
-  add column if not exists avg_points numeric not null default 0,
-  add column if not exists high_score numeric not null default 0,
-  add column if not exists low_score numeric not null default 0,
-  add column if not exists weeks_played integer not null default 0;
-
-create index if not exists idx_player_season_stats_player_year
-on public.player_season_stats (player_id, season_year);
-
 create or replace function public.derive_player_week_fantasy_points(
   stats jsonb,
   player_position text,
@@ -109,48 +99,6 @@ as $$
   end;
 $$;
 
-create or replace function public.refresh_player_season_stats()
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.player_season_stats (
-    player_id,
-    season_year,
-    totals,
-    total_points,
-    avg_points,
-    high_score,
-    low_score,
-    weeks_played,
-    updated_date
-  )
-  select
-    pws.player_id,
-    pws.season_year,
-    '{}'::jsonb,
-    sum(pws.fantasy_points),
-    avg(pws.fantasy_points),
-    max(pws.fantasy_points),
-    min(pws.fantasy_points),
-    count(*)::integer,
-    now()
-  from public.player_week_stats pws
-  group by pws.player_id, pws.season_year
-  on conflict (player_id, season_year) do update
-  set
-    totals = excluded.totals,
-    total_points = excluded.total_points,
-    avg_points = excluded.avg_points,
-    high_score = excluded.high_score,
-    low_score = excluded.low_score,
-    weeks_played = excluded.weeks_played,
-    updated_date = now();
-end;
-$$;
-
 create or replace function public.refresh_player_aggregates()
 returns void
 language plpgsql
@@ -181,7 +129,6 @@ begin
   from aggregates
   where players.id = aggregates.player_id;
 
-  perform public.refresh_player_season_stats();
   perform public.refresh_player_position_year_counts();
 end;
 $$;
@@ -236,12 +183,13 @@ begin
 end;
 $$;
 
-grant execute on function public.refresh_player_season_stats() to authenticated;
 grant execute on function public.refresh_player_aggregates() to authenticated;
 grant execute on function public.recompute_player_week_fantasy_points_chunk(integer, integer, boolean) to authenticated;
 grant execute on function public.recompute_player_week_fantasy_points(integer) to authenticated;
 
+drop function if exists public.refresh_player_season_stats();
 drop function if exists public.recompute_player_week_fantasy_points();
+drop table if exists public.player_season_stats;
 drop table if exists public.weekly_player_stats;
 drop table if exists public.player_master;
 
