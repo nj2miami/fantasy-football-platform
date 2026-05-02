@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { RefreshCw, TrendingUp, Hash, Calculator } from "lucide-react";
+import { refreshJobPanel, showFreshJobInPanel } from "./jobStatus";
 
 export default function PlayerManagement() {
   const queryClient = useQueryClient();
@@ -16,15 +17,17 @@ export default function PlayerManagement() {
         status: "PENDING",
         logs: [`Job '${jobType}' created. Awaiting processing...`]
       });
+      showFreshJobInPanel(queryClient, job);
       
-      await appClient.functions.invoke('processImportJobs', {});
+      await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: job.job_type });
       return job;
     },
     onSuccess: (data) => {
       toast.success(`Job '${data.job_type}' started!`);
-      queryClient.invalidateQueries({ queryKey: ['latest-import-job'] });
+      refreshJobPanel(queryClient);
     },
     onError: (error, jobType) => {
+      refreshJobPanel(queryClient);
       toast.error(`Failed to start job '${jobType}'.`);
     }
   });

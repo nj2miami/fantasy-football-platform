@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Calculator, Save } from "lucide-react";
+import { refreshJobPanel, showFreshJobInPanel } from "./jobStatus";
 
 const cloneRules = (rules) => JSON.parse(JSON.stringify(rules || DEFAULT_SCORING_RULES));
 
@@ -150,6 +151,7 @@ export default function ScoringSettings() {
             : "Scoring recalculation requested for all stored season rules.",
         ],
       });
+      showFreshJobInPanel(queryClient, job);
       try {
         await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: "SCORING_UPDATE" });
       } catch (error) {
@@ -159,13 +161,13 @@ export default function ScoringSettings() {
     },
     onSuccess: () => {
       toast.success("Fantasy point recalculation finished. Check Job Status & Logs for details.");
-      queryClient.invalidateQueries({ queryKey: ["latest-import-job"] });
+      refreshJobPanel(queryClient);
       queryClient.invalidateQueries({ queryKey: ["player-weeks"] });
       queryClient.invalidateQueries({ queryKey: ["player-pool"] });
       queryClient.invalidateQueries({ queryKey: ["player-stats"] });
     },
     onError: (error) => {
-      queryClient.invalidateQueries({ queryKey: ["latest-import-job"] });
+      refreshJobPanel(queryClient);
       toast.error("Recalculation failed. Check Job Status & Logs for details: " + error.message);
     },
   });

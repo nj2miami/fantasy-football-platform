@@ -197,10 +197,10 @@ export default function Admin() {
               {(latestJob.logs || []).map((log, i) => (
                 <p key={i} className="whitespace-pre-wrap">{`> ${log}`}</p>
               ))}
-              {latestJob.status === "COMPLETED" && (
+              {latestJob.status === "COMPLETED" && latestJob.summary && (
                 <p className="text-green-500 font-bold mt-2">{`> JOB COMPLETED: ${latestJob.summary || 'Success'}`}</p>
               )}
-              {latestJob.status === "FAILED" && (
+              {latestJob.status === "FAILED" && latestJob.error_details && (
                 <p className="text-red-500 font-bold mt-2">{`> JOB FAILED: ${latestJob.error_details}`}</p>
               )}
             </div>

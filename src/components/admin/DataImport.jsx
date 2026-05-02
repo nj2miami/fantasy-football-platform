@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Info, Upload, Trash2 } from "lucide-react";
+import { refreshJobPanel, showFreshJobInPanel } from "./jobStatus";
 
 export default function DataImport() {
   const queryClient = useQueryClient();
@@ -16,17 +17,19 @@ export default function DataImport() {
   const [freshStart, setFreshStart] = useState(false);
 
   const createJobMutation = useMutation({
-    mutationFn: (jobData) => appClient.entities.ImportJob.create(jobData),
-    onSuccess: async () => {
-      toast.success("Import job started!");
-      try {
-        await appClient.functions.invoke('processImportJobs', {});
-      } catch (error) {
-        console.error("Error triggering job:", error);
-      }
-      queryClient.invalidateQueries(["latest-import-job"]);
+    mutationFn: async (jobData) => {
+      const job = await appClient.entities.ImportJob.create(jobData);
+      showFreshJobInPanel(queryClient, job);
+      await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: job.job_type });
+      return job;
     },
-    onError: () => {
+    onSuccess: () => {
+      toast.success("Import job started!");
+      refreshJobPanel(queryClient);
+    },
+    onError: (error) => {
+      refreshJobPanel(queryClient);
+      console.error("Error triggering job:", error);
       toast.error("Failed to start import job.");
     }
   });
@@ -50,8 +53,9 @@ export default function DataImport() {
           freshStart ? "Will delete all existing data before import..." : "File uploaded, awaiting processing..."
         ]
       });
+      showFreshJobInPanel(queryClient, job);
 
-      await appClient.functions.invoke('processImportJobs', {});
+      await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: job.job_type });
       
       return job;
     },
@@ -59,11 +63,11 @@ export default function DataImport() {
       toast.success("File uploaded and processing started!");
       setUploadFile(null);
       setFreshStart(false);
-      queryClient.invalidateQueries(["latest-import-job"]);
+      refreshJobPanel(queryClient);
     },
     onError: (error) => {
       toast.error("Failed to upload file: " + (error.message || "Unknown error"));
-      queryClient.invalidateQueries(["latest-import-job"]);
+      refreshJobPanel(queryClient);
     }
   });
 
@@ -74,15 +78,17 @@ export default function DataImport() {
         status: "PENDING",
         logs: ["Clean All job created. Will delete all player data..."]
       });
+      showFreshJobInPanel(queryClient, job);
 
-      await appClient.functions.invoke('processImportJobs', {});
+      await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: job.job_type });
       return job;
     },
     onSuccess: () => {
       toast.success("Clean All job started!");
-      queryClient.invalidateQueries(["latest-import-job"]);
+      refreshJobPanel(queryClient);
     },
     onError: () => {
+      refreshJobPanel(queryClient);
       toast.error("Failed to start Clean All job.");
     }
   });
