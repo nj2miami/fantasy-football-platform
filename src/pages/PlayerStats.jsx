@@ -60,8 +60,8 @@ function statNumber(value) {
 
 function pointsLabel(points) {
   const value = Number(points || 0);
-  if (value > 0) return `+${value.toFixed(value % 1 === 0 ? 0 : 1)}`;
-  return value.toFixed(value % 1 === 0 ? 0 : 1);
+  if (value > 0) return `+${value.toFixed(2)}`;
+  return value.toFixed(2);
 }
 
 function ScoredLine({ label, value, points }) {
@@ -71,13 +71,11 @@ function ScoredLine({ label, value, points }) {
   if (!hasValue && !Number(points || 0)) return null;
   const pointValue = Number(points || 0);
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="font-bold text-gray-600">{label}:</span>
-      <span className="flex items-center gap-2">
-        <span className="font-black">{value}</span>
-        <span className={`neo-border px-2 py-0.5 text-xs font-black ${pointValue < 0 ? "bg-red-100 text-red-700" : "bg-[#F7B801] text-black"}`}>
-          {pointsLabel(pointValue)} pts
-        </span>
+    <div className="grid grid-cols-3 items-center gap-2">
+      <span className="min-w-0 font-bold text-gray-600">{label}:</span>
+      <span className="text-center font-black">{value}</span>
+      <span className={`neo-border justify-self-end px-2 py-0.5 text-right text-xs font-black ${pointValue < 0 ? "bg-red-100 text-red-700" : "bg-[#F7B801] text-black"}`}>
+        {pointsLabel(pointValue)} pts
       </span>
     </div>
   );
@@ -186,6 +184,13 @@ function buildScoringSections(week, rules = DEFAULT_SCORING_RULES, playerPositio
   })).filter((section) => section.lines.length > 0);
 }
 
+function scoringSectionsTotal(sections) {
+  return sections.reduce(
+    (sectionSum, section) => sectionSum + section.lines.reduce((lineSum, line) => lineSum + Number(line.points || 0), 0),
+    0
+  );
+}
+
 export default function PlayerStats() {
   const location = useLocation();
   const playerId = new URLSearchParams(location.search).get("id");
@@ -289,6 +294,16 @@ export default function PlayerStats() {
     const seasonRule = seasonScoringRules.find((row) => Number(row.season_year) === seasonYear);
     return mergeScoringRules(seasonRule?.rules);
   }, [seasonScoringRules, selectedWeek]);
+  const selectedScoringSections = React.useMemo(() => {
+    if (!selectedWeek) return [];
+    return buildScoringSections(selectedWeek, selectedScoringRules, player?.position);
+  }, [player?.position, selectedScoringRules, selectedWeek]);
+  const selectedCalculatedPoints = React.useMemo(
+    () => scoringSectionsTotal(selectedScoringSections),
+    [selectedScoringSections]
+  );
+  const selectedStoredPoints = Number(selectedWeek?.fantasy_points || 0);
+  const selectedPointsDiffer = Math.abs(selectedCalculatedPoints - selectedStoredPoints) >= 0.01;
 
   if (isLoadingPlayer) {
     return (
@@ -477,11 +492,16 @@ export default function PlayerStats() {
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px_1fr] lg:items-start">
               <div className="neo-border bg-[#F7B801] p-6">
                 <p className="mb-2 text-sm font-black uppercase text-black">Fantasy Points</p>
-                <p className="text-5xl font-black text-black">{(selectedWeek.fantasy_points || 0).toFixed(2)}</p>
+                <p className="text-5xl font-black text-black">{selectedCalculatedPoints.toFixed(2)}</p>
+                {selectedPointsDiffer && (
+                  <p className="mt-3 text-xs font-black uppercase text-black/70">
+                    Stored: {selectedStoredPoints.toFixed(2)}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {buildScoringSections(selectedWeek, selectedScoringRules, player.position).map((section) => (
+                {selectedScoringSections.map((section) => (
                   <div key={section.title} className="neo-border p-4 bg-gray-50">
                     <h4 className="font-black uppercase text-sm mb-3">{section.title}</h4>
                     <div className="space-y-2 text-sm">
