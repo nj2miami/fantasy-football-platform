@@ -211,7 +211,7 @@ function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
   );
 }
 
-function DraftPlayerRow({ player, canDraft, onAdd, onDraft, onStats, isBusy, isInBoard }) {
+function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBusy, isInBoard, isDrafted }) {
   return (
     <div className="neo-border grid grid-cols-1 gap-3 bg-gray-50 p-3 lg:grid-cols-[minmax(190px,1fr)_300px_auto] lg:items-center">
       <div className="min-w-0">
@@ -226,14 +226,16 @@ function DraftPlayerRow({ player, canDraft, onAdd, onDraft, onStats, isBusy, isI
         <Button onClick={() => onStats(player)} className="neo-btn bg-white p-2 text-black" title="Open player stats">
           <Info className="h-4 w-4" />
         </Button>
-        <Button onClick={() => onAdd(player)} disabled={isBusy || isInBoard} className="neo-btn bg-[#00D9FF] p-2 text-black" title="Add to draft board">
-          <Plus className="h-4 w-4" />
+        <Button
+          onClick={() => (isInBoard ? onRemove(player) : onAdd(player))}
+          disabled={isBusy}
+          className={`neo-btn px-3 text-black ${isInBoard ? "bg-white" : "bg-[#00D9FF]"}`}
+        >
+          {isInBoard ? "Remove" : <><Plus className="mr-1 h-4 w-4" />Board</>}
         </Button>
-        {canDraft && (
-          <Button onClick={() => onDraft(player.id)} disabled={isBusy} className="neo-btn bg-[#F7B801] px-4 text-black">
-            Draft
-          </Button>
-        )}
+        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isBusy} className="neo-btn bg-[#F7B801] px-4 text-black">
+          Draft
+        </Button>
       </div>
     </div>
   );
@@ -405,6 +407,12 @@ export default function LeagueDraft() {
     boardMutation.mutate({ action: "add", payload: { draftId, leagueMemberId: currentMember?.id, playerId: player.id } });
   };
 
+  const removeFromBoard = (player) => {
+    const item = board.find((boardItem) => boardItem.player_id === player.id);
+    if (!item) return;
+    boardMutation.mutate({ action: "remove", payload: { id: item.id } });
+  };
+
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -486,7 +494,7 @@ export default function LeagueDraft() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[380px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
         <aside className="space-y-8">
           <section className="neo-card bg-white p-5">
             <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">My Draft Board</h2>
@@ -584,10 +592,12 @@ export default function LeagueDraft() {
                   player={player}
                   canDraft={isMyTurn}
                   onAdd={addToBoard}
+                  onRemove={removeFromBoard}
                   onDraft={(playerId) => pickMutation.mutate(playerId)}
                   onStats={setSelectedPlayer}
                   isInBoard={boardPlayerIds.has(player.id)}
-                  isBusy={!draftId || !currentMember || pickedIds.has(player.id) || boardMutation.isPending || pickMutation.isPending}
+                  isDrafted={pickedIds.has(player.id)}
+                  isBusy={!draftId || !currentMember || boardMutation.isPending || pickMutation.isPending}
                 />
               ))}
               {!eligiblePlayers.length && (

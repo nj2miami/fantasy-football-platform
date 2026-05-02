@@ -2273,9 +2273,19 @@ async function getLeagueDraftState(leagueId) {
 async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", position = "ALL", sortBy = "-avg_points", limit = 10, offset = 0 } = {}) {
   const league = await entities.League.get(leagueId);
   if (!league) return { data: [], hasMore: false, totalCount: 0 };
-  const draft = draftId ? await entities.Draft.get(draftId) : null;
+  const [draft, members, rosters] = await Promise.all([
+    draftId ? entities.Draft.get(draftId) : null,
+    entities.LeagueMember.filter({ league_id: leagueId }),
+    entities.Roster.list(),
+  ]);
   const picks = draft ? await entities.DraftPick.filter({ draft_id: draft.id }) : [];
-  const pickedIds = new Set(picks.map((pick) => pick.player_id));
+  const leagueMemberIds = new Set((members || []).filter((member) => member.is_active !== false).map((member) => member.id));
+  const unavailableIds = new Set([
+    ...picks.map((pick) => pick.player_id),
+    ...(rosters || [])
+      .filter((slot) => leagueMemberIds.has(slot.league_member_id))
+      .map((slot) => slot.player_id),
+  ]);
   const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
   const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const pageSize = Math.max(1, Number(limit || 10));
@@ -2295,7 +2305,7 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
       offset: scanOffset,
     });
     for (const player of result.data || []) {
-      if (pickedIds.has(player.id)) continue;
+      if (unavailableIds.has(player.id)) continue;
       const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
       if (weeksPlayed < requiredWeeks) continue;
       rows.push({ ...player, weeks_played: weeksPlayed });
