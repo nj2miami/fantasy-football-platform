@@ -544,7 +544,11 @@ function readLocalStore() {
     store.SeasonScoringRule = store.SeasonScoringRule || [];
     store.DraftRoom = store.DraftRoom || [];
     store.DraftTurn = store.DraftTurn || [];
-    store.DraftBoardItem = store.DraftBoardItem || [];
+    const draftsById = new Map((store.Draft || []).map((draft) => [draft.id, draft]));
+    store.DraftBoardItem = (store.DraftBoardItem || []).map((item) => ({
+      ...item,
+      league_id: item.league_id || draftsById.get(item.draft_id)?.league_id || null,
+    }));
     return store;
   }
   const seed = createSeedStore();
@@ -1042,7 +1046,10 @@ async function localSubmitDraftPick({ draft_id, player_id, auto_pick = false } =
     slot_type: player?.position || "OFF",
     week_number: null,
   });
-  const boardItems = await entities.DraftBoardItem.filter({ draft_id, player_id });
+  const boardItems = (await entities.DraftBoardItem.list()).filter((item) =>
+    item.player_id === player_id &&
+    (item.league_id === draft.league_id || item.draft_id === draft_id)
+  );
   await Promise.all(boardItems.map((item) => entities.DraftBoardItem.delete(item.id)));
   const turns = await entities.DraftTurn.filter({ draft_id });
   const nextPick = Number(room?.current_pick || 1) + 1;
@@ -1504,6 +1511,12 @@ const localFunctions = {
       if (used.length) throw new Error("This manager has already used that player this season.");
     }
     const pick = await entities.DraftPick.create({ ...payload, submitted_at: now() });
+    if (payload.league_id && payload.player_id) {
+      const boardItems = (await entities.DraftBoardItem.list()).filter((item) =>
+        item.league_id === payload.league_id && item.player_id === payload.player_id
+      );
+      await Promise.all(boardItems.map((item) => entities.DraftBoardItem.delete(item.id)));
+    }
     if (payload.track_usage) {
       await entities.ManagerPlayerUsage.create({
         league_id: payload.league_id,
@@ -2229,16 +2242,16 @@ async function getLeagueDraftState(leagueId) {
   const activeMembers = members.filter((member) => member.is_active !== false).map(decorateMember);
   const commissionerProfile = profilesByEmail.get(league.commissioner_email) || null;
   const draft = drafts.find((row) => ["OPEN", "SCHEDULED"].includes(String(row.status || "").toUpperCase())) || drafts[0] || null;
-  if (!draft) {
-    return { league, commissionerProfile, members: activeMembers, draft: null, room: null, turns: [], picks: [], rosters: [], board: [], currentTurn: null };
-  }
-  const [rooms, turns, picks, board, rosters] = await Promise.all([
-    entities.DraftRoom.filter({ draft_id: draft.id }),
-    entities.DraftTurn.filter({ draft_id: draft.id }, "overall_pick"),
-    entities.DraftPick.filter({ draft_id: draft.id }, "overall_pick"),
-    entities.DraftBoardItem.filter({ draft_id: draft.id }, "rank"),
+  const [rooms, turns, picks, allBoard, rosters] = await Promise.all([
+    draft ? entities.DraftRoom.filter({ draft_id: draft.id }) : [],
+    draft ? entities.DraftTurn.filter({ draft_id: draft.id }, "overall_pick") : [],
+    draft ? entities.DraftPick.filter({ draft_id: draft.id }, "overall_pick") : [],
+    entities.DraftBoardItem.list("rank"),
     entities.Roster.list(),
   ]);
+  const board = allBoard
+    .filter((item) => item.league_id === leagueId || (draft?.id && item.draft_id === draft.id))
+    .sort((a, b) => Number(a.rank || 0) - Number(b.rank || 0));
   const room = rooms[0] || null;
   const currentTurn = turns.find((turn) => Number(turn.overall_pick) === Number(room?.current_pick || 1)) || null;
   const playerIds = [...new Set([
@@ -2275,12 +2288,13 @@ async function getLeagueDraftState(leagueId) {
 async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", position = "ALL", sortBy = "-avg_points", limit = 10, offset = 0 } = {}) {
   const league = await entities.League.get(leagueId);
   if (!league) return { data: [], hasMore: false, totalCount: 0 };
-  const [draft, members, rosters] = await Promise.all([
+  const [draft, members, rosters, leaguePicks] = await Promise.all([
     draftId ? entities.Draft.get(draftId) : null,
     entities.LeagueMember.filter({ league_id: leagueId }),
     entities.Roster.list(),
+    entities.DraftPick.filter({ league_id: leagueId }),
   ]);
-  const picks = draft ? await entities.DraftPick.filter({ draft_id: draft.id }) : [];
+  const picks = leaguePicks.length || !draft ? leaguePicks : await entities.DraftPick.filter({ draft_id: draft.id });
   const leagueMemberIds = new Set((members || []).filter((member) => member.is_active !== false).map((member) => member.id));
   const unavailableIds = new Set([
     ...picks.map((pick) => pick.player_id),
@@ -2326,25 +2340,37 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
 const draftDay = {
   getState: getLeagueDraftState,
   listEligiblePlayers: listDraftEligiblePlayers,
-  async addBoardItem({ draftId, leagueMemberId, playerId } = {}) {
-    const existing = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: leagueMemberId, player_id: playerId });
+  async addBoardItem({ draftId, leagueId, leagueMemberId, playerId } = {}) {
+    const existing = (await entities.DraftBoardItem.list()).filter((item) =>
+      item.league_member_id === leagueMemberId &&
+      item.player_id === playerId &&
+      (item.league_id === leagueId || (draftId && item.draft_id === draftId))
+    );
     if (existing[0]) return existing[0];
-    const board = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: leagueMemberId }, "-rank");
+    const board = (await entities.DraftBoardItem.list()).filter((item) =>
+      item.league_member_id === leagueMemberId &&
+      (item.league_id === leagueId || (draftId && item.draft_id === draftId))
+    );
     return entities.DraftBoardItem.create({
-      draft_id: draftId,
+      draft_id: draftId || null,
+      league_id: leagueId,
       league_member_id: leagueMemberId,
       player_id: playerId,
-      rank: Number(board[0]?.rank || 0) + 1,
+      rank: Math.max(0, ...board.map((item) => Number(item.rank || 0))) + 1,
     });
   },
   async removeBoardItem(id) {
     return entities.DraftBoardItem.delete(id);
   },
-  async setBoardOrder({ draftId, leagueMemberId, playerIds = [] } = {}) {
-    const existing = await entities.DraftBoardItem.filter({ draft_id: draftId, league_member_id: leagueMemberId });
+  async setBoardOrder({ draftId, leagueId, leagueMemberId, playerIds = [] } = {}) {
+    const existing = (await entities.DraftBoardItem.list()).filter((item) =>
+      item.league_member_id === leagueMemberId &&
+      (item.league_id === leagueId || (draftId && item.draft_id === draftId))
+    );
     for (const item of existing) await entities.DraftBoardItem.delete(item.id);
     const rows = playerIds.map((playerId, index) => ({
-      draft_id: draftId,
+      draft_id: draftId || null,
+      league_id: leagueId,
       league_member_id: leagueMemberId,
       player_id: playerId,
       rank: index + 1,

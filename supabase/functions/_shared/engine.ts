@@ -1073,7 +1073,7 @@ async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, le
     const { data: board, error: boardError } = await supabase
       .from("draft_board_items")
       .select("player_id, rank")
-      .eq("draft_id", draftId)
+      .eq("league_id", league.id)
       .eq("league_member_id", memberId)
       .order("rank", { ascending: true });
     if (boardError) throw boardError;
@@ -1157,7 +1157,7 @@ async function submitDraftPick(supabase: ReturnType<typeof createClient>, user: 
   const { error: boardCleanupError } = await supabase
     .from("draft_board_items")
     .delete()
-    .eq("draft_id", draft.id)
+    .eq("league_id", draft.league_id)
     .eq("player_id", playerId);
   if (boardCleanupError) throw boardCleanupError;
 
@@ -1240,6 +1240,15 @@ async function submitPick(supabase: ReturnType<typeof createClient>, payload: Js
     .select("*")
     .single();
   if (pickError) throw pickError;
+
+  if (leagueId && payload.player_id) {
+    const { error: boardCleanupError } = await supabase
+      .from("draft_board_items")
+      .delete()
+      .eq("league_id", leagueId)
+      .eq("player_id", payload.player_id);
+    if (boardCleanupError) throw boardCleanupError;
+  }
 
   if (payload.track_usage && leagueId && weekNumber) {
     await supabase.from("manager_player_usage").upsert(

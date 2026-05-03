@@ -223,7 +223,7 @@ function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
   );
 }
 
-function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBusy, isInBoard, isDrafted }) {
+function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted }) {
   return (
     <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_260px_auto] md:items-center">
       <div className="min-w-0 pr-2">
@@ -242,7 +242,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
           <button
             type="button"
             onClick={() => (isInBoard ? onRemove(player) : onAdd(player))}
-            disabled={isBusy}
+            disabled={isBoardBusy}
             className="font-black text-[#00A6D6] underline decoration-2 underline-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
           >
             {isInBoard ? "Remove from Board" : "Add to Draft Board"}
@@ -251,7 +251,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
       </div>
       <PlayerMiniStats player={player} weeksPlayed={player.weeks_played} />
       <div className="flex flex-nowrap md:justify-end">
-        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isBusy} className="neo-btn whitespace-nowrap bg-[#F7B801] px-4 text-black">
+        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isDraftBusy} className="neo-btn whitespace-nowrap bg-[#F7B801] px-4 text-black">
           Draft
         </Button>
       </div>
@@ -475,10 +475,15 @@ export default function LeagueDraft() {
   const commissionerProfileUrl = commissioner?.profile_name ? createPageUrl(`Profile?name=${encodeURIComponent(commissioner.profile_name)}`) : null;
 
   const addToBoard = (player) => {
-    boardMutation.mutate({ action: "add", payload: { draftId, leagueMemberId: currentMember?.id, playerId: player.id } });
+    if (!currentMember?.id) {
+      toast.error("Could not find your league membership for this draft board.");
+      return;
+    }
+    boardMutation.mutate({ action: "add", payload: { draftId, leagueId, leagueMemberId: currentMember.id, playerId: player.id } });
   };
 
   const removeFromBoard = (player) => {
+    if (boardMutation.isPending) return;
     const item = board.find((boardItem) => boardItem.player_id === player.id);
     if (!item) return;
     boardMutation.mutate({ action: "remove", payload: { id: item.id } });
@@ -672,7 +677,8 @@ export default function LeagueDraft() {
                   onStats={setSelectedPlayer}
                   isInBoard={boardPlayerIds.has(player.id)}
                   isDrafted={pickedIds.has(player.id)}
-                  isBusy={!draftId || !currentMember || boardMutation.isPending}
+                  isBoardBusy={boardMutation.isPending}
+                  isDraftBusy={pickMutation.isPending}
                 />
               ))}
               {!eligiblePlayers.length && (
