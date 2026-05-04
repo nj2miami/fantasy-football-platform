@@ -2,11 +2,11 @@ import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Play, RefreshCw, Eye, FastForward, Lock, Unlock, Pause, Save } from "lucide-react";
 import { toast } from "sonner";
-import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS } from "@/api/appClient";
+import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_MANAGER_POINTS_STARTING, DEFAULT_TEAM_TIER_CAP } from "@/api/appClient";
+import { DraftConfigFields, LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function LeagueDraftSettings({ league }) {
   const queryClient = useQueryClient();
@@ -17,6 +17,8 @@ export default function LeagueDraftSettings({ league }) {
     schedule_config: { ...DEFAULT_LEAGUE_PLAY_SETTINGS.schedule_config, ...(league.schedule_config || {}) },
   });
   const [sourceSeasonYear, setSourceSeasonYear] = useState(league.source_season_year || new Date().getFullYear() - 1);
+  const [teamTierCap, setTeamTierCap] = useState(Number(league.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP));
+  const [managerPointsStarting, setManagerPointsStarting] = useState(Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING));
   const [draftStart, setDraftStart] = useState("");
 
   const { data: seasons = [] } = useQuery({
@@ -70,6 +72,8 @@ export default function LeagueDraftSettings({ league }) {
       playoff_start_week: Number(playSettings.playoff_start_week) || 9,
       playoff_team_count: Number(playSettings.playoff_team_count) || 4,
       schedule_config: playSettings.schedule_config,
+      team_tier_cap: Number(teamTierCap) || 0,
+      manager_points_starting: Number(managerPointsStarting) || 0,
     }),
     onSuccess: () => {
       toast.success("Draft settings saved.");
@@ -162,132 +166,44 @@ export default function LeagueDraftSettings({ league }) {
       <div className="neo-card bg-white p-6">
         <h4 className="text-xl font-black uppercase mb-4">League Play Configuration</h4>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Draft Cadence</Label>
-            <Select value={playSettings.draft_mode} onValueChange={(value) => setPlaySettings({ ...playSettings, draft_mode: value, player_retention_mode: value === "weekly_redraft" ? "retained" : playSettings.player_retention_mode })} disabled={leagueStarted}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="season_snake">Season Snake</SelectItem>
-                <SelectItem value="weekly_redraft">Weekly Redraft</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Retention</Label>
-            <Select value={playSettings.player_retention_mode} onValueChange={(value) => setPlaySettings({ ...playSettings, player_retention_mode: value })} disabled={leagueStarted || playSettings.draft_mode === "weekly_redraft"}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="retained">Retained</SelectItem>
-                <SelectItem value="two_use_release">Two-Use Release</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Schedule</Label>
-            <Select value={playSettings.schedule_type} onValueChange={(value) => setPlaySettings({ ...playSettings, schedule_type: value })} disabled={leagueStarted}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="head_to_head">Head to Head</SelectItem>
-                <SelectItem value="league_wide">League Wide</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Ranking</Label>
-            <Select value={playSettings.ranking_system} onValueChange={(value) => setPlaySettings({ ...playSettings, ranking_system: value })} disabled={leagueStarted}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="standard">Standard</SelectItem>
-                <SelectItem value="offl">OFFL</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <LeaguePlayFields
+            value={playSettings}
+            onChange={setPlaySettings}
+            disabled={leagueStarted}
+            compactLabels
+            fields={["draft_mode", "player_retention_mode", "schedule_type", "ranking_system"]}
+          />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Advancement</Label>
-            <Select value={playSettings.advancement_mode} onValueChange={(value) => setPlaySettings({ ...playSettings, advancement_mode: value })}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="manual">Manual</SelectItem>
-                <SelectItem value="automatic">Automatic</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Playoff Mode</Label>
-            <Select value={playSettings.playoff_mode} onValueChange={(value) => setPlaySettings({ ...playSettings, playoff_mode: value })} disabled={leagueStarted}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="roster_only">Roster Only</SelectItem>
-                <SelectItem value="redraft">Redraft</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Playoff Start Week</Label>
-            <Input type="number" min="2" value={playSettings.playoff_start_week} disabled={leagueStarted} onChange={(event) => setPlaySettings({ ...playSettings, playoff_start_week: Number(event.target.value) || 9 })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Playoff Teams</Label>
-            <Input type="number" min="2" value={playSettings.playoff_team_count} disabled={leagueStarted} onChange={(event) => setPlaySettings({ ...playSettings, playoff_team_count: Number(event.target.value) || 4 })} className="neo-border font-bold" />
-          </div>
+          <LeaguePlayFields
+            value={playSettings}
+            onChange={setPlaySettings}
+            disabled={leagueStarted}
+            compactLabels
+            showPlayoffDetails
+            fields={["advancement_mode", "playoff_mode"]}
+          />
         </div>
         <h4 className="text-xl font-black uppercase mb-4">Draft Configuration</h4>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Draft Type</Label>
-            <Select
-              value={draftConfig.type}
-              onValueChange={(value) => setDraftConfig({ ...draftConfig, type: value })}
-              disabled={leagueStarted}
-            >
-              <SelectTrigger className="neo-border font-bold">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="snake">Snake</SelectItem>
-                <SelectItem value="linear">Linear</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Rounds</Label>
-            <Input type="number" min="1" value={draftConfig.rounds} disabled={leagueStarted} onChange={(event) => setDraftConfig({ ...draftConfig, rounds: Number(event.target.value) || 1 })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Timer Seconds</Label>
-            <Input type="number" min="10" value={draftConfig.timer_seconds} disabled={leagueStarted} onChange={(event) => setDraftConfig({ ...draftConfig, timer_seconds: Number(event.target.value) || 60 })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Source Year</Label>
-            <Input type="number" value={sourceSeasonYear} disabled={leagueStarted} onChange={(event) => setSourceSeasonYear(Number(event.target.value) || sourceSeasonYear)} className="neo-border font-bold" />
-          </div>
+          <DraftConfigFields
+            draftConfig={draftConfig}
+            onDraftConfigChange={setDraftConfig}
+            sourceSeasonYear={sourceSeasonYear}
+            onSourceSeasonYearChange={setSourceSeasonYear}
+            teamTierCap={teamTierCap}
+            onTeamTierCapChange={setTeamTierCap}
+            managerPointsStarting={managerPointsStarting}
+            onManagerPointsStartingChange={setManagerPointsStarting}
+            disabled={leagueStarted}
+          />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Schedule Pattern</Label>
-            <Select value={playSettings.schedule_config.type} onValueChange={(value) => setPlaySettings({ ...playSettings, schedule_config: { ...playSettings.schedule_config, type: value } })} disabled={leagueStarted}>
-              <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="one_day">One Day</SelectItem>
-                <SelectItem value="interval">Every X Days</SelectItem>
-                <SelectItem value="preset">Preset Dates</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Start Date</Label>
-            <Input type="date" value={playSettings.schedule_config.start_date || ""} disabled={leagueStarted} onChange={(event) => setPlaySettings({ ...playSettings, schedule_config: { ...playSettings.schedule_config, start_date: event.target.value } })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Games / Period</Label>
-            <Input type="number" min="1" value={playSettings.schedule_config.games_per_period || 1} disabled={leagueStarted} onChange={(event) => setPlaySettings({ ...playSettings, schedule_config: { ...playSettings.schedule_config, games_per_period: Number(event.target.value) || 1 } })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Period Days</Label>
-            <Input type="number" min="1" value={playSettings.schedule_config.period_days || 7} disabled={leagueStarted} onChange={(event) => setPlaySettings({ ...playSettings, schedule_config: { ...playSettings.schedule_config, period_days: Number(event.target.value) || 7 } })} className="neo-border font-bold" />
-          </div>
+          <ScheduleConfigFields
+            value={playSettings.schedule_config}
+            onChange={(scheduleConfig) => setPlaySettings({ ...playSettings, schedule_config: scheduleConfig })}
+            disabled={leagueStarted}
+          />
         </div>
         <Button onClick={() => saveDraftMutation.mutate()} disabled={saveDraftMutation.isPending || leagueStarted} className="neo-btn bg-[#00D9FF] text-black w-full mt-4">
           <Save className="w-5 h-5 mr-2" />

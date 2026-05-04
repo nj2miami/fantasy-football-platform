@@ -1,13 +1,10 @@
 import { appClient } from "./appClient";
 
-export const generateAiTeamName = appClient.functions.generateAiTeamName;
 export const processImportJobs = appClient.functions.processImportJobs;
 export const createOfficialLeague = appClient.functions.createOfficialLeague;
 export const fillLeagueWithAI = appClient.functions.fillLeagueWithAI;
 export const importHistoricalStats = appClient.functions.importHistoricalStats;
 export const cleanAll = appClient.functions.cleanAll;
-export const diagnosticPlayerData = appClient.functions.diagnosticPlayerData;
-export const testPagination = appClient.functions.testPagination;
 
 export const createLeague = (payload) => appClient.functions.invoke("create_league", payload);
 export const joinLeague = (payload) => appClient.functions.invoke("join_league", payload);

@@ -3,9 +3,8 @@ import { appClient } from "@/api/appClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ShieldCheck, UploadCloud, Settings, Users, ClipboardList, Trophy, Terminal, RefreshCw, Loader2, CheckCircle, XCircle } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { toast } from "sonner";
 import DataImport from "../components/admin/DataImport";
 import ScoringSettings from "../components/admin/ScoringSettings";
 import PlayerManagement from "../components/admin/PlayerManagement";
@@ -57,8 +56,6 @@ const StatusIndicator = ({ status }) => {
 export default function Admin() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("import");
-  const [diagnosticResult, setDiagnosticResult] = useState(null);
-  const [paginationTestResult, setPaginationTestResult] = useState(null);
 
   useEffect(() => {
     const checkAdmin = async () => {
@@ -83,36 +80,6 @@ export default function Admin() {
     refetchInterval: (data) => (data?.status === "RUNNING" || data?.status === "PENDING" ? 2000 : false),
   });
 
-  const runDiagnosticMutation = useMutation({
-    mutationFn: async () => {
-      const response = await appClient.functions.invoke('diagnosticPlayerData', {});
-      return response.data;
-    },
-    onSuccess: (data) => {
-      setDiagnosticResult(data);
-      toast.success("Diagnostic complete - check results below");
-    },
-    onError: (error) => {
-      console.error("Diagnostic failed:", error);
-      toast.error("Diagnostic failed");
-    }
-  });
-
-  const runPaginationTestMutation = useMutation({
-    mutationFn: async () => {
-      const response = await appClient.functions.invoke('testPagination', {});
-      return response.data;
-    },
-    onSuccess: (data) => {
-      setPaginationTestResult(data);
-      toast.success("Pagination test complete");
-    },
-    onError: (error) => {
-      console.error("Pagination test failed:", error);
-      toast.error("Pagination test failed");
-    }
-  });
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="neo-card bg-black text-white p-8 mb-8 rotate-[-0.5deg]">
@@ -135,22 +102,6 @@ export default function Admin() {
             Job Status & Logs
           </h3>
           <div className="flex gap-2">
-            <Button
-              onClick={() => runPaginationTestMutation.mutate()}
-              disabled={runPaginationTestMutation.isPending}
-              className="neo-btn bg-[#9EF01A] text-black"
-              size="sm"
-            >
-              Test Pagination
-            </Button>
-            <Button
-              onClick={() => runDiagnosticMutation.mutate()}
-              disabled={runDiagnosticMutation.isPending}
-              className="neo-btn bg-[#F7B801] text-black"
-              size="sm"
-            >
-              Run Diagnostic
-            </Button>
             <Button
               onClick={() => refetch()}
               className="neo-btn bg-[#00D9FF] text-black"
@@ -204,26 +155,6 @@ export default function Admin() {
                 <p className="text-red-500 font-bold mt-2">{`> JOB FAILED: ${latestJob.error_details}`}</p>
               )}
             </div>
-          </div>
-        )}
-
-        {/* Pagination Test Results */}
-        {paginationTestResult && (
-          <div className="mt-6 p-4 neo-border bg-[#222]">
-            <h4 className="font-black text-[#9EF01A] mb-3">PAGINATION TEST RESULTS</h4>
-            <pre className="text-xs text-green-400 whitespace-pre-wrap overflow-x-auto">
-              {JSON.stringify(paginationTestResult, null, 2)}
-            </pre>
-          </div>
-        )}
-
-        {/* Diagnostic Results */}
-        {diagnosticResult && (
-          <div className="mt-6 p-4 neo-border bg-[#222]">
-            <h4 className="font-black text-[#F7B801] mb-3">DIAGNOSTIC RESULTS</h4>
-            <pre className="text-xs text-green-400 whitespace-pre-wrap overflow-x-auto">
-              {JSON.stringify(diagnosticResult, null, 2)}
-            </pre>
           </div>
         )}
       </div>

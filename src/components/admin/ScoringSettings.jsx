@@ -152,11 +152,7 @@ export default function ScoringSettings() {
         ],
       });
       showFreshJobInPanel(queryClient, job);
-      try {
-        await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: "SCORING_UPDATE" });
-      } catch (error) {
-        throw error;
-      }
+      await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: "SCORING_UPDATE" });
       return job;
     },
     onSuccess: () => {

@@ -14,11 +14,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
+import PlayerMiniStats from "@/components/player/PlayerMiniStats";
+import PlayerStatsDialog from "@/components/player/PlayerStatsDialog";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { durabilityText, normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
 
 const PAGE_SIZE = 10;
 const POSITION_OPTIONS = ["ALL", "QB", "RB", "WR", "TE", "K", "DEF"];
@@ -52,14 +55,6 @@ function memberName(member) {
   return member?.team_name || member?.profile?.display_name || member?.profile?.profile_name || (member?.is_ai ? "AI Manager" : "Manager");
 }
 
-function playerName(player) {
-  return player?.player_display_name || player?.full_name || "Player";
-}
-
-function statValue(value) {
-  return Number(value || 0).toFixed(1);
-}
-
 function getPickRemaining(room, nowMs) {
   if (!room) return 60;
   const timerSeconds = Number(room.timer_seconds || room.state?.timer_seconds || 60);
@@ -69,19 +64,13 @@ function getPickRemaining(room, nowMs) {
   return Math.max(0, timerSeconds - elapsed);
 }
 
-function normalizePosition(position) {
-  const value = String(position || "").toUpperCase();
-  if (value === "D/ST" || value === "DST") return "DEF";
-  return value || "UNK";
-}
-
 function buildRosterNeeds(league, roster) {
   const starters = league?.roster_rules?.starters;
   const required = starters && typeof starters === "object" && Object.keys(starters).length
     ? Object.fromEntries(Object.entries(starters).map(([key, value]) => [String(key).toUpperCase(), Number(value || 0)]))
     : DEFAULT_ROSTER_NEEDS;
   const drafted = roster.reduce((counts, slot) => {
-    const position = normalizePosition(slot.player?.position || slot.slot_type);
+    const position = normalizePlayerPosition(slot.player?.position || slot.slot_type);
     counts[position] = (counts[position] || 0) + 1;
     return counts;
   }, {});
@@ -99,7 +88,7 @@ function buildRosterNeeds(league, roster) {
 function groupBoardByPosition(board) {
   const order = ["QB", "RB", "WR", "TE", "K", "DEF", "OFF", "FLEX", "UNK"];
   const groups = board.reduce((acc, item) => {
-    const position = normalizePosition(item.player?.position);
+    const position = normalizePlayerPosition(item.player?.position);
     if (!acc[position]) acc[position] = [];
     acc[position].push(item);
     return acc;
@@ -138,91 +127,6 @@ function playPickChime() {
   window.setTimeout(() => context.close().catch(() => {}), 1000);
 }
 
-function PlayerMiniStats({ player, weeksPlayed }) {
-  return (
-    <div className="grid grid-cols-5 gap-1 text-center text-[11px] font-black uppercase sm:gap-2">
-      <div><p className="text-gray-500">Avg</p><p>{statValue(player?.avg_points)}</p></div>
-      <div><p className="text-gray-500">Tot</p><p>{statValue(player?.total_points)}</p></div>
-      <div><p className="text-gray-500">High</p><p>{statValue(player?.high_score)}</p></div>
-      <div><p className="text-gray-500">Low</p><p>{statValue(player?.low_score)}</p></div>
-      <div><p className="text-gray-500">Wks</p><p>{weeksPlayed ?? "--"}</p></div>
-    </div>
-  );
-}
-
-function PlayerStatsDialog({ player, seasonYear, open, onOpenChange }) {
-  const { data: aggregate } = useQuery({
-    queryKey: ["draft-player-aggregate", player?.id, seasonYear],
-    queryFn: () => appClient.playerStats.getAggregate({ playerId: player.id, seasonYear }),
-    enabled: open && !!player?.id,
-  });
-
-  const { data: weeks = [] } = useQuery({
-    queryKey: ["draft-player-weeks", player?.id],
-    queryFn: () => appClient.playerStats.listWeeklySummaries({ playerId: player.id }),
-    enabled: open && !!player?.id,
-  });
-
-  const headshot = player?.headshot_public_url || player?.headshot_url;
-  const stats = aggregate || player || {};
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto bg-white">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-black uppercase">Player Stats</DialogTitle>
-        </DialogHeader>
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-[220px_1fr]">
-          <div className="space-y-4">
-            <div>
-              <p className="text-2xl font-black uppercase leading-tight">{playerName(player)}</p>
-              <p className="mt-1 text-sm font-black uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
-            </div>
-            <div className="neo-border flex aspect-square w-full items-center justify-center overflow-hidden bg-gray-100">
-              {headshot ? <img src={headshot} alt="" className="h-full w-full object-cover" /> : <User className="h-10 w-10 text-gray-400" />}
-            </div>
-            <div className="neo-border bg-[#EFFBFF] p-3">
-              <p className="text-xs font-black uppercase text-gray-500">{seasonYear || "Season"} Stats</p>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs font-black uppercase">
-                <div className="neo-border bg-white p-2"><p className="text-gray-500">Avg</p><p className="text-lg">{statValue(stats.avg_points)}</p></div>
-                <div className="neo-border bg-white p-2"><p className="text-gray-500">Total</p><p className="text-lg">{statValue(stats.total_points)}</p></div>
-                <div className="neo-border bg-white p-2"><p className="text-gray-500">High</p><p className="text-lg">{statValue(stats.high_score)}</p></div>
-                <div className="neo-border bg-white p-2"><p className="text-gray-500">Low</p><p className="text-lg">{statValue(stats.low_score)}</p></div>
-              </div>
-            </div>
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="mb-2 text-sm font-black uppercase text-gray-500">{aggregate?.weeks_played ?? player?.weeks_played ?? weeks.length} Stat Weeks</p>
-            <div className="mt-4 overflow-hidden neo-border">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-black text-white">
-                  <tr>
-                    <th className="p-2 font-black uppercase">Week</th>
-                    <th className="p-2 font-black uppercase">Opp</th>
-                    <th className="p-2 text-right font-black uppercase">Pts</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {weeks.map((week) => (
-                    <tr key={week.id || `${week.season_year}-${week.week}`} className="border-t-2 border-black/10">
-                      <td className="p-2 font-bold">Week {week.week}</td>
-                      <td className="p-2 font-bold">{week.opponent_team || "--"}</td>
-                      <td className="p-2 text-right font-black">{statValue(week.fantasy_points)}</td>
-                    </tr>
-                  ))}
-                  {!weeks.length && (
-                    <tr><td colSpan={3} className="p-4 text-center text-sm font-bold text-gray-500">No weekly stats found.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted }) {
   return (
     <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_260px_auto] md:items-center">
@@ -236,6 +140,8 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
             {playerName(player)}
           </button>
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
+          <span className="neo-border bg-white px-2 py-0.5 text-[10px] font-black uppercase text-black">Tier {player.tier_value || 1}</span>
+          <span className="neo-border bg-[#EFFBFF] px-2 py-0.5 text-[10px] font-black uppercase text-black">{durabilityText(player)}</span>
         </div>
         <p className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
           <span>{player.position || "--"} | {player.team || "FA"}</span>
@@ -272,6 +178,10 @@ function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) 
           {playerName(player)}
         </button>
         <p className="text-xs font-bold uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
+        <p className="mt-1 flex flex-wrap gap-2 text-[10px] font-black uppercase text-gray-600">
+          <span>Tier {player?.tier_value || 1}</span>
+          <span>{durabilityText(player)}</span>
+        </p>
       </div>
       <PlayerMiniStats player={player} weeksPlayed={item.weeks_played} />
       <div className="flex flex-nowrap gap-2 md:justify-end lg:justify-start xl:justify-end">
@@ -330,6 +240,7 @@ export default function LeagueDraft() {
   const isMyTurn = isOpen && currentMember?.id && currentMember.id === state?.currentTurn?.league_member_id;
   const countdown = isOpen ? "Live" : isCompleted ? "Complete" : formatCountdown(state?.draft?.start, nowMs);
   const pickRemaining = getPickRemaining(state?.room, nowMs);
+  const tierCap = Number(state?.league?.team_tier_cap || 0);
 
   const invalidate = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["league-draft-state", leagueId] });
@@ -466,6 +377,8 @@ export default function LeagueDraft() {
   const pickedIds = new Set((state.picks || []).map((pick) => pick.player_id));
   const board = (state.board || []).filter((item) => item.league_member_id === currentMember?.id && !pickedIds.has(item.player_id));
   const roster = (state.rosters || []).filter((slot) => slot.league_member_id === currentMember?.id);
+  const currentTierTotal = Number(state.teamTierTotals?.[currentMember?.id] || roster.reduce((sum, slot) => sum + Number(slot.player?.tier_value || 1), 0));
+  const currentManagerPoints = (state.managerPointAccounts || []).find((account) => account.league_member_id === currentMember?.id)?.current_points ?? state.league?.manager_points_starting ?? 0;
   const boardPlayerIds = new Set(board.map((item) => item.player_id));
   const boardGroups = groupBoardByPosition(board);
   const rosterNeeds = buildRosterNeeds(state.league, roster);
@@ -609,7 +522,13 @@ export default function LeagueDraft() {
                   <p className="text-sm font-bold text-gray-600">Minimum weeks required: {requiredWeeks}{isMyTurn ? ` | ${pickRemaining}s remaining` : ""}</p>
                 </div>
                 <div className="neo-border bg-[#EFFBFF] p-3 lg:ml-auto lg:max-w-md">
-                  <p className="mb-2 text-xs font-black uppercase text-gray-500">Players Needed</p>
+                  <p className="mb-2 text-xs font-black uppercase text-gray-500">Roster Limits</p>
+                  <div className="mb-2 flex flex-wrap gap-2 lg:justify-end">
+                    <span className={`neo-border px-2 py-1 text-xs font-black uppercase ${tierCap && currentTierTotal > tierCap ? "bg-red-500 text-white" : "bg-white text-black"}`}>
+                      Tier {currentTierTotal}{tierCap ? ` / ${tierCap}` : ""}
+                    </span>
+                    <span className="neo-border bg-white px-2 py-1 text-xs font-black uppercase text-black">Manager Pts {currentManagerPoints}</span>
+                  </div>
                   <div className="flex flex-wrap gap-2 lg:justify-end">
                     {rosterNeeds.map((need) => (
                       <span key={need.position} className={`neo-border px-2 py-1 text-xs font-black uppercase ${need.remaining ? "bg-white text-black" : "bg-[#D7F8E8] text-black"}`}>
@@ -707,7 +626,7 @@ export default function LeagueDraft() {
           {roster.map((slot) => (
             <div key={slot.id} className="neo-border bg-gray-50 p-3">
               <p className="truncate font-black uppercase">{playerName(slot.player)}</p>
-              <p className="text-xs font-bold text-gray-500">{slot.slot_type}</p>
+              <p className="text-xs font-bold text-gray-500">{slot.slot_type} | Tier {slot.player?.tier_value || 1} | {durabilityText(slot.player)}</p>
             </div>
           ))}
           {!roster.length && <p className="text-sm font-bold text-gray-500">Draft picks will appear here.</p>}

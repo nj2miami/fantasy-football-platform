@@ -1,6 +1,6 @@
 # Retro Fantasy Football
 
-Retro Fantasy Football is a web-based fantasy football platform built with Vite, React, React Router, Tailwind CSS, shadcn-style UI components, TanStack Query, and a Supabase-oriented data layer.
+Retro Fantasy Football is a web-based fantasy football platform built with Vite, React, React Router, Tailwind CSS, shadcn-style UI components, TanStack Query, and Supabase.
 
 ## What This App Provides
 
@@ -9,14 +9,14 @@ Retro Fantasy Football is a web-based fantasy football platform built with Vite,
 - Team profile and roster editing flows.
 - Player pool browsing with position filters, search, pagination, and historical scoring fields.
 - League standings, matchup, scoring, roster, draft, AI-team, and data-import admin surfaces.
-- Supabase-oriented repositories for users, leagues, league members, seasons, weeks, matchups, players, drafts, rosters, standings, import jobs, official leagues, and randomized-week support tables.
+- Supabase repositories for users, leagues, league members, seasons, weeks, matchups, players, drafts, rosters, standings, import jobs, official leagues, and randomized-week support tables.
 - League modes for `traditional` and `weekly_redraft`.
 - Hidden per-player randomized week assignments based on one completed NFL source season.
 - PWA scaffolding for installable/mobile-friendly delivery.
 
 ## Running The App
 
-Copy `.env.example` to `.env` and add your Supabase project values. If no Supabase env vars are present, the app falls back to a demo adapter so the UI can still be explored locally.
+Copy `.env.example` to `.env` and add your Supabase project values. Supabase is required; the app does not include a local data adapter.
 
 ```bash
 npm install
@@ -29,10 +29,10 @@ npm run dev
 npm run build
 ```
 
-## Supabase Scaffolding
+## Supabase
 
-- SQL schema scaffold: `supabase/migrations/20260423_randomized_historical_framework.sql`
-- Edge function stubs:
+- SQL migrations live in `supabase/migrations`.
+- Edge functions live in `supabase/functions`, including:
   - `create_league`
   - `start_season`
   - `open_week_draft`
@@ -43,4 +43,4 @@ npm run build
   - `reveal_week_results`
   - `recalculate_standings`
 
-The frontend now routes auth and data access through `src/api/appClient.js`, which prefers Supabase when configured and uses a demo adapter as a development fallback.
+The frontend routes auth, storage, data access, RPC calls, and Edge Function calls through `src/api/appClient.js`, backed by Supabase only.

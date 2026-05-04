@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Trophy, ArrowLeft, Shuffle, Shield, CalendarRange } from "lucide-react";
 import { toast } from "sonner";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_ROSTER_RULES, DEFAULT_SCORING_RULES } from "@/api/appClient";
+import { LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -316,51 +317,12 @@ export default function CreateLeague() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="neo-border p-4 bg-[#FFF1E8]">
-            <Label className="text-sm font-black uppercase mb-2 block">Draft Cadence</Label>
-            <Select
-              value={formData.draft_mode}
-              onValueChange={(value) => setFormData({
-                ...formData,
-                draft_mode: value,
-                mode: value === "weekly_redraft" ? "weekly_redraft" : "traditional",
-                player_retention_mode: value === "weekly_redraft" ? "retained" : formData.player_retention_mode,
-              })}
-            >
-              <SelectTrigger className="neo-border font-bold bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="season_snake">Season Snake Draft</SelectItem>
-                <SelectItem value="weekly_redraft">Weekly Redraft</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs font-bold text-gray-600 mt-2">
-              {formData.draft_mode === "season_snake"
-                ? "Draft once, then set weekly lineups against hidden randomized historical outcomes."
-                : "Re-draft every week, and each manager can use a player only once during the regular season."}
-            </p>
-          </div>
-
-          <div className="neo-border p-4 bg-white">
-            <Label className="text-sm font-black uppercase mb-2 block">Player Retention</Label>
-            <Select
-              value={formData.player_retention_mode}
-              onValueChange={(value) => setFormData({ ...formData, player_retention_mode: value })}
-              disabled={formData.draft_mode === "weekly_redraft"}
-            >
-              <SelectTrigger className="neo-border font-bold bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="retained">Retained Rosters</SelectItem>
-                <SelectItem value="two_use_release">Two-Use Release</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs font-bold text-gray-600 mt-2">
-              Two-use leagues release a player to free agency after his second resolved start.
-            </p>
-          </div>
+          <LeaguePlayFields
+            value={formData}
+            onChange={setFormData}
+            showDescriptions
+            fields={["draft_mode", "player_retention_mode"]}
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -377,83 +339,27 @@ export default function CreateLeague() {
             </p>
           </div>
 
-          <div className="neo-border p-4 bg-[#FFF1E8]">
-            <Label className="text-sm font-black uppercase mb-2 block">Standings Format</Label>
-            <Select value={formData.ranking_system} onValueChange={(value) => setFormData({ ...formData, ranking_system: value })}>
-              <SelectTrigger className="neo-border font-bold bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="standard">Standard Record</SelectItem>
-                <SelectItem value="offl">OFFL Points</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs font-bold text-gray-600 mt-2">
-              OFFL adds 4 points per win plus 4/3/2/1 for weekly top scorers.
-            </p>
-          </div>
+          <LeaguePlayFields
+            value={formData}
+            onChange={setFormData}
+            showDescriptions
+            fields={["ranking_system"]}
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="neo-border p-4 bg-white">
-            <Label className="text-sm font-black uppercase mb-2 block">Schedule</Label>
-            <Select value={formData.schedule_type} onValueChange={(value) => setFormData({ ...formData, schedule_type: value })}>
-              <SelectTrigger className="neo-border font-bold bg-white"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="head_to_head">Head to Head</SelectItem>
-                <SelectItem value="league_wide">League Wide</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="neo-border p-4 bg-white">
-            <Label className="text-sm font-black uppercase mb-2 block">Advancement</Label>
-            <Select value={formData.advancement_mode} onValueChange={(value) => setFormData({ ...formData, advancement_mode: value })}>
-              <SelectTrigger className="neo-border font-bold bg-white"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="manual">Manual</SelectItem>
-                <SelectItem value="automatic">Automatic</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="neo-border p-4 bg-white">
-            <Label className="text-sm font-black uppercase mb-2 block">Playoffs</Label>
-            <Select value={formData.playoff_mode} onValueChange={(value) => setFormData({ ...formData, playoff_mode: value })}>
-              <SelectTrigger className="neo-border font-bold bg-white"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="roster_only">Roster Only</SelectItem>
-                <SelectItem value="redraft">Playoff Redraft</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <LeaguePlayFields
+            value={formData}
+            onChange={setFormData}
+            fields={["schedule_type", "advancement_mode", "playoff_mode"]}
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Schedule Pattern</Label>
-            <Select
-              value={formData.schedule_config.type}
-              onValueChange={(value) => setFormData({ ...formData, schedule_config: { ...formData.schedule_config, type: value } })}
-            >
-              <SelectTrigger className="neo-border font-bold bg-white"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="one_day">One Day</SelectItem>
-                <SelectItem value="interval">Every X Days</SelectItem>
-                <SelectItem value="preset">Preset Dates</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Start Date</Label>
-            <Input type="date" value={formData.schedule_config.start_date || ""} onChange={(e) => setFormData({ ...formData, schedule_config: { ...formData.schedule_config, start_date: e.target.value } })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Games / Period</Label>
-            <Input type="number" min="1" value={formData.schedule_config.games_per_period || 1} onChange={(e) => setFormData({ ...formData, schedule_config: { ...formData.schedule_config, games_per_period: Number(e.target.value) || 1 } })} className="neo-border font-bold" />
-          </div>
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Period Days</Label>
-            <Input type="number" min="1" value={formData.schedule_config.period_days || 7} onChange={(e) => setFormData({ ...formData, schedule_config: { ...formData.schedule_config, period_days: Number(e.target.value) || 7 } })} className="neo-border font-bold" />
-          </div>
+          <ScheduleConfigFields
+            value={formData.schedule_config}
+            onChange={(scheduleConfig) => setFormData({ ...formData, schedule_config: scheduleConfig })}
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

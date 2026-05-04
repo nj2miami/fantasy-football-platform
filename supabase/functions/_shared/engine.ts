@@ -61,6 +61,29 @@ const DEFAULT_DRAFT_CONFIG = {
   timer_seconds: 60,
 };
 
+const DEFAULT_TEAM_TIER_CAP = 25;
+const DEFAULT_MANAGER_POINTS_STARTING = 0;
+
+const DURABILITY_LABELS: Record<number, string> = {
+  3: "Perfect",
+  2: "Healthy",
+  1: "Normal",
+  0: "Worn",
+  [-1]: "Hurt",
+  [-2]: "Struggling",
+  [-3]: "Injured",
+};
+
+const DURABILITY_MULTIPLIERS: Record<number, number> = {
+  3: 1.1,
+  2: 1.05,
+  1: 1,
+  0: 0.95,
+  [-1]: 0.9,
+  [-2]: 0.85,
+  [-3]: 0.8,
+};
+
 const DEFAULT_SCHEDULE_CONFIG = {
   type: "interval",
   start_date: new Date().toISOString().slice(0, 10),
@@ -212,8 +235,27 @@ function normalizeLeaguePlaySettings(payload: Json | null | undefined) {
     ...league,
     mode: draftMode === "weekly_redraft" ? "weekly_redraft" : "traditional",
     draft_mode: draftMode,
+    team_tier_cap: Number(league.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
+    manager_points_starting: Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING),
     schedule_config: { ...DEFAULT_SCHEDULE_CONFIG, ...((league.schedule_config as Json | undefined) || {}) },
   };
+}
+
+function durabilityLabel(value: unknown) {
+  return DURABILITY_LABELS[Number(value)] || "Normal";
+}
+
+function applyDurability(points: number, durability: unknown) {
+  const multiplier = DURABILITY_MULTIPLIERS[Number(durability)] ?? 1;
+  return Number((points * multiplier).toFixed(2));
+}
+
+function playerTierForRank(rank: number) {
+  if (rank <= 6) return 5;
+  if (rank <= 12) return 4;
+  if (rank <= 18) return 3;
+  if (rank <= 24) return 2;
+  return 1;
 }
 
 function scheduleDatesForLeague(league: Json) {
@@ -502,6 +544,8 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
       scoring_rules: payload.scoring_rules || DEFAULT_SCORING_RULES,
       roster_rules: payload.roster_rules || DEFAULT_ROSTER_RULES,
       draft_config: payload.draft_config || DEFAULT_DRAFT_CONFIG,
+      team_tier_cap: Number(payload.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
+      manager_points_starting: Number(payload.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING),
       header_image_url: payload.header_image_url ?? null,
     })
     .select("*")
@@ -834,6 +878,8 @@ async function createOfficialLeague(supabase: ReturnType<typeof createClient>, u
     scoring_rules: DEFAULT_SCORING_RULES,
     roster_rules: DEFAULT_ROSTER_RULES,
     draft_config: DEFAULT_DRAFT_CONFIG,
+    team_tier_cap: Number(payload.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
+    manager_points_starting: Number(payload.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING),
   });
   await supabase.from("official_leagues").insert({ league_id: result.league.id, label: payload.label || "Official league" });
   return result;
@@ -892,6 +938,8 @@ async function startSeason(supabase: ReturnType<typeof createClient>, payload: J
   await supabase.from("leagues").update({ league_status: "ACTIVE", updated_date: new Date().toISOString() }).eq("id", league.id);
 
   await ensureWeekRandomization(supabase, league, 1, Number(sourceSeasonYear));
+  await ensurePlayerPositionTiers(supabase, Number(sourceSeasonYear));
+  await ensureManagerPointAccounts(supabase, league, season.id);
   await generateGameSchedule(supabase, league);
   await generateMatchups(supabase, league, 1);
 
@@ -984,6 +1032,137 @@ async function isDraftEligible(supabase: ReturnType<typeof createClient>, league
   return weeks >= requiredWeeks;
 }
 
+async function ensurePlayerPositionTiers(supabase: ReturnType<typeof createClient>, sourceSeasonYear: number) {
+  const { error } = await supabase.rpc("refresh_player_position_tiers", { p_season_year: sourceSeasonYear });
+  if (!error) return;
+
+  const { data: players, error: playersError } = await supabase
+    .from("players")
+    .select("id,position,avg_points,total_points,full_name")
+    .eq("source_season_year", sourceSeasonYear)
+    .order("position", { ascending: true })
+    .order("avg_points", { ascending: false })
+    .order("total_points", { ascending: false });
+  if (playersError) throw playersError;
+  const positionCounts = new Map<string, number>();
+  const rows = (players || []).map((player: Json) => {
+    const position = String(player.position || "UNK").toUpperCase();
+    const rank = Number(positionCounts.get(position) || 0) + 1;
+    positionCounts.set(position, rank);
+    return {
+      player_id: player.id,
+      season_year: sourceSeasonYear,
+      position,
+      position_rank: rank,
+      tier_value: playerTierForRank(rank),
+    };
+  });
+  if (rows.length) {
+    const { error: upsertError } = await supabase.from("player_position_tiers").upsert(rows, { onConflict: "player_id,season_year" });
+    if (upsertError) throw upsertError;
+  }
+}
+
+async function ensureLeagueDurability(supabase: ReturnType<typeof createClient>, league: Json) {
+  const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  const { data: players, error: playersError } = await supabase
+    .from("players")
+    .select("id")
+    .eq("source_season_year", sourceSeasonYear);
+  if (playersError) throw playersError;
+  if (!players?.length) return;
+
+  const { data: existing, error: existingError } = await supabase
+    .from("league_player_durability")
+    .select("player_id")
+    .eq("league_id", league.id);
+  if (existingError) throw existingError;
+  const existingIds = new Set((existing || []).map((row: Json) => row.player_id));
+  const rows = (players || [])
+    .filter((player: Json) => !existingIds.has(player.id))
+    .map((player: Json) => {
+      const durability = crypto.getRandomValues(new Uint32Array(1))[0] % 4;
+      return {
+        league_id: league.id,
+        player_id: player.id,
+        durability,
+        initial_durability: durability,
+        revealed_at: new Date().toISOString(),
+      };
+    });
+  if (rows.length) {
+    const { error } = await supabase.from("league_player_durability").insert(rows);
+    if (error) throw error;
+  }
+}
+
+async function getPlayerTierValue(supabase: ReturnType<typeof createClient>, league: Json, playerId: string) {
+  const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  await ensurePlayerPositionTiers(supabase, seasonYear);
+  const { data, error } = await supabase
+    .from("player_position_tiers")
+    .select("tier_value")
+    .eq("player_id", playerId)
+    .eq("season_year", seasonYear)
+    .maybeSingle();
+  if (error) throw error;
+  return Number(data?.tier_value || 1);
+}
+
+async function leagueMemberTierTotal(supabase: ReturnType<typeof createClient>, leagueMemberId: string, seasonYear: number) {
+  const { data: roster, error: rosterError } = await supabase
+    .from("roster_slots")
+    .select("player_id")
+    .eq("league_member_id", leagueMemberId);
+  if (rosterError) throw rosterError;
+  const playerIds = [...new Set((roster || []).map((slot: Json) => String(slot.player_id)).filter(Boolean))];
+  if (!playerIds.length) return 0;
+  const { data: tiers, error: tierError } = await supabase
+    .from("player_position_tiers")
+    .select("player_id,tier_value")
+    .eq("season_year", seasonYear)
+    .in("player_id", playerIds);
+  if (tierError) throw tierError;
+  const tiersByPlayer = new Map((tiers || []).map((tier: Json) => [String(tier.player_id), Number(tier.tier_value || 1)]));
+  return playerIds.reduce((sum, playerId) => sum + Number(tiersByPlayer.get(playerId) || 1), 0);
+}
+
+async function enforceTeamTierCap(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, playerId: string) {
+  const cap = Number(league.team_tier_cap || 0);
+  if (cap <= 0) return;
+  const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  await ensurePlayerPositionTiers(supabase, seasonYear);
+  const currentTotal = await leagueMemberTierTotal(supabase, leagueMemberId, seasonYear);
+  const playerTier = await getPlayerTierValue(supabase, league, playerId);
+  if (currentTotal + playerTier > cap) {
+    throw new Error(`Drafting this player would exceed the team tier cap (${currentTotal + playerTier}/${cap}).`);
+  }
+}
+
+async function ensureManagerPointAccounts(supabase: ReturnType<typeof createClient>, league: Json, seasonId: unknown) {
+  const startingPoints = Number(league.manager_points_starting || 0);
+  if (startingPoints <= 0) return;
+  const { data: members, error: memberError } = await supabase
+    .from("league_members")
+    .select("id")
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (memberError) throw memberError;
+  const rows = (members || []).map((member: Json) => ({
+    league_id: league.id,
+    league_member_id: member.id,
+    season_id: seasonId,
+    starting_points: startingPoints,
+    current_points: startingPoints,
+  }));
+  if (rows.length) {
+    const { error } = await supabase
+      .from("manager_point_accounts")
+      .upsert(rows, { onConflict: "league_id,league_member_id,season_id" });
+    if (error) throw error;
+  }
+}
+
 function shuffleRows<T>(rows: T[]) {
   const shuffled = [...rows];
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
@@ -1005,6 +1184,8 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
   if (draft.status === "OPEN") return { draft };
   const start = draft.start ? new Date(draft.start) : null;
   if (!start || Date.now() < start.getTime()) throw new Error("Draft cannot start before its scheduled time");
+  await ensurePlayerPositionTiers(supabase, Number(league.source_season_year || new Date().getFullYear() - 1));
+  await ensureLeagueDurability(supabase, league);
 
   const { data: members, error: memberError } = await supabase
     .from("league_members")
@@ -1126,6 +1307,7 @@ async function submitDraftPick(supabase: ReturnType<typeof createClient>, user: 
   const playerId = String(payload.player_id || "");
   if (!playerId) throw new Error("Player is required");
   if (!(await isDraftEligible(supabase, league, playerId))) throw new Error("Player is not draft eligible");
+  await enforceTeamTierCap(supabase, league, turn.league_member_id, playerId);
 
   const { data: player, error: playerError } = await supabase.from("players").select("position").eq("id", playerId).single();
   if (playerError) throw playerError;
@@ -1225,6 +1407,9 @@ async function submitPick(supabase: ReturnType<typeof createClient>, payload: Js
     if (usedError) throw usedError;
     if (used) throw new Error("This manager has already used that player this season.");
   }
+  if (leagueId && payload.league_member_id && payload.player_id) {
+    await enforceTeamTierCap(supabase, league, String(payload.league_member_id), String(payload.player_id));
+  }
   const { data: pick, error: pickError } = await supabase
     .from("draft_picks")
     .insert({
@@ -1308,6 +1493,18 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     .eq("week_number", weekNumber);
 
   const assignments = (randomization?.assignments || {}) as Record<string, number>;
+  const lineupPlayerIds = [...new Set((lineups || []).flatMap((lineup: Json) =>
+    Array.isArray(lineup.slots) ? lineup.slots.map((slot: Json) => String(slot.player_id || "")).filter(Boolean) : []
+  ))];
+  const { data: durabilityRows, error: durabilityError } = lineupPlayerIds.length
+    ? await supabase
+      .from("league_player_durability")
+      .select("player_id,durability")
+      .eq("league_id", leagueId)
+      .in("player_id", lineupPlayerIds)
+    : { data: [], error: null };
+  if (durabilityError) throw durabilityError;
+  const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
   const lineupTotals: Array<{ league_member_id: string; team_name: string | null; total: number; slots: Array<{ player_id: string }> }> = [];
 
   for (const lineup of lineups || []) {
@@ -1321,7 +1518,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
         .eq("player_id", playerId)
         .eq("week", sourceWeek || weekNumber)
         .maybeSingle();
-      total += Number(playerWeek?.fantasy_points || 0);
+      total += applyDurability(Number(playerWeek?.fantasy_points || 0), durabilityByPlayer.get(String(playerId)));
     }
     lineupTotals.push({
       league_member_id: lineup.league_member_id,
@@ -1444,6 +1641,10 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     week_number: weekNumber,
     randomized_assignments: assignments,
     matchup_totals: lineupTotals,
+    durability: Object.fromEntries([...durabilityByPlayer.entries()].map(([playerId, durability]) => [
+      playerId,
+      { durability, label: durabilityLabel(durability), multiplier: DURABILITY_MULTIPLIERS[durability] ?? 1 },
+    ])),
     standings_delta: standingsResult.standings,
     releases,
     reveal_state: randomization?.reveal_state || "hidden",
