@@ -14,18 +14,17 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
-import PlayerMiniStats from "@/components/player/PlayerMiniStats";
 import PlayerStatsDialog from "@/components/player/PlayerStatsDialog";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { durabilityText, normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
+import { normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
 
 const PAGE_SIZE = 10;
-const POSITION_OPTIONS = ["ALL", "QB", "RB", "WR", "TE", "K", "DEF"];
-const DEFAULT_ROSTER_NEEDS = { QB: 1, RB: 2, WR: 2, TE: 1, K: 1, DEF: 1 };
+const POSITION_OPTIONS = ["ALL", "QB", "RB", "WR", "TE", "K"];
+const DEFAULT_ROSTER_NEEDS = { QB: 1, RB: 1, WR: 1, TE: 1, K: 1 };
 
 function formatDateTime(value) {
   if (!value) return "Unscheduled";
@@ -127,6 +126,15 @@ function playPickChime() {
   window.setTimeout(() => context.close().catch(() => {}), 1000);
 }
 
+function PlayerTierCell({ player }) {
+  return (
+    <div className="text-left text-sm font-black uppercase md:text-center">
+      <p className="text-gray-500">Tier</p>
+      <p className="text-2xl text-black">{player?.tier_value || 1}</p>
+    </div>
+  );
+}
+
 function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted }) {
   return (
     <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_260px_auto] md:items-center">
@@ -140,8 +148,6 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
             {playerName(player)}
           </button>
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
-          <span className="neo-border bg-white px-2 py-0.5 text-[10px] font-black uppercase text-black">Tier {player.tier_value || 1}</span>
-          <span className="neo-border bg-[#EFFBFF] px-2 py-0.5 text-[10px] font-black uppercase text-black">{durabilityText(player)}</span>
         </div>
         <p className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
           <span>{player.position || "--"} | {player.team || "FA"}</span>
@@ -155,7 +161,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
           </button>
         </p>
       </div>
-      <PlayerMiniStats player={player} weeksPlayed={player.weeks_played} />
+      <PlayerTierCell player={player} />
       <div className="flex flex-nowrap md:justify-end">
         <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isDraftBusy} className="neo-btn whitespace-nowrap bg-[#F7B801] px-4 text-black">
           Draft
@@ -178,12 +184,8 @@ function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) 
           {playerName(player)}
         </button>
         <p className="text-xs font-bold uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
-        <p className="mt-1 flex flex-wrap gap-2 text-[10px] font-black uppercase text-gray-600">
-          <span>Tier {player?.tier_value || 1}</span>
-          <span>{durabilityText(player)}</span>
-        </p>
       </div>
-      <PlayerMiniStats player={player} weeksPlayed={item.weeks_played} />
+      <PlayerTierCell player={player} />
       <div className="flex flex-nowrap gap-2 md:justify-end lg:justify-start xl:justify-end">
         <Button onClick={() => onRemove(item.id)} disabled={isBusy} className="neo-btn bg-red-500 p-2 text-white" title="Remove from draft board">
           <Trash2 className="h-4 w-4" />
@@ -204,7 +206,6 @@ export default function LeagueDraft() {
   const [searchInput, setSearchInput] = React.useState("");
   const [searchTerm, setSearchTerm] = React.useState("");
   const [positionFilter, setPositionFilter] = React.useState("ALL");
-  const [sortBy, setSortBy] = React.useState("-avg_points");
   const [page, setPage] = React.useState(0);
   const [selectedPlayer, setSelectedPlayer] = React.useState(null);
   const [boardDraftNotice, setBoardDraftNotice] = React.useState(null);
@@ -248,13 +249,12 @@ export default function LeagueDraft() {
   }, [draftId, leagueId, queryClient]);
 
   const { data: eligibleResult = { data: [], hasMore: false }, isFetching: isEligibleFetching } = useQuery({
-    queryKey: ["draft-eligible-players", leagueId, draftId, searchTerm, positionFilter, sortBy, page],
+    queryKey: ["draft-eligible-players", leagueId, draftId, searchTerm, positionFilter, page],
     queryFn: () => appClient.draftDay.listEligiblePlayers({
       leagueId,
       draftId,
       searchTerm,
       position: positionFilter,
-      sortBy,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     }),
@@ -564,20 +564,6 @@ export default function LeagueDraft() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Select value={sortBy} onValueChange={(value) => {
-                  setSortBy(value);
-                  setPage(0);
-                }}>
-                  <SelectTrigger className="neo-border w-full font-bold sm:w-56">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="-avg_points">Average Points</SelectItem>
-                    <SelectItem value="-total_points">Total Points</SelectItem>
-                    <SelectItem value="-high_score">High Score</SelectItem>
-                    <SelectItem value="-low_score">Low Score</SelectItem>
-                  </SelectContent>
-                </Select>
                 <Button onClick={handleSearch} className="neo-btn bg-[#00D9FF] text-black">
                   <Search className="mr-2 h-5 w-5" />Search
                 </Button>
@@ -626,7 +612,7 @@ export default function LeagueDraft() {
           {roster.map((slot) => (
             <div key={slot.id} className="neo-border bg-gray-50 p-3">
               <p className="truncate font-black uppercase">{playerName(slot.player)}</p>
-              <p className="text-xs font-bold text-gray-500">{slot.slot_type} | Tier {slot.player?.tier_value || 1} | {durabilityText(slot.player)}</p>
+              <p className="text-xs font-bold text-gray-500">{slot.slot_type} | Tier {slot.player?.tier_value || 1}</p>
             </div>
           ))}
           {!roster.length && <p className="text-sm font-bold text-gray-500">Draft picks will appear here.</p>}
@@ -663,6 +649,7 @@ export default function LeagueDraft() {
         onOpenChange={(open) => {
           if (!open) setSelectedPlayer(null);
         }}
+        hideFantasyPoints
       />
     </div>
   );

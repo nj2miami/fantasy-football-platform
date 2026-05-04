@@ -43,7 +43,8 @@ export const DEFAULT_SCORING_RULES = {
 };
 
 export const DEFAULT_ROSTER_RULES = {
-  starters: { QB: 1, OFF: 2, FLEX: 1, K: 1, DEF: 1 },
+  starters: { QB: 1, RB: 1, WR: 1, TE: 1, K: 1 },
+  position_limits: { QB: 2, RB: 2, WR: 2, TE: 2, K: 2 },
   bench: 5,
 };
 

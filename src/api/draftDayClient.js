@@ -1,6 +1,5 @@
 import { DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
 import { entities } from "@/api/entitiesClient";
-import { playerPool } from "@/api/playerPoolClient";
 import { countPlayerWeeks } from "@/api/playerStatsClient";
 import { normalizePosition } from "@/api/supabaseCore";
 
@@ -76,7 +75,7 @@ async function getLeagueDraftState(leagueId) {
   const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const [playersById, tierRows, durabilityRows, managerPointAccounts] = await Promise.all([
     loadPlayersById(playerIds),
-    entities.PlayerPositionTier.filter({ season_year: seasonYear }),
+    entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
     entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
     entities.ManagerPointAccount.filter({ league_id: leagueId }),
   ]);
@@ -111,7 +110,7 @@ async function getLeagueDraftState(leagueId) {
   };
 }
 
-async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", position = "ALL", sortBy = "-avg_points", limit = 10, offset = 0 } = {}) {
+async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", position = "ALL", limit = 10, offset = 0 } = {}) {
   const league = await entities.League.get(leagueId);
   if (!league) return { data: [], hasMore: false, totalCount: 0 };
   const [draft, members, rosters, leaguePicks] = await Promise.all([
@@ -131,7 +130,7 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
   const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
   const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const [tiers, durabilityRows] = await Promise.all([
-    entities.PlayerPositionTier.filter({ season_year: seasonYear }),
+    entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
     entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
   ]);
   const tiersByPlayer = new Map(tiers.map((tier) => [tier.player_id, tier]));
@@ -139,39 +138,32 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
   const pageSize = Math.max(1, Number(limit || 10));
   const start = Math.max(0, Number(offset || 0));
   const target = start + pageSize;
-  const scanLimit = 100;
+  const candidateTiers = tiers
+    .filter((tier) => Number(tier.position_rank || 0) <= 30)
+    .filter((tier) => position === "ALL" || normalizePosition(tier.position) === normalizePosition(position))
+    .sort((a, b) => String(a.position || "").localeCompare(String(b.position || "")) || Number(a.position_rank || 0) - Number(b.position_rank || 0));
+  const playersById = await loadPlayersById(candidateTiers.map((tier) => tier.player_id));
   const rows = [];
-  let scanOffset = 0;
-  let hasPoolMore = true;
 
-  while (rows.length <= target && hasPoolMore) {
-    const result = await playerPool.listPlayers({
-      seasonYear,
-      position,
-      searchTerm,
-      sortBy,
-      limit: scanLimit,
-      offset: scanOffset,
-    });
-    for (const player of result.data || []) {
-      if (unavailableIds.has(player.id)) continue;
-      const normalizedPlayerPosition = normalizePosition(player.position);
-      if (position !== "ALL" && normalizePosition(position) !== normalizedPlayerPosition) continue;
-      const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
-      if (weeksPlayed < requiredWeeks) continue;
-      rows.push({
-        ...decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer),
-        weeks_played: weeksPlayed,
-      });
-      if (rows.length > target) break;
+  for (const tier of candidateTiers) {
+    if (unavailableIds.has(tier.player_id)) continue;
+    const player = playersById.get(tier.player_id);
+    if (!player) continue;
+    if (searchTerm) {
+      const haystack = `${player.player_display_name || ""} ${player.full_name || ""}`.toLowerCase();
+      if (!haystack.includes(String(searchTerm).toLowerCase())) continue;
     }
-    hasPoolMore = Boolean(result.hasMore) && (result.data || []).length > 0;
-    scanOffset += scanLimit;
+    const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
+    if (weeksPlayed < requiredWeeks) continue;
+    rows.push({
+      ...decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer),
+      weeks_played: weeksPlayed,
+    });
   }
 
   return {
     data: rows.slice(start, start + pageSize),
-    hasMore: rows.length > target || hasPoolMore,
+    hasMore: rows.length > target,
     totalCount: rows.length,
   };
 }

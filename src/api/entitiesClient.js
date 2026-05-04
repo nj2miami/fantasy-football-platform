@@ -34,7 +34,7 @@ export const entityTableMap = {
   Lineup: "lineups",
   PlayerPositionYearCount: "player_position_year_counts",
   SeasonScoringRule: "season_scoring_rules",
-  PlayerPositionTier: "player_position_tiers",
+  LeaguePlayerDraftTier: "league_player_draft_tiers",
   LeaguePlayerDurability: "league_player_durability",
   ManagerPointAccount: "manager_point_accounts",
   ManagerPointTransaction: "manager_point_transactions",

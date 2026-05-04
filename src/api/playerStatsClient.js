@@ -76,6 +76,17 @@ export const playerStats = {
     if (error) throw mapSupabaseError(error);
     return (data || []).map(normalizePlayerWeekSummary);
   },
+  async listWeeklyActuals({ playerId } = {}) {
+    if (!playerId) return [];
+    const { data, error } = await supabase
+      .from("player_week_stats")
+      .select("id,player_id,season_year,week,team,opponent_team,raw_stats")
+      .eq("player_id", playerId)
+      .order("season_year", { ascending: true })
+      .order("week", { ascending: true });
+    if (error) throw mapSupabaseError(error);
+    return data || [];
+  },
   async getWeekDetail({ playerWeekId, playerId, seasonYear, week } = {}) {
     let query = supabase.from("player_week_stats").select("*");
     if (playerWeekId) query = query.eq("id", playerWeekId);
