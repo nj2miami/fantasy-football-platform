@@ -5,10 +5,18 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_BUILD_ID__: JSON.stringify(process.env.NETLIFY_COMMIT_REF || process.env.COMMIT_REF || Date.now().toString()),
+  },
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+      },
       manifest: {
         name: 'Offseason Fantasy Football',
         short_name: 'Offseason FF',

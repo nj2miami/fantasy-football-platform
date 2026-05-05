@@ -1,21 +1,41 @@
 import { Component, lazy, Suspense } from "react";
+/* global __APP_BUILD_ID__ */
 import Layout from "./Layout.jsx";
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery } from "@tanstack/react-query";
 import { appClient } from "@/api/appClient";
 import { createPageUrl } from "@/utils";
 
+const APP_BUILD_ID = typeof __APP_BUILD_ID__ === "string" ? __APP_BUILD_ID__ : "dev";
+
+function isChunkLoadError(error) {
+    return /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError|dynamically imported module/i.test(String(error?.message || error));
+}
+
+function clearLazyRetryState() {
+    Object.keys(window.sessionStorage)
+        .filter((key) => key.startsWith("lazy-retry:"))
+        .forEach((key) => window.sessionStorage.removeItem(key));
+}
+
+function reloadForFreshBundle() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("appBuild", APP_BUILD_ID);
+    window.location.replace(url.toString());
+}
+
 function lazyWithRetry(importer, chunkKey) {
     return lazy(async () => {
+        const storageKey = `lazy-retry:${APP_BUILD_ID}:${chunkKey}`;
         try {
-            return await importer();
+            const module = await importer();
+            window.sessionStorage.removeItem(storageKey);
+            return module;
         } catch (error) {
-            const storageKey = `lazy-retry:${chunkKey}`;
             const hasRetried = window.sessionStorage.getItem(storageKey) === "true";
-            const isChunkError = /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError/i.test(String(error?.message || error));
-            if (isChunkError && !hasRetried) {
+            if (isChunkLoadError(error) && !hasRetried) {
                 window.sessionStorage.setItem(storageKey, "true");
-                window.location.reload();
+                reloadForFreshBundle();
                 return new Promise(() => {});
             }
             throw error;
@@ -88,7 +108,10 @@ class RouteErrorBoundary extends Component {
                     </p>
                     <button
                         type="button"
-                        onClick={() => window.location.reload()}
+                        onClick={() => {
+                            clearLazyRetryState();
+                            reloadForFreshBundle();
+                        }}
                         className="neo-btn mt-5 bg-black px-6 py-3 font-black uppercase text-white"
                     >
                         Refresh
