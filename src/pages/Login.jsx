@@ -11,6 +11,18 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { NFL_CITIES, TEAM_COLORS } from "@/lib/nflTeams";
 
+function loginErrorMessage(error) {
+  const rawMessage = error?.message || "";
+  const message = rawMessage.toLowerCase();
+  if (message.includes("confirm") || message.includes("verified")) {
+    return "Check your email to verify your account before logging in.";
+  }
+  if (message.includes("invalid login credentials")) {
+    return "We could not find an account with that email and password. Try again, reset your password, or create a new account.";
+  }
+  return rawMessage || "Login failed. Try again in a moment.";
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -71,9 +83,7 @@ export default function Login() {
     onError: (error) => {
       const message = isSignup
         ? error.message || "We could not create that account. Check your details and try again."
-        : String(error.message || "").toLowerCase().includes("confirm") || String(error.message || "").toLowerCase().includes("verified")
-          ? "Check your email to verify your account before logging in."
-          : "We could not find an account with that email and password. Try again, reset your password, or create a new account.";
+        : loginErrorMessage(error);
       setFormMessage({ type: "error", text: message });
       toast.error(message);
     },
