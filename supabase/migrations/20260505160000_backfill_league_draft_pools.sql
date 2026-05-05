@@ -50,7 +50,7 @@ ranked_players as (
           when upper(pc."group") = 'OFFENSE' then 'OFF'
           else null
         end
-      order by coalesce(p.avg_points, 0) desc, coalesce(p.total_points, 0) desc, p.full_name asc
+      order by coalesce(p.total_points, 0) desc, coalesce(p.avg_points, 0) desc, p.full_name asc
     ) as position_rank
   from public.leagues l
   join public.players p

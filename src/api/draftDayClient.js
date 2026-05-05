@@ -4,8 +4,31 @@ import { functions } from "@/api/functionsClient";
 import { countPlayerWeeks } from "@/api/playerStatsClient";
 import { normalizePosition } from "@/api/supabaseCore";
 
+const DRAFT_POSITION_ORDER = ["QB", "OFF", "DEF", "K"];
+const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
+
 function durabilityLabel(value) {
   return DURABILITY_LABELS[Number(value)] || "Normal";
+}
+
+function draftBucket(position) {
+  const normalized = normalizePosition(position);
+  return DRAFT_POSITION_SET.has(normalized) ? normalized : null;
+}
+
+function shouldPrepareDraftPool(tiers, selectedPosition) {
+  const availableBuckets = new Set(tiers.map((tier) => draftBucket(tier.position)).filter(Boolean));
+  if (!tiers.length) return true;
+  if (selectedPosition && selectedPosition !== "ALL") return !availableBuckets.has(draftBucket(selectedPosition));
+  return DRAFT_POSITION_ORDER.some((position) => !availableBuckets.has(position));
+}
+
+function compareDraftTiers(a, b) {
+  const tierDifference = Number(b.tier_value || 0) - Number(a.tier_value || 0);
+  if (tierDifference) return tierDifference;
+  const positionDifference = DRAFT_POSITION_ORDER.indexOf(draftBucket(a.position)) - DRAFT_POSITION_ORDER.indexOf(draftBucket(b.position));
+  if (positionDifference) return positionDifference;
+  return Number(a.position_rank || 0) - Number(b.position_rank || 0);
 }
 
 function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer) {
@@ -132,7 +155,7 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
     entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
     entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
   ]);
-  if (!tiers.length) {
+  if (shouldPrepareDraftPool(tiers, position)) {
     await functions.prepareDraftPool({ league_id: leagueId });
     [tiers, durabilityRows] = await Promise.all([
       entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
@@ -146,8 +169,8 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
   const target = start + pageSize;
   const candidateTiers = tiers
     .filter((tier) => Number(tier.position_rank || 0) <= 30)
-    .filter((tier) => position === "ALL" || normalizePosition(tier.position) === normalizePosition(position))
-    .sort((a, b) => String(a.position || "").localeCompare(String(b.position || "")) || Number(a.position_rank || 0) - Number(b.position_rank || 0));
+    .filter((tier) => position === "ALL" || draftBucket(tier.position) === draftBucket(position))
+    .sort(compareDraftTiers);
   const playersById = await loadPlayersById(candidateTiers.map((tier) => tier.player_id));
   const rows = [];
 

@@ -116,6 +116,8 @@ const DURABILITY_MULTIPLIERS: Record<number, number> = {
   [-3]: 0.8,
 };
 
+const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
+
 const DEFAULT_SCHEDULE_CONFIG = {
   type: "interval",
   start_date: new Date().toISOString().slice(0, 10),
@@ -379,6 +381,11 @@ function rosterLimitBucket(playerPosition: string, config: Json[] = DEFAULT_POSI
   if (group === "DEFENSE") return "DEF";
   if (group === "OFFENSE") return "OFF";
   return "UNUSED";
+}
+
+function hasCompleteDraftBuckets(rows: Json[] = []) {
+  const buckets = new Set(rows.map((row) => String(row.position || "").toUpperCase()));
+  return REQUIRED_DRAFT_BUCKETS.every((position) => buckets.has(position));
 }
 
 function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json, config: Json[] = DEFAULT_POSITION_CONFIG) {
@@ -1274,11 +1281,12 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_scores")
-    .select("id,scoring_rules_hash")
+    .select("id,position,scoring_rules_hash")
     .eq("league_id", leagueId)
-    .limit(1);
+    .lte("position_rank", 30);
   if (existingError) throw existingError;
-  if (existing?.length && existing[0]?.scoring_rules_hash === scoringRulesHash) return;
+  const existingHashMatches = Boolean(existing?.length) && existing.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
+  if (existingHashMatches && hasCompleteDraftBuckets(existing || [])) return;
   if (existing?.length) {
     const { error: deleteError } = await supabase.from("league_player_scores").delete().eq("league_id", leagueId);
     if (deleteError) throw deleteError;
@@ -1323,7 +1331,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   const rows: Array<Json> = [];
   for (const [, players] of byPosition.entries()) {
     players
-      .sort((a, b) => b.avg - a.avg || b.total - a.total || a.full_name.localeCompare(b.full_name))
+      .sort((a, b) => b.total - a.total || b.avg - a.avg || a.full_name.localeCompare(b.full_name))
       .slice(0, 30)
       .forEach((player, index) => {
         const positionRank = index + 1;
@@ -1366,7 +1374,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
     for (const [, playersForPosition] of fallbackByPosition.entries()) {
       playersForPosition
-        .sort((a, b) => b.avg - a.avg || b.total - a.total || a.full_name.localeCompare(b.full_name))
+        .sort((a, b) => b.total - a.total || b.avg - a.avg || a.full_name.localeCompare(b.full_name))
         .slice(0, 30)
         .forEach((player, index) => {
           const positionRank = index + 1;
