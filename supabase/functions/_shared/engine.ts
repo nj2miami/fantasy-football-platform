@@ -251,6 +251,31 @@ async function requireLeagueControl(supabase: ReturnType<typeof createClient>, u
   return { league, profile, isAdmin: false };
 }
 
+async function requireLeagueAccess(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, leagueId: unknown) {
+  const { data: league, error: leagueError } = await supabase
+    .from("leagues")
+    .select("*")
+    .eq("id", leagueId)
+    .single();
+  if (leagueError) throw leagueError;
+
+  const profile = await getProfile(supabase, user);
+  if (String(profile?.role || "").toLowerCase() === "admin") return { league, profile, isAdmin: true };
+  if (league.commissioner_id === user.id || league.commissioner_email === user.email) return { league, profile, isAdmin: false };
+
+  const { data: member, error: memberError } = await supabase
+    .from("league_members")
+    .select("id")
+    .eq("league_id", leagueId)
+    .eq("is_active", true)
+    .or(`profile_id.eq.${user.id},user_email.eq.${user.email || ""}`)
+    .maybeSingle();
+  if (memberError) throw memberError;
+  if (member) return { league, profile, isAdmin: false };
+
+  throw new Error("League access required");
+}
+
 function makeInviteCode() {
   return Array.from(crypto.getRandomValues(new Uint8Array(6)))
     .map((byte) => byte.toString(36).padStart(2, "0"))
@@ -1192,6 +1217,8 @@ async function scheduleDraft(supabase: ReturnType<typeof createClient>, user: { 
     ? await supabase.from("drafts").update(payloadDraft).eq("id", existing.id).select("*").single()
     : await supabase.from("drafts").insert(payloadDraft).select("*").single();
   if (error) throw error;
+  await ensureLeaguePlayerScores(supabase, league);
+  await ensureLeagueDurability(supabase, league);
   return { draft };
 }
 
@@ -1492,6 +1519,19 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .single();
   if (updateError) throw updateError;
   return { draft: updatedDraft };
+}
+
+async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueAccess(supabase, user, payload.league_id);
+  await ensureLeaguePlayerScores(supabase, league);
+  await ensureLeagueDurability(supabase, league);
+  const { count, error } = await supabase
+    .from("league_player_scores")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .lte("position_rank", 30);
+  if (error) throw error;
+  return { league_id: league.id, eligible_count: count || 0 };
 }
 
 async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, league: Json, draftId: string, memberId?: string) {
@@ -2109,10 +2149,12 @@ export async function handleAction(action: string, request: Request) {
                                         ? await scheduleDraft(supabase, user, payload)
                                         : action === "start_draft"
                                           ? await startDraft(supabase, user, payload)
-                                          : action === "submit_draft_pick"
-                                            ? await submitDraftPick(supabase, user, payload)
-                                            : action === "process_draft_timer"
-                                              ? await processDraftTimer(supabase, user, payload)
+                                          : action === "prepare_draft_pool"
+                                            ? await prepareDraftPool(supabase, user, payload)
+                                            : action === "submit_draft_pick"
+                                              ? await submitDraftPick(supabase, user, payload)
+                                              : action === "process_draft_timer"
+                                                ? await processDraftTimer(supabase, user, payload)
         : action === "start_season"
           ? await startSeason(supabase, payload)
         : action === "open_week_draft"

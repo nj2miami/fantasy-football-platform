@@ -1,5 +1,6 @@
 import { DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
 import { entities } from "@/api/entitiesClient";
+import { functions } from "@/api/functionsClient";
 import { countPlayerWeeks } from "@/api/playerStatsClient";
 import { normalizePosition } from "@/api/supabaseCore";
 
@@ -127,12 +128,17 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
       .filter((slot) => leagueMemberIds.has(slot.league_member_id))
       .map((slot) => slot.player_id),
   ]);
-  const requiredWeeks = Number(league.season_length_weeks || 8) + 4;
-  const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
-  const [tiers, durabilityRows] = await Promise.all([
+  let [tiers, durabilityRows] = await Promise.all([
     entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
     entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
   ]);
+  if (!tiers.length) {
+    await functions.prepareDraftPool({ league_id: leagueId });
+    [tiers, durabilityRows] = await Promise.all([
+      entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
+      entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
+    ]);
+  }
   const tiersByPlayer = new Map(tiers.map((tier) => [tier.player_id, tier]));
   const durabilityByPlayer = new Map(durabilityRows.map((row) => [row.player_id, row]));
   const pageSize = Math.max(1, Number(limit || 10));
@@ -153,11 +159,9 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
       const haystack = `${player.player_display_name || ""} ${player.full_name || ""}`.toLowerCase();
       if (!haystack.includes(String(searchTerm).toLowerCase())) continue;
     }
-    const weeksPlayed = await countPlayerWeeks(player.id, seasonYear);
-    if (weeksPlayed < requiredWeeks) continue;
     rows.push({
       ...decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer),
-      weeks_played: weeksPlayed,
+      weeks_played: Number(tier.weeks_played || 0),
     });
   }
 
