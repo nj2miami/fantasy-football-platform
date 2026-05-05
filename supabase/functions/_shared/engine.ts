@@ -753,6 +753,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
     league_member_id: member.id,
   });
   await ensureLeaguePlayerScores(supabase, league);
+  await ensureLeagueDurability(supabase, league);
 
   if (isPaidLeague && role === "manager") {
     await supabase
@@ -1268,15 +1269,20 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   if (!leagueId) throw new Error("League is required to calculate player scores.");
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const scoringRules = { ...DEFAULT_SCORING_RULES, ...((league.scoring_rules as Json | undefined) || {}) };
+  const scoringRulesHash = String(JSON.stringify(scoringRules).length);
   const config = await positionConfig(supabase);
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_scores")
-    .select("id")
+    .select("id,scoring_rules_hash")
     .eq("league_id", leagueId)
     .limit(1);
   if (existingError) throw existingError;
-  if (existing?.length) return;
+  if (existing?.length && existing[0]?.scoring_rules_hash === scoringRulesHash) return;
+  if (existing?.length) {
+    const { error: deleteError } = await supabase.from("league_player_scores").delete().eq("league_id", leagueId);
+    if (deleteError) throw deleteError;
+  }
 
   const { data: weeks, error: weeksError } = await supabase
     .from("player_week_stats")
@@ -1334,6 +1340,50 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
           scoring_rules_hash: String(JSON.stringify(scoringRules).length),
         });
       });
+  }
+
+  if (!rows.length) {
+    const { data: players, error: playerError } = await supabase
+      .from("players")
+      .select("id,source_season_year,position,full_name,player_display_name,avg_points,total_points")
+      .eq("source_season_year", sourceSeasonYear);
+    if (playerError) throw playerError;
+
+    const fallbackByPosition = new Map<string, Array<{ player_id: string; position: string; full_name: string; avg: number; total: number }>>();
+    for (const player of players || []) {
+      const bucket = rosterLimitBucket(String(player.position || ""), config);
+      if (bucket === "UNUSED") continue;
+      const list = fallbackByPosition.get(bucket) || [];
+      list.push({
+        player_id: String(player.id),
+        position: bucket,
+        full_name: String(player.player_display_name || player.full_name || ""),
+        avg: Number(player.avg_points || 0),
+        total: Number(player.total_points || 0),
+      });
+      fallbackByPosition.set(bucket, list);
+    }
+
+    for (const [, playersForPosition] of fallbackByPosition.entries()) {
+      playersForPosition
+        .sort((a, b) => b.avg - a.avg || b.total - a.total || a.full_name.localeCompare(b.full_name))
+        .slice(0, 30)
+        .forEach((player, index) => {
+          const positionRank = index + 1;
+          rows.push({
+            league_id: leagueId,
+            player_id: player.player_id,
+            source_season_year: sourceSeasonYear,
+            position: player.position,
+            position_rank: positionRank,
+            tier_value: playerTierForRank(positionRank),
+            expected_avg_points: Number(player.avg.toFixed(4)),
+            total_points: Number(player.total.toFixed(4)),
+            weeks_played: 0,
+            scoring_rules_hash: "fallback-player-aggregates",
+          });
+        });
+    }
   }
 
   if (rows.length) {
