@@ -128,7 +128,13 @@ export default function Profile() {
 
     setUploadingAvatar(true);
     try {
-      const { file_url } = await appClient.integrations.Core.UploadFile({ file });
+      if (!user?.id) throw new Error("You must be signed in to upload a profile picture.");
+
+      const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+      const { file_url } = await appClient.integrations.Core.UploadFile({
+        file,
+        path: `profiles/${user.id}/avatar/${crypto.randomUUID()}-${safeName}`,
+      });
       
       if (ownProfile) {
         await appClient.entities.UserProfile.update(ownProfile.id, { avatar_url: file_url });

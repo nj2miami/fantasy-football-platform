@@ -13,15 +13,22 @@ function Field({ label, children, description, className = "" }) {
 }
 
 function SelectField({ label, value, onChange, disabled, options, description, className = "" }) {
+  const selectedOption = options.find((option) => option.value === value);
+  const helperText = description || selectedOption?.description;
   return (
-    <Field label={label} description={description} className={className}>
+    <Field label={label} description={helperText} className={className}>
       <Select value={value} onValueChange={onChange} disabled={disabled}>
         <SelectTrigger className="neo-border font-bold bg-white">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            <SelectItem key={option.value} value={option.value}>
+              <div className="py-1">
+                <div className="font-bold">{option.label}</div>
+                {option.description && <div className="text-xs text-gray-500">{option.description}</div>}
+              </div>
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -61,8 +68,16 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         })}
         disabled={disabled}
         options={[
-          { value: "season_snake", label: compactLabels ? "Season Snake" : "Season Snake Draft" },
-          { value: "weekly_redraft", label: "Weekly Redraft" },
+          {
+            value: "season_snake",
+            label: compactLabels ? "Season Snake" : "Season Snake Draft",
+            description: "Managers draft one roster for the season.",
+          },
+          {
+            value: "weekly_redraft",
+            label: "Weekly Redraft",
+            description: "Managers draft again each week from eligible players.",
+          },
         ]}
         description={showDescriptions ? (
           value.draft_mode === "season_snake"
@@ -77,8 +92,16 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         onChange={(playerRetentionMode) => update({ player_retention_mode: playerRetentionMode })}
         disabled={disabled || value.draft_mode === "weekly_redraft"}
         options={[
-          { value: "retained", label: compactLabels ? "Retained" : "Retained Rosters" },
-          { value: "two_use_release", label: "Two-Use Release" },
+          {
+            value: "retained",
+            label: compactLabels ? "Retained" : "Retained Rosters",
+            description: "Players stay on the roster unless moved later.",
+          },
+          {
+            value: "two_use_release",
+            label: "Two-Use Release",
+            description: "A player returns to free agency after two resolved starts.",
+          },
         ]}
         description={showDescriptions ? "Two-use leagues release a player to free agency after his second resolved start." : null}
         className="neo-border p-4 bg-white"
@@ -89,9 +112,18 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         onChange={(scheduleType) => update({ schedule_type: scheduleType })}
         disabled={disabled}
         options={[
-          { value: "head_to_head", label: "Head to Head" },
-          { value: "league_wide", label: "League Wide" },
+          {
+            value: "head_to_head",
+            label: "Head to Head",
+            description: "Teams are paired into weekly matchups.",
+          },
+          {
+            value: "league_wide",
+            label: "League Wide",
+            description: "Every team competes against the full league each period.",
+          },
         ]}
+        description={showDescriptions ? "Controls how weekly games are matched." : null}
         className="neo-border p-4 bg-white"
       />}
       {visible.has("ranking_system") && <SelectField
@@ -100,8 +132,16 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         onChange={(rankingSystem) => update({ ranking_system: rankingSystem })}
         disabled={disabled}
         options={[
-          { value: "standard", label: compactLabels ? "Standard" : "Standard Record" },
-          { value: "offl", label: compactLabels ? "OFFL" : "OFFL Points" },
+          {
+            value: "standard",
+            label: compactLabels ? "Standard" : "Standard Record",
+            description: "Standings are based on wins, losses, and ties.",
+          },
+          {
+            value: "offl",
+            label: compactLabels ? "OFFL" : "OFFL Points",
+            description: "Adds standings points for wins and weekly scoring ranks.",
+          },
         ]}
         description={showDescriptions ? "OFFL adds 4 points per win plus 4/3/2/1 for weekly top scorers." : null}
         className="neo-border p-4 bg-[#EFFBFF]"
@@ -111,9 +151,18 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         value={value.advancement_mode}
         onChange={(advancementMode) => update({ advancement_mode: advancementMode })}
         options={[
-          { value: "manual", label: "Manual" },
-          { value: "automatic", label: "Automatic" },
+          {
+            value: "manual",
+            label: "Manual",
+            description: "Commissioner advances weeks and reveals results.",
+          },
+          {
+            value: "automatic",
+            label: "Automatic",
+            description: "League automation advances periods when available.",
+          },
         ]}
+        description={showDescriptions ? "Controls who moves the league from one period to the next." : null}
         className="neo-border p-4 bg-white"
       />}
       {visible.has("playoff_mode") && <SelectField
@@ -122,9 +171,18 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         onChange={(playoffMode) => update({ playoff_mode: playoffMode })}
         disabled={disabled}
         options={[
-          { value: "roster_only", label: "Roster Only" },
-          { value: "redraft", label: compactLabels ? "Redraft" : "Playoff Redraft" },
+          {
+            value: "roster_only",
+            label: "Roster Only",
+            description: "Playoffs use the rosters already drafted.",
+          },
+          {
+            value: "redraft",
+            label: compactLabels ? "Redraft" : "Playoff Redraft",
+            description: "Playoff teams draft a fresh playoff roster.",
+          },
         ]}
+        description={showDescriptions ? "Controls how playoff rosters are built." : null}
         className="neo-border p-4 bg-white"
       />}
       {showPlayoffDetails && (
@@ -160,9 +218,21 @@ export function ScheduleConfigFields({ value, onChange, disabled = false, boxed 
         onChange={(type) => update({ type })}
         disabled={disabled}
         options={[
-          { value: "one_day", label: "One Day" },
-          { value: "interval", label: "Every X Days" },
-          { value: "preset", label: "Preset Dates" },
+          {
+            value: "one_day",
+            label: "One Day",
+            description: "All scheduled games for a period share one date.",
+          },
+          {
+            value: "interval",
+            label: "Every X Days",
+            description: "Each period is spaced by the selected number of days.",
+          },
+          {
+            value: "preset",
+            label: "Preset Dates",
+            description: "Use fixed dates supplied by the league schedule.",
+          },
         ]}
         className={className}
       />
@@ -174,6 +244,7 @@ export function ScheduleConfigFields({ value, onChange, disabled = false, boxed 
           onChange={(event) => update({ start_date: event.target.value })}
           className="neo-border font-bold bg-white disabled:bg-gray-100"
         />
+        <p className="text-xs font-bold text-gray-600 mt-2">First scheduled date used when generating the season calendar.</p>
       </Field>
       <NumberField
         label="Games / Period"
@@ -181,6 +252,7 @@ export function ScheduleConfigFields({ value, onChange, disabled = false, boxed 
         value={value.games_per_period || 1}
         disabled={disabled}
         onChange={(gamesPerPeriod) => update({ games_per_period: gamesPerPeriod || 1 })}
+        description="Number of matchups generated inside each schedule period."
         className={className}
       />
       <NumberField
@@ -189,6 +261,7 @@ export function ScheduleConfigFields({ value, onChange, disabled = false, boxed 
         value={value.period_days || 7}
         disabled={disabled}
         onChange={(periodDays) => update({ period_days: periodDays || 7 })}
+        description="Days between generated schedule periods when using an interval pattern."
         className={className}
       />
     </>
@@ -205,15 +278,23 @@ export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeas
         onChange={(type) => updateDraft({ type })}
         disabled={disabled}
         options={[
-          { value: "snake", label: "Snake" },
-          { value: "linear", label: "Linear" },
+          {
+            value: "snake",
+            label: "Snake",
+            description: "Draft order reverses each round.",
+          },
+          {
+            value: "linear",
+            label: "Linear",
+            description: "Draft order stays the same every round.",
+          },
         ]}
       />
-      <NumberField label="Rounds" min="1" value={draftConfig.rounds} disabled={disabled} onChange={(rounds) => updateDraft({ rounds: rounds || 1 })} />
-      <NumberField label="Timer Seconds" min="10" value={draftConfig.timer_seconds} disabled={disabled} onChange={(timerSeconds) => updateDraft({ timer_seconds: timerSeconds || 60 })} />
-      <NumberField label="Source Year" value={sourceSeasonYear} disabled={disabled} onChange={(year) => onSourceSeasonYearChange(year || sourceSeasonYear)} />
-      <NumberField label="Team Tier Cap" min="0" value={teamTierCap} disabled={disabled} onChange={(cap) => onTeamTierCapChange(cap || 0)} />
-      <NumberField label="Manager Points" min="0" value={managerPointsStarting} disabled={disabled} onChange={(points) => onManagerPointsStartingChange(points || 0)} />
+      <NumberField label="Rounds" min="1" value={draftConfig.rounds} disabled={disabled} onChange={(rounds) => updateDraft({ rounds: rounds || 1 })} description="Total draft rounds before rosters are finalized." />
+      <NumberField label="Timer Seconds" min="10" value={draftConfig.timer_seconds} disabled={disabled} onChange={(timerSeconds) => updateDraft({ timer_seconds: timerSeconds || 60 })} description="Seconds each manager has to make a pick." />
+      <NumberField label="Source Year" value={sourceSeasonYear} disabled={disabled} onChange={(year) => onSourceSeasonYearChange(year || sourceSeasonYear)} description="Completed NFL season used as the hidden source pool." />
+      <NumberField label="Team Tier Cap" min="0" value={teamTierCap} disabled={disabled} onChange={(cap) => onTeamTierCapChange(cap || 0)} description="Maximum combined roster tier value. Use 0 for no cap." />
+      <NumberField label="Manager Points" min="0" value={managerPointsStarting} disabled={disabled} onChange={(points) => onManagerPointsStartingChange(points || 0)} description="Starting points for manager actions. Use 0 to disable." />
     </>
   );
 }

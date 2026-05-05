@@ -164,14 +164,15 @@ export default function LeagueDraftSettings({ league }) {
       </div>
 
       <div className="neo-card bg-white p-6">
-        <h4 className="text-xl font-black uppercase mb-4">League Play Configuration</h4>
+        <h4 className="text-xl font-black uppercase mb-4">League Configuration</h4>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
           <LeaguePlayFields
             value={playSettings}
             onChange={setPlaySettings}
             disabled={leagueStarted}
             compactLabels
-            fields={["draft_mode", "player_retention_mode", "schedule_type", "ranking_system"]}
+            showDescriptions
+            fields={["schedule_type", "ranking_system"]}
           />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -180,12 +181,31 @@ export default function LeagueDraftSettings({ league }) {
             onChange={setPlaySettings}
             disabled={leagueStarted}
             compactLabels
+            showDescriptions
             showPlayoffDetails
             fields={["advancement_mode", "playoff_mode"]}
           />
         </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <ScheduleConfigFields
+            value={playSettings.schedule_config}
+            onChange={(scheduleConfig) => setPlaySettings({ ...playSettings, schedule_config: scheduleConfig })}
+            disabled={leagueStarted}
+          />
+        </div>
+      </div>
+
+      <div className="neo-card bg-white p-6">
         <h4 className="text-xl font-black uppercase mb-4">Draft Configuration</h4>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <LeaguePlayFields
+            value={playSettings}
+            onChange={setPlaySettings}
+            disabled={leagueStarted}
+            compactLabels
+            showDescriptions
+            fields={["draft_mode", "player_retention_mode"]}
+          />
           <DraftConfigFields
             draftConfig={draftConfig}
             onDraftConfigChange={setDraftConfig}
@@ -198,16 +218,36 @@ export default function LeagueDraftSettings({ league }) {
             disabled={leagueStarted}
           />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
-          <ScheduleConfigFields
-            value={playSettings.schedule_config}
-            onChange={(scheduleConfig) => setPlaySettings({ ...playSettings, schedule_config: scheduleConfig })}
-            disabled={leagueStarted}
-          />
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto_auto] md:items-end mt-6">
+          <div>
+            <Label className="text-sm font-black uppercase mb-2 block">Draft Start</Label>
+            <Input
+              type="datetime-local"
+              value={draftStart}
+              onChange={(event) => setDraftStart(event.target.value)}
+              disabled={scheduledDraft?.status === "OPEN"}
+              className="neo-border font-bold"
+            />
+            <p className="text-xs font-bold text-gray-600 mt-2">
+              Sets the scheduled start time for the draft room.
+            </p>
+          </div>
+          <Button onClick={() => scheduleDraftMutation.mutate()} disabled={!draftStart || scheduleDraftMutation.isPending || scheduledDraft?.status === "OPEN"} className="neo-btn bg-[#00D9FF] text-black">
+            <CalendarClock className="w-5 h-5 mr-2" />
+            Schedule Draft
+          </Button>
+          <Button asChild className="neo-btn bg-[#F7B801] text-black">
+            <a href={`/league/draft?id=${league.id}`}>Open Draft Day</a>
+          </Button>
         </div>
-        <Button onClick={() => saveDraftMutation.mutate()} disabled={saveDraftMutation.isPending || leagueStarted} className="neo-btn bg-[#00D9FF] text-black w-full mt-4">
+        <p className="mt-3 text-sm font-bold text-gray-600">
+          Current draft: {scheduledDraft?.start ? new Date(scheduledDraft.start).toLocaleString() : "Unscheduled"} {scheduledDraft?.status ? `(${scheduledDraft.status})` : ""}
+        </p>
+
+        <Button onClick={() => saveDraftMutation.mutate()} disabled={saveDraftMutation.isPending || leagueStarted} className="neo-btn bg-[#00D9FF] text-black w-full mt-6">
           <Save className="w-5 h-5 mr-2" />
-          {leagueStarted ? "Locked After Start" : "Save Draft Settings"}
+          {leagueStarted ? "Locked After Start" : "Save Configuration"}
         </Button>
       </div>
 
@@ -223,26 +263,6 @@ export default function LeagueDraftSettings({ league }) {
           ))}
           {!schedules.length && <p className="text-sm font-bold text-gray-600">Schedule rows are generated when the season starts.</p>}
         </div>
-      </div>
-
-      <div className="neo-card bg-white p-6">
-        <h4 className="text-xl font-black uppercase mb-4">Draft Day</h4>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto_auto] md:items-end">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Draft Start</Label>
-            <Input type="datetime-local" value={draftStart} onChange={(event) => setDraftStart(event.target.value)} className="neo-border font-bold" />
-          </div>
-          <Button onClick={() => scheduleDraftMutation.mutate()} disabled={!draftStart || scheduleDraftMutation.isPending || scheduledDraft?.status === "OPEN"} className="neo-btn bg-[#00D9FF] text-black">
-            <CalendarClock className="w-5 h-5 mr-2" />
-            Schedule Draft
-          </Button>
-          <Button asChild className="neo-btn bg-[#F7B801] text-black">
-            <a href={`/league/draft?id=${league.id}`}>Open Draft Day</a>
-          </Button>
-        </div>
-        <p className="mt-3 text-sm font-bold text-gray-600">
-          Current draft: {scheduledDraft?.start ? new Date(scheduledDraft.start).toLocaleString() : "Unscheduled"} {scheduledDraft?.status ? `(${scheduledDraft.status})` : ""}
-        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

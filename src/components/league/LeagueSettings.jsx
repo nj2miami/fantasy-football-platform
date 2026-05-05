@@ -78,12 +78,16 @@ export default function LeagueSettings({ league }) {
 
     setUploadingImage(true);
     try {
-      const { file_url } = await appClient.integrations.Core.UploadFile({ file });
+      const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+      const { file_url } = await appClient.integrations.Core.UploadFile({
+        file,
+        path: `leagues/${league.id}/header/${crypto.randomUUID()}-${safeName}`,
+      });
       await appClient.entities.League.update(league.id, { header_image_url: file_url });
       toast.success("League header image updated!");
       queryClient.invalidateQueries(['league', league.id]);
     } catch (error) {
-      toast.error("Failed to upload image");
+      toast.error(error.message || "Failed to upload image");
     } finally {
       setUploadingImage(false);
     }

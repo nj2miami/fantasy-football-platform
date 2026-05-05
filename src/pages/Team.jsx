@@ -4,7 +4,7 @@ import { useLocation, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { appClient } from "@/api/appClient";
 import { createPageUrl } from "@/utils";
-import { ArrowLeft, Edit, Save, Upload } from "lucide-react";
+import { ArrowLeft, Edit, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -18,7 +18,6 @@ export default function Team() {
   const [user, setUser] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [teamName, setTeamName] = useState("");
-  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   useEffect(() => {
     const loadUser = async () => {
@@ -76,23 +75,6 @@ export default function Team() {
     }
   });
 
-  const handleLogoUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploadingLogo(true);
-    try {
-      const { file_url } = await appClient.integrations.Core.UploadFile({ file });
-      await appClient.entities.LeagueMember.update(membershipId, { team_avatar_url: file_url });
-      toast.success("Team logo updated!");
-      queryClient.invalidateQueries(['team-membership', membershipId]);
-    } catch (error) {
-      toast.error("Failed to upload logo");
-    } finally {
-      setUploadingLogo(false);
-    }
-  };
-
   const handleSave = () => {
     updateTeamMutation.mutate({ team_name: teamName });
   };
@@ -113,6 +95,7 @@ export default function Team() {
   const isOwner = user?.email === membership.user_email;
   const isCommissioner = user?.email === league.commissioner_email;
   const managerDisplayName = managerProfile?.display_name || managerProfile?.profile_name || "Manager";
+  const managerAvatarUrl = managerProfile?.avatar_url;
   const managerProfileUrl = managerProfile?.profile_name
     ? createPageUrl(`Profile?name=${encodeURIComponent(managerProfile.profile_name)}`)
     : null;
@@ -149,10 +132,10 @@ export default function Team() {
         <div className="flex items-start gap-6">
           {/* Team Logo */}
           <div className="flex flex-col gap-4">
-            {membership.team_avatar_url ? (
+            {managerAvatarUrl ? (
               <img 
-                src={membership.team_avatar_url} 
-                alt={membership.team_name}
+                src={managerAvatarUrl}
+                alt={managerDisplayName}
                 className="w-32 h-32 rounded-full object-cover neo-border bg-white"
               />
             ) : (
@@ -161,20 +144,6 @@ export default function Team() {
                   {membership.team_name.substring(0, 2).toUpperCase()}
                 </div>
               </div>
-            )}
-            {isOwner && isEditing && (
-              <label htmlFor="logo-upload" className="neo-btn bg-black text-white px-4 py-2 cursor-pointer text-center">
-                <Upload className="w-4 h-4 inline mr-2" />
-                {uploadingLogo ? "Uploading..." : "Upload Logo"}
-                <input
-                  id="logo-upload"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleLogoUpload}
-                  disabled={uploadingLogo}
-                  className="hidden"
-                />
-              </label>
             )}
           </div>
 

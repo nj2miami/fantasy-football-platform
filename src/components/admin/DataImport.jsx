@@ -42,7 +42,11 @@ export default function DataImport() {
         logs: ["Uploading file and starting job..."]
       });
       
-      const { file_url } = await appClient.integrations.Core.UploadFile({ file });
+      const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+      const { file_url } = await appClient.integrations.Core.UploadFile({
+        file,
+        path: `imports/historical-stats/${crypto.randomUUID()}-${safeName}`,
+      });
       
       const job = await appClient.entities.ImportJob.create({
         job_type: "HISTORICAL_STATS",
