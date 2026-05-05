@@ -120,6 +120,34 @@ type Json = Record<string, unknown>;
 type Supabase = ReturnType<typeof createClient>;
 const STALLED_JOB_MINUTES = 30;
 
+const DEFAULT_POSITION_CONFIG = [
+  { position: "QB", group: "QB", enabled: true },
+  { position: "RB", group: "OFFENSE", enabled: true },
+  { position: "FB", group: "OFFENSE", enabled: true },
+  { position: "WR", group: "OFFENSE", enabled: true },
+  { position: "TE", group: "OFFENSE", enabled: true },
+  { position: "OL", group: "OFFENSE", enabled: false },
+  { position: "C", group: "OFFENSE", enabled: false },
+  { position: "G", group: "OFFENSE", enabled: false },
+  { position: "OT", group: "OFFENSE", enabled: false },
+  { position: "K", group: "K", enabled: true },
+  { position: "P", group: "OFFENSE", enabled: false },
+  { position: "LS", group: "OFFENSE", enabled: false },
+  { position: "DL", group: "DEFENSE", enabled: true },
+  { position: "DE", group: "DEFENSE", enabled: true },
+  { position: "DT", group: "DEFENSE", enabled: true },
+  { position: "NT", group: "DEFENSE", enabled: true },
+  { position: "LB", group: "DEFENSE", enabled: true },
+  { position: "ILB", group: "DEFENSE", enabled: true },
+  { position: "MLB", group: "DEFENSE", enabled: true },
+  { position: "OLB", group: "DEFENSE", enabled: true },
+  { position: "DB", group: "DEFENSE", enabled: true },
+  { position: "CB", group: "DEFENSE", enabled: true },
+  { position: "S", group: "DEFENSE", enabled: true },
+  { position: "SAF", group: "DEFENSE", enabled: true },
+  { position: "FS", group: "DEFENSE", enabled: true },
+];
+
 const DEFAULT_SCORING_RULES: Json = {
   OFFENSE: {
     completion: 0.2,
@@ -352,13 +380,28 @@ function toNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function normalizePosition(row: Json) {
+function normalizeRawPosition(row: Json) {
   const position = String(row.position || "").toUpperCase();
-  const group = String(row.position_group || "").toUpperCase();
-  if (position === "QB" || group === "QB") return "QB";
-  if (position === "K" || group === "SPEC") return "K";
-  if (["DEF", "DST"].includes(position) || ["DL", "LB", "DB", "DEF"].includes(group)) return "DEF";
-  return "OFF";
+  if (position === "DST") return "DEF";
+  return position || "UNK";
+}
+
+function positionConfigMap(positionConfig: Json[] = DEFAULT_POSITION_CONFIG) {
+  return new Map(positionConfig.map((item) => [
+    String(item.position || "").toUpperCase(),
+    { group: String(item.group || "").toUpperCase(), enabled: item.enabled !== false },
+  ]));
+}
+
+function scoringCategory(position: string, positionConfig: Json[] = DEFAULT_POSITION_CONFIG) {
+  const normalized = String(position || "").toUpperCase();
+  const configured = positionConfigMap(positionConfig).get(normalized);
+  if (normalized === "QB") return configured?.enabled === false ? "UNUSED" : "OFFENSE";
+  if (normalized === "K") return configured?.enabled === false ? "UNUSED" : "KICKER";
+  if (!configured?.enabled) return "UNUSED";
+  if (configured.group === "DEFENSE") return "DEFENSE";
+  if (configured.group === "OFFENSE") return "OFFENSE";
+  return "UNUSED";
 }
 
 function n(row: Json, field: string) {
@@ -371,10 +414,10 @@ function rule(rules: Json, category: string, key: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) {
-  const position = normalizePosition(row);
+function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES, positionConfig: Json[] = DEFAULT_POSITION_CONFIG, playerPosition?: string) {
+  const category = scoringCategory(playerPosition || normalizeRawPosition(row), positionConfig);
 
-  if (position === "K") {
+  if (category === "KICKER") {
     return (
       (n(row, "fg_made_0_19") + n(row, "fg_made_20_29") + n(row, "fg_made_30_39")) * rule(rules, "KICKER", "fg_0_39", 3) +
       n(row, "fg_made_40_49") * rule(rules, "KICKER", "fg_40_49", 4) +
@@ -385,7 +428,7 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) 
     );
   }
 
-  if (position === "DEF") {
+  if (category === "DEFENSE") {
     return (
       n(row, "def_tackles_solo") * rule(rules, "DEFENSE", "solo_tackle", 1.5) +
       n(row, "def_tackle_assists") * rule(rules, "DEFENSE", "assist_tackle", 0.75) +
@@ -400,6 +443,8 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES) 
       (n(row, "def_tds") + n(row, "fumble_recovery_tds") + n(row, "special_teams_tds")) * rule(rules, "DEFENSE", "touchdown", 6)
     );
   }
+
+  if (category !== "OFFENSE") return 0;
 
   const offensivePoints =
     n(row, "completions") * rule(rules, "OFFENSE", "completion", 0.2) +
@@ -483,6 +528,16 @@ async function defaultScoringRules(supabase: Supabase) {
   return (data?.value as Json | undefined) || DEFAULT_SCORING_RULES;
 }
 
+async function defaultPositionConfig(supabase: Supabase) {
+  const { data, error } = await supabase
+    .from("global_settings")
+    .select("value")
+    .eq("key", "POSITION_CONFIG")
+    .maybeSingle();
+  if (error) throw error;
+  return Array.isArray(data?.value) ? data.value as Json[] : DEFAULT_POSITION_CONFIG;
+}
+
 async function ensureSeasonScoringRules(supabase: Supabase, season: number) {
   const { data: existing, error: existingError } = await supabase
     .from("season_scoring_rules")
@@ -507,6 +562,7 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
   if (!response.ok) throw new Error(`Could not download ${sourceUrl}: ${response.status}`);
 
   const scoringRules = await ensureSeasonScoringRules(supabase, season);
+  const positionConfig = await defaultPositionConfig(supabase);
   const csv = await response.text();
   const parsedRows = parseCsv(csv).filter((row) => String(row.season_type || "").toUpperCase() === "REG");
   const playerMap = new Map<string, Json>();
@@ -539,7 +595,7 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
 
   const aggregateMap = new Map<string, { total: number; high: number; low: number | null; count: number }>();
   for (const row of parsedRows) {
-    const points = calculateFantasyPoints(row, scoringRules);
+    const points = calculateFantasyPoints(row, scoringRules, positionConfig);
     const current = aggregateMap.get(String(row.player_id)) || { total: 0, high: 0, low: null, count: 0 };
     current.total += points;
     current.high = Math.max(current.high, points);
@@ -556,7 +612,7 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
       full_name: player.player_display_name,
       player_display_name: player.player_display_name,
       team: sample.team || null,
-      position: normalizePosition(sample),
+      position: normalizeRawPosition(sample),
       active_years: [season],
       source_season_year: season,
       avg_points: aggregates?.count ? aggregates.total / aggregates.count : 0,
@@ -605,7 +661,7 @@ async function importSeason(supabase: Supabase, season: number, sourceUrl: strin
         week: toNumber(row.week),
         team: row.team || null,
         opponent_team: row.opponent_team || null,
-        fantasy_points: calculateFantasyPoints(row, scoringRules),
+        fantasy_points: calculateFantasyPoints(row, scoringRules, positionConfig),
         passing_yards: toNumber(row.passing_yards) ?? 0,
         passing_tds: toNumber(row.passing_tds) ?? 0,
         rushing_yards: toNumber(row.rushing_yards) ?? 0,
@@ -718,6 +774,8 @@ async function scoringRecalculationWeeks(supabase: Supabase, seasonYear?: number
 async function refreshComputedFantasyPoints(supabase: Supabase, job: Json, seasonYear?: number | null) {
   const weeks = await scoringRecalculationWeeks(supabase, seasonYear);
   const chunks = weeks.length ? weeks : [null];
+  const positionConfig = await defaultPositionConfig(supabase);
+  const scoringRulesBySeason = new Map<number, Json>();
 
   for (let index = 0; index < chunks.length; index += 1) {
     const week = chunks[index];
@@ -726,12 +784,42 @@ async function refreshComputedFantasyPoints(supabase: Supabase, job: Json, seaso
       : `Recalculating fantasy points for week ${week}.`, {
       progress: Math.min(90, 10 + Math.round((index / Math.max(1, chunks.length)) * 75)),
     });
-    const { error: updateError } = await supabase.rpc("recompute_player_week_fantasy_points_chunk", {
-      p_season_year: seasonYear || null,
-      p_week: week,
-      p_refresh_aggregates: false,
+
+    let query = supabase
+      .from("player_week_stats")
+      .select("id,season_year,raw_stats,players!inner(position)");
+    if (seasonYear) query = query.eq("season_year", seasonYear);
+    if (week !== null) query = query.eq("week", week);
+    const { data, error } = await query;
+    if (error) throw error;
+
+    for (const row of data || []) {
+      const rowSeason = Number(row.season_year || seasonYear || 0);
+      if (rowSeason && !scoringRulesBySeason.has(rowSeason)) {
+        scoringRulesBySeason.set(rowSeason, await ensureSeasonScoringRules(supabase, rowSeason));
+      }
+    }
+
+    const updates = (data || []).map((row: Json) => {
+      const player = Array.isArray(row.players) ? row.players[0] : row.players;
+      const rowSeason = Number(row.season_year || seasonYear || 0);
+      const rules = scoringRulesBySeason.get(rowSeason) || DEFAULT_SCORING_RULES;
+      return {
+        id: row.id,
+        fantasy_points: calculateFantasyPoints((row.raw_stats || {}) as Json, rules, positionConfig, String(player?.position || "")),
+      };
     });
-    if (updateError) throw updateError;
+
+    for (let offset = 0; offset < updates.length; offset += BATCH_SIZE) {
+      const batch = updates.slice(offset, offset + BATCH_SIZE);
+      for (const item of batch) {
+        const { error: updateError } = await supabase
+          .from("player_week_stats")
+          .update({ fantasy_points: item.fantasy_points })
+          .eq("id", item.id);
+        if (updateError) throw updateError;
+      }
+    }
   }
 
   await appendJobLog(supabase, job, "Refreshing player aggregates after scoring recalculation.", {

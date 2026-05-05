@@ -9,53 +9,37 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Save, Plus, Trash2 } from "lucide-react";
 
-const DEFAULT_ROSTER_RULES = {
-  "QB": 2,
-  "K": 2,
-  "OFF": 3,
-  "DEF": 3,
-  "best_ball_enabled": true,
-  "starters_qb": 1,
-  "starters_k": 1,
-  "starters_off": 2,
-  "starters_def": 2
-};
-
 const DEFAULT_POSITION_CONFIG = [
-  { position: "QB", group: "OFFENSE", enabled: true },
+  { position: "QB", group: "QB", enabled: true },
   { position: "RB", group: "OFFENSE", enabled: true },
+  { position: "FB", group: "OFFENSE", enabled: true },
   { position: "WR", group: "OFFENSE", enabled: true },
   { position: "TE", group: "OFFENSE", enabled: true },
-  { position: "K", group: "SPECIAL_TEAMS", enabled: true },
+  { position: "OL", group: "OFFENSE", enabled: false },
+  { position: "C", group: "OFFENSE", enabled: false },
+  { position: "G", group: "OFFENSE", enabled: false },
+  { position: "OT", group: "OFFENSE", enabled: false },
+  { position: "K", group: "K", enabled: true },
+  { position: "P", group: "OFFENSE", enabled: false },
+  { position: "LS", group: "OFFENSE", enabled: false },
   { position: "DL", group: "DEFENSE", enabled: true },
-  { position: "LB", group: "DEFENSE", enabled: true },
-  { position: "OLB", group: "DEFENSE", enabled: true },
-  { position: "ILB", group: "DEFENSE", enabled: true },
-  { position: "DB", group: "DEFENSE", enabled: true },
-  { position: "S", group: "DEFENSE", enabled: true },
-  { position: "FS", group: "DEFENSE", enabled: true },
-  { position: "NT", group: "DEFENSE", enabled: true },
   { position: "DE", group: "DEFENSE", enabled: true },
   { position: "DT", group: "DEFENSE", enabled: true },
-  { position: "P", group: "SPECIAL_TEAMS", enabled: false },
-  { position: "LS", group: "SPECIAL_TEAMS", enabled: false }
+  { position: "NT", group: "DEFENSE", enabled: true },
+  { position: "LB", group: "DEFENSE", enabled: true },
+  { position: "ILB", group: "DEFENSE", enabled: true },
+  { position: "MLB", group: "DEFENSE", enabled: true },
+  { position: "OLB", group: "DEFENSE", enabled: true },
+  { position: "DB", group: "DEFENSE", enabled: true },
+  { position: "CB", group: "DEFENSE", enabled: true },
+  { position: "S", group: "DEFENSE", enabled: true },
+  { position: "SAF", group: "DEFENSE", enabled: true },
+  { position: "FS", group: "DEFENSE", enabled: true },
 ];
 
 export default function RosterSettings() {
   const queryClient = useQueryClient();
-  const [rules, setRules] = useState(DEFAULT_ROSTER_RULES);
   const [positionConfig, setPositionConfig] = useState(DEFAULT_POSITION_CONFIG);
-
-  const { data: setting, isLoading } = useQuery({
-    queryKey: ["roster-settings"],
-    queryFn: async () => {
-      const settings = await appClient.entities.Global.filter({ key: "ROSTER_RULES" });
-      if (settings.length > 0) {
-        return settings[0];
-      }
-      return null;
-    }
-  });
 
   const { data: positionSetting } = useQuery({
     queryKey: ["position-config"],
@@ -69,25 +53,22 @@ export default function RosterSettings() {
   });
 
   useEffect(() => {
-    if (setting?.value) {
-      setRules(setting.value);
-    }
-  }, [setting]);
-
-  useEffect(() => {
     if (positionSetting?.value) {
       setPositionConfig(positionSetting.value);
     }
   }, [positionSetting]);
 
-  const handleRuleChange = (key, value) => {
-    setRules(prev => ({ ...prev, [key]: value }));
-  };
-
   const handlePositionChange = (index, field, value) => {
     setPositionConfig(prev => {
       const newConfig = [...prev];
-      newConfig[index] = { ...newConfig[index], [field]: value };
+      const next = { ...newConfig[index], [field]: value };
+      const position = String(field === "position" ? value : next.position || "").toUpperCase();
+      if (position === "QB" || position === "K") {
+        next.group = position;
+      } else if (next.group === "QB" || next.group === "K" || next.group === "SPECIAL_TEAMS") {
+        next.group = "OFFENSE";
+      }
+      newConfig[index] = next;
       return newConfig;
     });
   };
@@ -101,41 +82,32 @@ export default function RosterSettings() {
   };
 
   const saveSettingsMutation = useMutation({
-    mutationFn: async ({ newRules, newPositionConfig }) => {
-      console.log('[SAVE] Saving roster rules:', newRules);
-      console.log('[SAVE] Saving position config:', newPositionConfig);
-      
-      // Save roster rules
-      if (setting) {
-        console.log('[SAVE] Updating existing roster rules:', setting.id);
-        await appClient.entities.Global.update(setting.id, { value: newRules });
-      } else {
-        console.log('[SAVE] Creating new roster rules');
-        await appClient.entities.Global.create({
-          key: "ROSTER_RULES",
-          value: newRules,
-          description: "Site-wide roster composition and scoring rules."
-        });
-      }
-      
-      // Save position config
+    mutationFn: async ({ newPositionConfig }) => {
+      const normalizedConfig = newPositionConfig.map((item) => {
+        const position = String(item.position || "").toUpperCase();
+        return {
+          ...item,
+          position,
+          group: position === "QB" || position === "K"
+            ? position
+            : item.group === "DEFENSE"
+              ? "DEFENSE"
+              : "OFFENSE",
+        };
+      });
+
       if (positionSetting) {
-        console.log('[SAVE] Updating existing position config:', positionSetting.id);
-        await appClient.entities.Global.update(positionSetting.id, { value: newPositionConfig });
+        await appClient.entities.Global.update(positionSetting.id, { value: normalizedConfig });
       } else {
-        console.log('[SAVE] Creating new position config');
         await appClient.entities.Global.create({
           key: "POSITION_CONFIG",
-          value: newPositionConfig,
-          description: "Position configuration including groups and visibility."
+          value: normalizedConfig,
+          description: "Position configuration including offensive or defensive bucket and draft eligibility."
         });
       }
-      
-      console.log('[SAVE] All settings saved successfully');
     },
     onSuccess: () => {
-      toast.success("Roster and position settings saved successfully!");
-      queryClient.invalidateQueries(["roster-settings"]);
+      toast.success("Position settings saved successfully!");
       queryClient.invalidateQueries(["position-config"]);
     },
     onError: (error) => {
@@ -144,53 +116,8 @@ export default function RosterSettings() {
     }
   });
   
-  if (isLoading) return <div>Loading...</div>
-
   return (
     <div className="space-y-8">
-      <div className="neo-card bg-white p-8">
-        <h3 className="text-2xl font-black uppercase mb-6">Roster Composition</h3>
-        <div className="space-y-6">
-          <div>
-            <h4 className="font-black text-lg uppercase mb-4">Roster Size by Position</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {['QB', 'K', 'OFF', 'DEF'].map(pos => (
-                <div key={pos}>
-                  <Label className="text-sm font-bold text-gray-500 uppercase">{pos}</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="5"
-                    value={rules[pos] || 0}
-                    onChange={(e) => handleRuleChange(pos, parseInt(e.target.value))}
-                    className="neo-border font-bold mt-1"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="neo-border p-4 bg-gray-50">
-            <h4 className="font-black text-lg uppercase mb-2">Best Ball Scoring</h4>
-             <div className="flex items-center justify-between">
-              <div>
-                <p className="font-bold text-sm text-gray-600">
-                  Automatically use the highest-scoring players from each manager's roster.
-                </p>
-                 <p className="font-bold text-xs text-gray-500 mt-1">
-                  (Top {rules.starters_qb} QB, {rules.starters_k} K, {rules.starters_off} OFF, {rules.starters_def} DEF)
-                </p>
-              </div>
-              <Switch
-                checked={rules.best_ball_enabled}
-                onCheckedChange={(checked) => handleRuleChange('best_ball_enabled', checked)}
-                className="data-[state=checked]:bg-black"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="neo-card bg-white p-8">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-2xl font-black uppercase">Position Configuration</h3>
@@ -200,16 +127,26 @@ export default function RosterSettings() {
           </Button>
         </div>
         <p className="text-sm font-bold text-gray-600 mb-4">
-          Configure which positions are available, their grouping (Offense/Defense/Special Teams), and whether they should be displayed in the player pool.
+          Configure which raw backend positions are treated as offense or defense. QB and K are automatic categories. Disabled positions are excluded from draft eligibility and scoring.
         </p>
         
         <div className="space-y-3">
           {positionConfig.map((config, index) => (
             <div key={index} className="flex items-center gap-4 p-4 neo-border bg-gray-50">
+              {(() => {
+                const position = String(config.position || "").toUpperCase();
+                const isAutomatic = position === "QB" || position === "K";
+                const groupValue = isAutomatic
+                  ? position
+                  : config.group === "DEFENSE"
+                    ? "DEFENSE"
+                    : "OFFENSE";
+                return (
+                  <>
               <div className="flex-1">
                 <Label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Position</Label>
                 <Input
-                  value={config.position}
+                  value={position}
                   onChange={(e) => handlePositionChange(index, 'position', e.target.value.toUpperCase())}
                   placeholder="e.g. QB, RB, WR"
                   className="neo-border font-bold"
@@ -220,8 +157,9 @@ export default function RosterSettings() {
               <div className="flex-1">
                 <Label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Group</Label>
                 <Select
-                  value={config.group}
+                  value={groupValue}
                   onValueChange={(value) => handlePositionChange(index, 'group', value)}
+                  disabled={isAutomatic}
                 >
                   <SelectTrigger className="neo-border font-bold">
                     <SelectValue />
@@ -229,9 +167,14 @@ export default function RosterSettings() {
                   <SelectContent>
                     <SelectItem value="OFFENSE">Offense</SelectItem>
                     <SelectItem value="DEFENSE">Defense</SelectItem>
-                    <SelectItem value="SPECIAL_TEAMS">Special Teams</SelectItem>
+                    {isAutomatic && <SelectItem value={position}>{position}</SelectItem>}
                   </SelectContent>
                 </Select>
+                {isAutomatic && (
+                  <p className="mt-1 text-xs font-bold text-gray-500">
+                    {position} is assigned automatically.
+                  </p>
+                )}
               </div>
               
               <div className="flex flex-col items-center">
@@ -251,18 +194,21 @@ export default function RosterSettings() {
               >
                 <Trash2 className="w-5 h-5" />
               </Button>
+                  </>
+                );
+              })()}
             </div>
           ))}
         </div>
       </div>
 
       <Button
-        onClick={() => saveSettingsMutation.mutate({ newRules: rules, newPositionConfig: positionConfig })}
+        onClick={() => saveSettingsMutation.mutate({ newPositionConfig: positionConfig })}
         disabled={saveSettingsMutation.isPending}
         className="neo-btn bg-[#FF6B35] text-white w-full py-4"
       >
         <Save className="w-5 h-5 mr-2" />
-        {saveSettingsMutation.isPending ? "Saving..." : "Save All Settings"}
+        {saveSettingsMutation.isPending ? "Saving..." : "Save Position Settings"}
       </Button>
     </div>
   );

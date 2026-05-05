@@ -407,7 +407,7 @@ export default function CreateLeague() {
               <p className="font-black uppercase">Roster Rules</p>
             </div>
             <p className="text-sm font-bold text-gray-700">
-              Starters: QB 1, OFF 2, FLEX 1, K 1, DEF 1. Bench: {formData.roster_rules.bench}.
+              Draft 10 total: 2 QB, 2 K, 2 DEF, 2 OFF, 2 FLEX. Start 5 each week: 1 QB, 1 K, 1 DEF, 1 OFF, 1 FLEX.
             </p>
           </div>
           <div className="neo-border p-4 bg-white">

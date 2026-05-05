@@ -422,14 +422,14 @@ $$;
 insert into public.global_settings (key, value, description)
 values
   ('SCORING_RULES', '{"passing_yards":0.04,"passing_td":4,"rushing_yards":0.1,"receiving_yards":0.1,"touchdown":6,"field_goal":3,"defense_turnover":2,"defense_td":6}'::jsonb, 'Default scoring rules for new leagues.'),
-  ('ROSTER_RULES', '{"starters":{"QB":1,"OFF":2,"FLEX":1,"K":1,"DEF":1},"bench":5}'::jsonb, 'Default roster rules for new leagues.'),
-  ('POSITION_CONFIG', '[{"position":"QB","group":"OFFENSE","enabled":true},{"position":"RB","group":"OFFENSE","enabled":true},{"position":"WR","group":"OFFENSE","enabled":true},{"position":"TE","group":"OFFENSE","enabled":true},{"position":"K","group":"SPECIAL_TEAMS","enabled":true},{"position":"DEF","group":"DEFENSE","enabled":true}]'::jsonb, 'Default player position configuration.')
+  ('ROSTER_RULES', '{"starters":{"QB":1,"OFF":1,"FLEX":1,"K":1,"DEF":1},"position_limits":{"QB":2,"OFF":4,"K":2,"DEF":2},"bench":5,"total_drafted":10,"bench_scoring_multiplier":0.5,"treatment_scoring_multiplier":0.25}'::jsonb, 'Fixed roster rules for new leagues.'),
+  ('POSITION_CONFIG', '[{"position":"QB","group":"QB","enabled":true},{"position":"RB","group":"OFFENSE","enabled":true},{"position":"FB","group":"OFFENSE","enabled":true},{"position":"WR","group":"OFFENSE","enabled":true},{"position":"TE","group":"OFFENSE","enabled":true},{"position":"OL","group":"OFFENSE","enabled":false},{"position":"C","group":"OFFENSE","enabled":false},{"position":"G","group":"OFFENSE","enabled":false},{"position":"OT","group":"OFFENSE","enabled":false},{"position":"K","group":"K","enabled":true},{"position":"P","group":"OFFENSE","enabled":false},{"position":"LS","group":"OFFENSE","enabled":false},{"position":"DL","group":"DEFENSE","enabled":true},{"position":"DE","group":"DEFENSE","enabled":true},{"position":"DT","group":"DEFENSE","enabled":true},{"position":"NT","group":"DEFENSE","enabled":true},{"position":"LB","group":"DEFENSE","enabled":true},{"position":"ILB","group":"DEFENSE","enabled":true},{"position":"MLB","group":"DEFENSE","enabled":true},{"position":"OLB","group":"DEFENSE","enabled":true},{"position":"DB","group":"DEFENSE","enabled":true},{"position":"CB","group":"DEFENSE","enabled":true},{"position":"S","group":"DEFENSE","enabled":true},{"position":"SAF","group":"DEFENSE","enabled":true},{"position":"FS","group":"DEFENSE","enabled":true}]'::jsonb, 'Raw backend player position grouping used by import, scoring, draft eligibility, and roster limits.')
 on conflict (key) do nothing;
 
 insert into public.site_settings (key, value, description)
 values
   ('SCORING_RULES', '{"passing_yards":0.04,"passing_td":4,"rushing_yards":0.1,"receiving_yards":0.1,"touchdown":6,"field_goal":3,"defense_turnover":2,"defense_td":6}'::jsonb, 'Default site scoring rules.'),
-  ('ROSTER_RULES', '{"starters":{"QB":1,"OFF":2,"FLEX":1,"K":1,"DEF":1},"bench":5}'::jsonb, 'Default site roster rules.')
+  ('ROSTER_RULES', '{"starters":{"QB":1,"OFF":1,"FLEX":1,"K":1,"DEF":1},"position_limits":{"QB":2,"OFF":4,"K":2,"DEF":2},"bench":5,"total_drafted":10,"bench_scoring_multiplier":0.5,"treatment_scoring_multiplier":0.25}'::jsonb, 'Fixed site roster rules.')
 on conflict (key) do nothing;
 
 insert into storage.buckets (id, name, public)

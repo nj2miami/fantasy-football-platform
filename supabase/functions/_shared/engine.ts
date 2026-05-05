@@ -51,10 +51,41 @@ const DEFAULT_SCORING_RULES = {
 };
 
 const DEFAULT_ROSTER_RULES = {
-  starters: { QB: 1, RB: 1, WR: 1, TE: 1, K: 1 },
-  position_limits: { QB: 2, RB: 2, WR: 2, TE: 2, K: 2 },
+  starters: { QB: 1, OFF: 1, FLEX: 1, K: 1, DEF: 1 },
+  position_limits: { QB: 2, OFF: 4, K: 2, DEF: 2 },
   bench: 5,
+  total_drafted: 10,
+  bench_scoring_multiplier: 0.5,
+  treatment_scoring_multiplier: 0.25,
 };
+
+const DEFAULT_POSITION_CONFIG = [
+  { position: "QB", group: "QB", enabled: true },
+  { position: "RB", group: "OFFENSE", enabled: true },
+  { position: "FB", group: "OFFENSE", enabled: true },
+  { position: "WR", group: "OFFENSE", enabled: true },
+  { position: "TE", group: "OFFENSE", enabled: true },
+  { position: "OL", group: "OFFENSE", enabled: false },
+  { position: "C", group: "OFFENSE", enabled: false },
+  { position: "G", group: "OFFENSE", enabled: false },
+  { position: "OT", group: "OFFENSE", enabled: false },
+  { position: "K", group: "K", enabled: true },
+  { position: "P", group: "OFFENSE", enabled: false },
+  { position: "LS", group: "OFFENSE", enabled: false },
+  { position: "DL", group: "DEFENSE", enabled: true },
+  { position: "DE", group: "DEFENSE", enabled: true },
+  { position: "DT", group: "DEFENSE", enabled: true },
+  { position: "NT", group: "DEFENSE", enabled: true },
+  { position: "LB", group: "DEFENSE", enabled: true },
+  { position: "ILB", group: "DEFENSE", enabled: true },
+  { position: "MLB", group: "DEFENSE", enabled: true },
+  { position: "OLB", group: "DEFENSE", enabled: true },
+  { position: "DB", group: "DEFENSE", enabled: true },
+  { position: "CB", group: "DEFENSE", enabled: true },
+  { position: "S", group: "DEFENSE", enabled: true },
+  { position: "SAF", group: "DEFENSE", enabled: true },
+  { position: "FS", group: "DEFENSE", enabled: true },
+];
 
 const DEFAULT_DRAFT_CONFIG = {
   type: "snake",
@@ -281,12 +312,56 @@ function statNumber(stats: Json, key: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json) {
+async function positionConfig(supabase: ReturnType<typeof createClient>) {
+  const { data, error } = await supabase
+    .from("global_settings")
+    .select("value")
+    .eq("key", "POSITION_CONFIG")
+    .maybeSingle();
+  if (error) throw error;
+  return Array.isArray(data?.value) ? data.value as Json[] : DEFAULT_POSITION_CONFIG;
+}
+
+function positionConfigMap(config: Json[] = DEFAULT_POSITION_CONFIG) {
+  return new Map(config.map((item) => [
+    String(item.position || "").toUpperCase(),
+    { group: String(item.group || "").toUpperCase(), enabled: item.enabled !== false },
+  ]));
+}
+
+function configuredPosition(position: string, config: Json[] = DEFAULT_POSITION_CONFIG) {
+  return positionConfigMap(config).get(String(position || "").toUpperCase()) || null;
+}
+
+function scoringCategory(playerPosition: string, config: Json[] = DEFAULT_POSITION_CONFIG) {
+  const position = String(playerPosition || "").toUpperCase();
+  const configured = configuredPosition(position, config);
+  if (position === "QB") return configured?.enabled === false ? "UNUSED" : "OFFENSE";
+  if (position === "K") return configured?.enabled === false ? "UNUSED" : "KICKER";
+  if (!configured?.enabled) return "UNUSED";
+  const group = configured.group;
+  if (group === "DEFENSE") return "DEFENSE";
+  if (group === "OFFENSE") return "OFFENSE";
+  return "UNUSED";
+}
+
+function rosterLimitBucket(playerPosition: string, config: Json[] = DEFAULT_POSITION_CONFIG) {
+  const position = String(playerPosition || "").toUpperCase();
+  const configured = configuredPosition(position, config);
+  if ((position === "QB" || position === "K") && configured?.enabled !== false) return position;
+  if (!configured?.enabled) return "UNUSED";
+  const group = configured.group;
+  if (group === "DEFENSE") return "DEF";
+  if (group === "OFFENSE") return "OFF";
+  return "UNUSED";
+}
+
+function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json, config: Json[] = DEFAULT_POSITION_CONFIG) {
   const r = (category: string, key: string, fallback: number) => scoringRuleNumber(rules, category, key, fallback);
   const n = (key: string) => statNumber(stats, key);
-  const position = String(playerPosition || "").toUpperCase();
+  const category = scoringCategory(playerPosition, config);
 
-  if (position === "K") {
+  if (category === "KICKER") {
     return (
       (n("fg_made_0_19") + n("fg_made_20_29") + n("fg_made_30_39")) * r("KICKER", "fg_0_39", 3) +
       n("fg_made_40_49") * r("KICKER", "fg_40_49", 4) +
@@ -297,7 +372,7 @@ function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json
     );
   }
 
-  if (position === "DEF") {
+  if (category === "DEFENSE") {
     return (
       n("def_tackles_solo") * r("DEFENSE", "solo_tackle", 1.5) +
       n("def_tackle_assists") * r("DEFENSE", "assist_tackle", 0.75) +
@@ -312,6 +387,8 @@ function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json
       (n("def_tds") + n("fumble_recovery_tds") + n("special_teams_tds")) * r("DEFENSE", "touchdown", 6)
     );
   }
+
+  if (category !== "OFFENSE") return 0;
 
   const incompletions = Math.max(n("attempts") - n("completions"), 0);
   return (
@@ -1121,16 +1198,20 @@ async function isDraftEligible(supabase: ReturnType<typeof createClient>, league
 
 async function enforceRosterPositionLimit(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, position: string) {
   const limits = ((league.roster_rules as Json | undefined)?.position_limits || DEFAULT_ROSTER_RULES.position_limits) as Record<string, number>;
-  const normalizedPosition = String(position || "").toUpperCase();
-  const limit = Number(limits[normalizedPosition] || 0);
-  if (limit <= 0) throw new Error(`${normalizedPosition || "This position"} is not draftable in this league.`);
+  const config = await positionConfig(supabase);
+  const bucket = rosterLimitBucket(position, config);
+  const limit = Number(limits[bucket] || 0);
+  if (limit <= 0) throw new Error(`${String(position || "This position").toUpperCase()} is not draftable in this league.`);
   const { data: roster, error } = await supabase
     .from("roster_slots")
-    .select("slot_type")
+    .select("slot_type, players!inner(position)")
     .eq("league_member_id", leagueMemberId);
   if (error) throw error;
-  const currentCount = (roster || []).filter((slot: Json) => String(slot.slot_type || "").toUpperCase() === normalizedPosition).length;
-  if (currentCount >= limit) throw new Error(`Roster already has ${limit} ${normalizedPosition} players.`);
+  const currentCount = (roster || []).filter((slot: Json) => {
+    const player = Array.isArray(slot.players) ? slot.players[0] : slot.players;
+    return rosterLimitBucket(String(player?.position || slot.slot_type || ""), config) === bucket;
+  }).length;
+  if (currentCount >= limit) throw new Error(`Roster already has ${limit} ${bucket} players.`);
 }
 
 async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient>, league: Json) {
@@ -1138,6 +1219,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   if (!leagueId) throw new Error("League is required to calculate player scores.");
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const scoringRules = { ...DEFAULT_SCORING_RULES, ...((league.scoring_rules as Json | undefined) || {}) };
+  const config = await positionConfig(supabase);
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_scores")
@@ -1159,10 +1241,13 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
     const playerId = String(week.player_id || player?.id || "");
     if (!playerId) continue;
     const rawStats = ((week.raw_stats || {}) as Json);
-    const points = calculateFantasyPoints(rawStats, String(player?.position || ""), scoringRules);
+    const playerPosition = String(player?.position || "");
+    const bucket = rosterLimitBucket(playerPosition, config);
+    if (bucket === "UNUSED") continue;
+    const points = calculateFantasyPoints(rawStats, playerPosition, scoringRules, config);
     const current = aggregates.get(playerId) || {
       player_id: playerId,
-      position: String(player?.position || "UNK").toUpperCase(),
+      position: bucket,
       full_name: String(player?.player_display_name || player?.full_name || ""),
       total: 0,
       weeks: 0,
@@ -1637,6 +1722,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
   if (leagueError) throw leagueError;
   const league = normalizeLeaguePlaySettings(rawLeague);
   await ensureLeaguePlayerScores(supabase, league);
+  const config = await positionConfig(supabase);
   const randomization = await ensureWeekRandomization(supabase, league, weekNumber, Number(league.source_season_year || new Date().getFullYear() - 1));
 
   const { data: lineups } = await supabase
@@ -1673,7 +1759,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
         .maybeSingle();
       const player = Array.isArray(playerWeek?.players) ? playerWeek?.players[0] : playerWeek?.players;
       const basePoints = playerWeek
-        ? calculateFantasyPoints((playerWeek.raw_stats || {}) as Json, String(player?.position || ""), (league.scoring_rules || DEFAULT_SCORING_RULES) as Json)
+        ? calculateFantasyPoints((playerWeek.raw_stats || {}) as Json, String(player?.position || ""), (league.scoring_rules || DEFAULT_SCORING_RULES) as Json, config)
         : 0;
       total += applyDurability(basePoints * lineupSlotMultiplier(slot), durabilityByPlayer.get(String(playerId)));
     }

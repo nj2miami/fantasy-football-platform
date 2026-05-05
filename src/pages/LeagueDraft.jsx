@@ -23,8 +23,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
 
 const PAGE_SIZE = 10;
-const POSITION_OPTIONS = ["ALL", "QB", "RB", "WR", "TE", "K"];
-const DEFAULT_ROSTER_NEEDS = { QB: 1, RB: 1, WR: 1, TE: 1, K: 1 };
+const POSITION_OPTIONS = ["ALL", "QB", "OFF", "DEF", "K"];
+const DEFAULT_ROSTER_NEEDS = { QB: 1, OFF: 1, FLEX: 1, K: 1, DEF: 1 };
+const OFFENSE_POSITIONS = new Set(["RB", "FB", "WR", "TE", "OL", "C", "G", "OT", "OFF"]);
+const DEFENSE_POSITIONS = new Set(["DL", "DE", "DT", "NT", "LB", "ILB", "MLB", "OLB", "DB", "CB", "S", "SAF", "FS", "DEF"]);
 
 function formatDateTime(value) {
   if (!value) return "Unscheduled";
@@ -69,11 +71,11 @@ function buildRosterNeeds(league, roster) {
     ? Object.fromEntries(Object.entries(starters).map(([key, value]) => [String(key).toUpperCase(), Number(value || 0)]))
     : DEFAULT_ROSTER_NEEDS;
   const drafted = roster.reduce((counts, slot) => {
-    const position = normalizePlayerPosition(slot.player?.position || slot.slot_type);
+    const position = rosterBucket(slot.player?.position || slot.slot_type);
     counts[position] = (counts[position] || 0) + 1;
     return counts;
   }, {});
-  const offenseDrafted = ["RB", "WR", "TE"].reduce((sum, position) => sum + Number(drafted[position] || 0), 0);
+  const offenseDrafted = Number(drafted.OFF || 0);
   return Object.entries(required)
     .filter(([, needed]) => Number(needed) > 0)
     .map(([position, needed]) => {
@@ -85,9 +87,9 @@ function buildRosterNeeds(league, roster) {
 }
 
 function groupBoardByPosition(board) {
-  const order = ["QB", "RB", "WR", "TE", "K", "DEF", "OFF", "FLEX", "UNK"];
+  const order = ["QB", "OFF", "DEF", "K", "UNK"];
   const groups = board.reduce((acc, item) => {
-    const position = normalizePlayerPosition(item.player?.position);
+    const position = rosterBucket(item.player?.position);
     if (!acc[position]) acc[position] = [];
     acc[position].push(item);
     return acc;
@@ -97,6 +99,14 @@ function groupBoardByPosition(board) {
     const indexB = order.indexOf(b);
     return (indexA === -1 ? order.length : indexA) - (indexB === -1 ? order.length : indexB);
   });
+}
+
+function rosterBucket(position) {
+  const normalized = normalizePlayerPosition(position);
+  if (normalized === "QB" || normalized === "K") return normalized;
+  if (DEFENSE_POSITIONS.has(normalized)) return "DEF";
+  if (OFFENSE_POSITIONS.has(normalized)) return "OFF";
+  return "UNK";
 }
 
 function playPickChime() {
