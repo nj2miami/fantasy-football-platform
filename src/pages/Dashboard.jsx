@@ -73,8 +73,12 @@ export default function Dashboard() {
     enabled: !!user,
   });
 
-  const myLeagueIds = myMemberships.map((m) => m.league_id);
   const activeLeagues = allLeagues.filter((league) => !league.archived_at);
+  const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
+  const activeMemberships = myMemberships.filter((membership) =>
+    membership.is_active !== false && activeLeagueIds.has(membership.league_id)
+  );
+  const myLeagueIds = activeMemberships.map((m) => m.league_id);
   const myLeagues = activeLeagues.filter((l) => myLeagueIds.includes(l.id));
 
   const { data: profiles = [], isLoading: isLoadingProfile } = useQuery({
@@ -91,7 +95,7 @@ export default function Dashboard() {
     user?.full_name?.trim() ||
     "Manager";
   const profileName = userProfile?.profile_name?.trim() || welcomeName;
-  const entitlements = getLeagueEntitlements(user, myMemberships, activeLeagues);
+  const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
   const canCreateLeagues = entitlements.canCreateFreeLeague || entitlements.canCreatePaidLeague;
   const userButtonStyle = userProfile ? {
     backgroundColor: userProfile.theme_primary || "#00D9FF",
@@ -105,7 +109,7 @@ export default function Dashboard() {
 
   // Group leagues by role and add commissioner status
   const leaguesWithRoles = myLeagues.map(league => {
-    const membership = myMemberships.find(m => m.league_id === league.id);
+    const membership = activeMemberships.find(m => m.league_id === league.id);
     const isCommissioner = league.commissioner_email === user?.email;
     
     return {

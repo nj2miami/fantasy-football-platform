@@ -93,10 +93,14 @@ export default function Leagues() {
   });
 
   // Calculate derived states based on fetched data
-  const myLeagueIds = myMemberships.map((m) => m.league_id);
   const activeLeagues = leagues.filter((l) => !l.archived_at);
+  const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
+  const activeMemberships = myMemberships.filter((membership) =>
+    membership.is_active !== false && activeLeagueIds.has(membership.league_id)
+  );
+  const myLeagueIds = activeMemberships.map((m) => m.league_id);
   const publicLeagues = activeLeagues.filter((l) => l.is_public);
-  const entitlements = getLeagueEntitlements(user, myMemberships, leagues);
+  const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
 
   // Wait for initial data to load before rendering the main content
   if (isLoading || isLoadingLeagues) { // Removed isLoadingMemberships and isLoadingUserProfiles from blocking
@@ -155,7 +159,7 @@ export default function Leagues() {
         </div>
         <div className="neo-card bg-[#F7B801] p-6 rotate-[0.3deg]">
           <p className="text-orange-600 mb-1 text-sm font-black uppercase">JOINED</p>
-          <p className="text-4xl font-black">{myMemberships.length}</p>
+          <p className="text-4xl font-black">{activeMemberships.length}</p>
         </div>
       </div>
 

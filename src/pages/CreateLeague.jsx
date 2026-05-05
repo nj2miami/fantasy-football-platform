@@ -97,7 +97,12 @@ export default function CreateLeague() {
     enabled: !!user,
   });
 
-  const entitlements = getLeagueEntitlements(user, myMemberships, allLeagues);
+  const activeLeagues = allLeagues.filter((league) => !league.archived_at);
+  const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
+  const activeMemberships = myMemberships.filter((membership) =>
+    membership.is_active !== false && activeLeagueIds.has(membership.league_id)
+  );
+  const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
   const userProfile = profiles[0];
   const defaultTeamName = `${userProfile?.profile_name || userProfile?.display_name || user?.full_name || "Manager"}'s Team`;
   const canCreateLeagues = entitlements.canCreateFreeLeague || entitlements.canCreatePaidLeague;

@@ -656,6 +656,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
   const { count: createdCount, error: createdCountError } = await supabase
     .from("leagues")
     .select("id", { count: "exact", head: true })
+    .is("archived_at", null)
     .or(`commissioner_id.eq.${user.id},commissioner_email.eq.${user.email}`);
   if (createdCountError) throw createdCountError;
 
@@ -951,11 +952,24 @@ async function archiveLeague(supabase: ReturnType<typeof createClient>, user: { 
 
   const { data, error } = await supabase
     .from("leagues")
-    .update({ archived_at: new Date().toISOString(), archived_by: user.id, archive_reason: payload.archive_reason || "Deleted by commissioner", updated_date: new Date().toISOString() })
+    .update({
+      archived_at: new Date().toISOString(),
+      archived_by: user.id,
+      archive_reason: payload.archive_reason || "Deleted by commissioner",
+      is_sponsored: false,
+      updated_date: new Date().toISOString(),
+    })
     .eq("id", league.id)
     .select("*")
     .single();
   if (error) throw error;
+
+  const { error: memberArchiveError } = await supabase
+    .from("league_members")
+    .update({ is_active: false, updated_date: new Date().toISOString() })
+    .eq("league_id", league.id);
+  if (memberArchiveError) throw memberArchiveError;
+
   return { league: data };
 }
 
@@ -985,6 +999,7 @@ async function forceDeleteLeague(supabase: ReturnType<typeof createClient>, user
       archived_at: nowIso,
       archived_by: user.id,
       archive_reason: payload.archive_reason || "Admin force delete",
+      is_sponsored: false,
       refund_status: refundPending ? "PENDING" : "NOT_REQUIRED",
       refund_required_at: refundPending ? nowIso : null,
       refund_reason: refundPending ? "Admin force delete after paid members joined" : null,
@@ -994,6 +1009,13 @@ async function forceDeleteLeague(supabase: ReturnType<typeof createClient>, user
     .select("*")
     .single();
   if (error) throw error;
+
+  const { error: memberArchiveError } = await supabase
+    .from("league_members")
+    .update({ is_active: false, updated_date: nowIso })
+    .eq("league_id", league.id);
+  if (memberArchiveError) throw memberArchiveError;
+
   return { league: data, refund_pending: refundPending };
 }
 

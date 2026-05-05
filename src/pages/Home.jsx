@@ -98,7 +98,8 @@ const FeaturedLeague = ({ user }) => {
       return <div className="neo-border bg-white/70 h-full min-h-64 animate-pulse" />;
     }
 
-    const league = leagues?.[0];
+    const activeSponsoredLeagues = (leagues || []).filter((item) => !item.archived_at);
+    const league = activeSponsoredLeagues[0];
     if (!league) {
       return (
         <div className="neo-border bg-white p-6 h-full flex flex-col justify-center">
@@ -122,8 +123,9 @@ const SponsoredLeagues = () => {
         queryFn: () => appClient.entities.League.filter({ is_sponsored: true }),
     });
 
-    if (isLoading || !leagues || leagues.length <= 1) return null;
-    const remainingLeagues = leagues.slice(1);
+    const activeSponsoredLeagues = (leagues || []).filter((item) => !item.archived_at);
+    if (isLoading || activeSponsoredLeagues.length <= 1) return null;
+    const remainingLeagues = activeSponsoredLeagues.slice(1);
     return (
         <div className="my-12">
             <h2 className="text-3xl font-black uppercase text-center mb-6">More Featured Leagues</h2>
