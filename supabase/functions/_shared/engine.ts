@@ -61,6 +61,7 @@ const DEFAULT_ROSTER_RULES = {
 
 const DEFAULT_POSITION_CONFIG = [
   { position: "QB", group: "QB", enabled: true },
+  { position: "OFF", group: "OFFENSE", enabled: true },
   { position: "RB", group: "OFFENSE", enabled: true },
   { position: "FB", group: "OFFENSE", enabled: true },
   { position: "WR", group: "OFFENSE", enabled: true },
@@ -72,6 +73,9 @@ const DEFAULT_POSITION_CONFIG = [
   { position: "K", group: "K", enabled: true },
   { position: "P", group: "OFFENSE", enabled: false },
   { position: "LS", group: "OFFENSE", enabled: false },
+  { position: "DEF", group: "DEFENSE", enabled: true },
+  { position: "DST", group: "DEFENSE", enabled: true },
+  { position: "D/ST", group: "DEFENSE", enabled: true },
   { position: "DL", group: "DEFENSE", enabled: true },
   { position: "DE", group: "DEFENSE", enabled: true },
   { position: "DT", group: "DEFENSE", enabled: true },
@@ -346,7 +350,16 @@ async function positionConfig(supabase: ReturnType<typeof createClient>) {
     .eq("key", "POSITION_CONFIG")
     .maybeSingle();
   if (error) throw error;
-  return Array.isArray(data?.value) ? data.value as Json[] : DEFAULT_POSITION_CONFIG;
+  if (!Array.isArray(data?.value)) return DEFAULT_POSITION_CONFIG;
+  const configured = new Map((data.value as Json[]).map((item) => [
+    String(item.position || "").toUpperCase(),
+    item,
+  ]));
+  const defaultPositions = new Set(DEFAULT_POSITION_CONFIG.map((item) => item.position));
+  return DEFAULT_POSITION_CONFIG.map((item) => ({
+    ...item,
+    ...(configured.get(item.position) || {}),
+  })).concat((data.value as Json[]).filter((item) => !defaultPositions.has(String(item.position || "").toUpperCase())));
 }
 
 function positionConfigMap(config: Json[] = DEFAULT_POSITION_CONFIG) {
@@ -365,6 +378,8 @@ function scoringCategory(playerPosition: string, config: Json[] = DEFAULT_POSITI
   const configured = configuredPosition(position, config);
   if (position === "QB") return configured?.enabled === false ? "UNUSED" : "OFFENSE";
   if (position === "K") return configured?.enabled === false ? "UNUSED" : "KICKER";
+  if (position === "OFF") return configured?.enabled === false ? "UNUSED" : "OFFENSE";
+  if (position === "DEF" || position === "DST" || position === "D/ST") return configured?.enabled === false ? "UNUSED" : "DEFENSE";
   if (!configured?.enabled) return "UNUSED";
   const group = configured.group;
   if (group === "DEFENSE") return "DEFENSE";
@@ -376,6 +391,8 @@ function rosterLimitBucket(playerPosition: string, config: Json[] = DEFAULT_POSI
   const position = String(playerPosition || "").toUpperCase();
   const configured = configuredPosition(position, config);
   if ((position === "QB" || position === "K") && configured?.enabled !== false) return position;
+  if (position === "OFF" && configured?.enabled !== false) return "OFF";
+  if ((position === "DEF" || position === "DST" || position === "D/ST") && configured?.enabled !== false) return "DEF";
   if (!configured?.enabled) return "UNUSED";
   const group = configured.group;
   if (group === "DEFENSE") return "DEF";

@@ -11,6 +11,7 @@ import { Save, Plus, Trash2 } from "lucide-react";
 
 const DEFAULT_POSITION_CONFIG = [
   { position: "QB", group: "QB", enabled: true },
+  { position: "OFF", group: "OFFENSE", enabled: true },
   { position: "RB", group: "OFFENSE", enabled: true },
   { position: "FB", group: "OFFENSE", enabled: true },
   { position: "WR", group: "OFFENSE", enabled: true },
@@ -22,6 +23,9 @@ const DEFAULT_POSITION_CONFIG = [
   { position: "K", group: "K", enabled: true },
   { position: "P", group: "OFFENSE", enabled: false },
   { position: "LS", group: "OFFENSE", enabled: false },
+  { position: "DEF", group: "DEFENSE", enabled: true },
+  { position: "DST", group: "DEFENSE", enabled: true },
+  { position: "D/ST", group: "DEFENSE", enabled: true },
   { position: "DL", group: "DEFENSE", enabled: true },
   { position: "DE", group: "DEFENSE", enabled: true },
   { position: "DT", group: "DEFENSE", enabled: true },
@@ -54,7 +58,13 @@ export default function RosterSettings() {
 
   useEffect(() => {
     if (positionSetting?.value) {
-      setPositionConfig(positionSetting.value);
+      const savedConfig = Array.isArray(positionSetting.value) ? positionSetting.value : [];
+      const savedByPosition = new Map(savedConfig.map((item) => [String(item.position || "").toUpperCase(), item]));
+      const defaultPositions = new Set(DEFAULT_POSITION_CONFIG.map((item) => item.position));
+      setPositionConfig([
+        ...DEFAULT_POSITION_CONFIG.map((item) => ({ ...item, ...(savedByPosition.get(item.position) || {}) })),
+        ...savedConfig.filter((item) => !defaultPositions.has(String(item.position || "").toUpperCase())),
+      ]);
     }
   }, [positionSetting]);
 

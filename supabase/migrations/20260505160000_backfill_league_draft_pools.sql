@@ -1,15 +1,17 @@
-with position_config as (
+with default_position_config as (
   select *
   from jsonb_to_recordset(
-    coalesce(
-      (select value from public.global_settings where key = 'POSITION_CONFIG'),
-      '[
+    '[
         {"position":"QB","group":"QB","enabled":true},
+        {"position":"OFF","group":"OFFENSE","enabled":true},
         {"position":"RB","group":"OFFENSE","enabled":true},
         {"position":"FB","group":"OFFENSE","enabled":true},
         {"position":"WR","group":"OFFENSE","enabled":true},
         {"position":"TE","group":"OFFENSE","enabled":true},
         {"position":"K","group":"K","enabled":true},
+        {"position":"DEF","group":"DEFENSE","enabled":true},
+        {"position":"DST","group":"DEFENSE","enabled":true},
+        {"position":"D/ST","group":"DEFENSE","enabled":true},
         {"position":"DL","group":"DEFENSE","enabled":true},
         {"position":"DE","group":"DEFENSE","enabled":true},
         {"position":"DT","group":"DEFENSE","enabled":true},
@@ -24,8 +26,22 @@ with position_config as (
         {"position":"SAF","group":"DEFENSE","enabled":true},
         {"position":"FS","group":"DEFENSE","enabled":true}
       ]'::jsonb
-    )
   ) as config(position text, "group" text, enabled boolean)
+),
+saved_position_config as (
+  select *
+  from jsonb_to_recordset(
+    coalesce((select value from public.global_settings where key = 'POSITION_CONFIG'), '[]'::jsonb)
+  ) as config(position text, "group" text, enabled boolean)
+),
+position_config as (
+  select distinct on (upper(position)) position, "group", enabled
+  from (
+    select position, "group", enabled, 0 as priority from saved_position_config
+    union all
+    select position, "group", enabled, 1 as priority from default_position_config
+  ) merged
+  order by upper(position), priority
 ),
 ranked_players as (
   select
@@ -35,6 +51,8 @@ ranked_players as (
     case
       when upper(p.position) = 'QB' then 'QB'
       when upper(p.position) = 'K' then 'K'
+      when upper(p.position) = 'OFF' then 'OFF'
+      when upper(p.position) in ('DEF', 'DST', 'D/ST') then 'DEF'
       when upper(pc."group") = 'DEFENSE' then 'DEF'
       when upper(pc."group") = 'OFFENSE' then 'OFF'
       else null
@@ -46,6 +64,8 @@ ranked_players as (
         case
           when upper(p.position) = 'QB' then 'QB'
           when upper(p.position) = 'K' then 'K'
+          when upper(p.position) = 'OFF' then 'OFF'
+          when upper(p.position) in ('DEF', 'DST', 'D/ST') then 'DEF'
           when upper(pc."group") = 'DEFENSE' then 'DEF'
           when upper(pc."group") = 'OFFENSE' then 'OFF'
           else null
