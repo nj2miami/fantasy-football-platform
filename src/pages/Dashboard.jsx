@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_ROSTER_RULES, DEFAULT_SCORING_RULES } from "@/api/appClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
@@ -15,19 +15,10 @@ const EMPTY_PROFILE_SRC = "/assets/Empty_Profile.jpg";
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [user, setUser] = useState(null);
-
-  useEffect(() => {
-    const loadUser = async () => {
-      try {
-        const currentUser = await appClient.auth.me();
-        setUser(currentUser);
-      } catch (error) {
-        console.error("Error loading user:", error);
-      }
-    };
-    loadUser();
-  }, []);
+  const { data: user, isLoading: isLoadingUser } = useQuery({
+    queryKey: ["auth-route-user"],
+    queryFn: () => appClient.auth.me(),
+  });
 
   const createAILeagueJob = useMutation({
     mutationFn: async () => {
@@ -78,14 +69,15 @@ export default function Dashboard() {
 
   const { data: allLeagues = [] } = useQuery({
     queryKey: ['all-leagues'],
-    queryFn: () => appClient.entities.League.list()
+    queryFn: () => appClient.entities.League.list(),
+    enabled: !!user,
   });
 
   const myLeagueIds = myMemberships.map((m) => m.league_id);
   const activeLeagues = allLeagues.filter((league) => !league.archived_at);
   const myLeagues = activeLeagues.filter((l) => myLeagueIds.includes(l.id));
 
-  const { data: profiles = [] } = useQuery({
+  const { data: profiles = [], isLoading: isLoadingProfile } = useQuery({
     queryKey: ["dashboard-profile", user?.email],
     queryFn: () => user ? appClient.entities.UserProfile.filter({ user_email: user.email }) : [],
     enabled: !!user,
@@ -122,6 +114,14 @@ export default function Dashboard() {
       role: membership?.role_in_league
     };
   });
+
+  if (isLoadingUser || isLoadingProfile) {
+    return (
+      <div className="text-slate-900 mx-auto px-4 max-w-7xl sm:px-6 lg:px-8">
+        <div className="neo-card bg-white p-8 font-black uppercase text-center">Loading Dashboard...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="text-slate-900 mx-auto px-4 max-w-7xl sm:px-6 lg:px-8">
