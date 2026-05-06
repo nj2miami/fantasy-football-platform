@@ -1,28 +1,37 @@
 import { supabase } from "@/lib/supabase";
-import { mapSupabaseError } from "@/api/supabaseCore";
 
-async function mapFunctionError(error) {
-  const response = error?.context;
-  if (response && typeof response.clone === "function") {
-    try {
-      const body = await response.clone().json();
-      if (body?.error) return new Error(body.error);
-      if (body?.message) return new Error(body.message);
-    } catch {
-      try {
-        const text = await response.clone().text();
-        if (text) return new Error(text);
-      } catch {
-        // Fall through to the Supabase error mapper.
-      }
-    }
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+async function parseFunctionResponse(response) {
+  const contentType = response.headers.get("Content-Type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
   }
-  return mapSupabaseError(error);
+  return response.text();
+}
+
+function functionErrorMessage(body, status) {
+  if (body && typeof body === "object") {
+    return body.error || body.message || `Edge Function failed with status ${status}`;
+  }
+  return body || `Edge Function failed with status ${status}`;
 }
 
 export async function invokeFunction(name, payload = {}) {
-  const { data, error } = await supabase.functions.invoke(name, { body: payload });
-  if (error) throw await mapFunctionError(error);
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
+  const response = await fetch(`${supabaseUrl}/functions/v1/${name}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken || supabaseAnonKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseFunctionResponse(response);
+  if (!response.ok) throw new Error(functionErrorMessage(data, response.status));
   if (data?.error) throw new Error(data.error);
   return data;
 }
