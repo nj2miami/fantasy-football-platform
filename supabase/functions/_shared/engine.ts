@@ -970,17 +970,6 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
     league_id: league.id,
     league_member_id: member.id,
   });
-  const normalizedLeague = normalizeLeaguePlaySettings(league);
-  try {
-    await ensureLeaguePlayerScores(supabase, normalizedLeague);
-    await ensureLeagueDurability(supabase, normalizedLeague);
-  } catch (error) {
-    await supabase.from("standings").delete().eq("league_id", league.id);
-    await supabase.from("league_members").delete().eq("league_id", league.id);
-    await supabase.from("leagues").delete().eq("id", league.id);
-    throw error;
-  }
-
   if (isPaidLeague && role === "manager") {
     await supabase
       .from("profiles")
