@@ -156,7 +156,7 @@ export default function CreateLeague() {
         commissioner_email: user.email,
         team_name: defaultTeamName,
       });
-      return response.data.league;
+      return response.league;
     },
     onSuccess: (league) => {
       toast.success("League created successfully!");
@@ -403,7 +403,7 @@ export default function CreateLeague() {
               <p className="font-black uppercase">Randomization</p>
             </div>
             <p className="text-sm font-bold text-white/80">
-              Each fantasy week uses per-player hidden real NFL weeks. Managers never know the source weeks before reveal.
+              Each fantasy week uses hidden real NFL weeks assigned per NFL team. Managers never know the source weeks before reveal.
             </p>
           </div>
           <div className="neo-border p-4 bg-white">
