@@ -139,6 +139,7 @@ const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
 const MIN_DRAFT_STAT_WEEKS = 12;
 const TEAM_HIDDEN_WEEK_ASSIGNMENT = "per_nfl_team_hidden_week";
 const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v2";
+const DRAFT_POOL_CHUNK_SIZE = 200;
 
 const DEFAULT_SCHEDULE_CONFIG = {
   type: "interval",
@@ -1669,8 +1670,25 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   }
 }
 
-async function ensureLeagueDurability(supabase: ReturnType<typeof createClient>, league: Json) {
-  await ensureLeaguePlayerScores(supabase, league);
+async function existingLeaguePlayerScoresComplete(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string) {
+  const { data: existing, error } = await supabase
+    .from("league_player_scores")
+    .select("id,position,weeks_played,scoring_rules_hash,players!inner(team)")
+    .eq("league_id", league.id)
+    .lte("position_rank", 30);
+  if (error) throw error;
+  const rows = existing || [];
+  if (!rows.length) return false;
+  const hashMatches = rows.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
+  const weeksEligible = rows.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
+  const teamsEligible = rows.every((row: Json) => {
+    const player = Array.isArray(row.players) ? row.players[0] : row.players;
+    return Boolean(normalizeTeam(player?.team));
+  });
+  return hashMatches && weeksEligible && teamsEligible && hasCompleteDraftBuckets(rows);
+}
+
+async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient>, league: Json) {
   if (!durabilityEnabled(league)) {
     const { error } = await supabase.from("league_player_durability").delete().eq("league_id", league.id);
     if (error) throw error;
@@ -1716,6 +1734,277 @@ async function ensureLeagueDurability(supabase: ReturnType<typeof createClient>,
     const { error } = await supabase.from("league_player_durability").insert(rows);
     if (error) throw error;
   }
+}
+
+async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, totalPlayers: number) {
+  await supabase.from("league_player_scores").delete().eq("league_id", league.id);
+  await supabase.from("league_player_durability").delete().eq("league_id", league.id);
+  await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
+  const { data, error } = await supabase
+    .from("league_draft_pool_jobs")
+    .upsert({
+      league_id: league.id,
+      status: "RUNNING",
+      progress: 1,
+      processed_players: 0,
+      total_players: totalPlayers,
+      scoring_rules_hash: scoringRulesHash,
+      error_details: null,
+      summary: "Preparing league draft pool.",
+    }, { onConflict: "league_id" })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string) {
+  const { count, error: countError } = await supabase
+    .from("players")
+    .select("id", { count: "exact", head: true });
+  if (countError) throw countError;
+  const totalPlayers = count || 0;
+
+  const { data: job, error } = await supabase
+    .from("league_draft_pool_jobs")
+    .select("*")
+    .eq("league_id", league.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (
+    !job ||
+    job.scoring_rules_hash !== scoringRulesHash ||
+    !["PENDING", "RUNNING"].includes(String(job.status || "").toUpperCase())
+  ) {
+    return resetLeagueDraftPoolJob(supabase, league, scoringRulesHash, totalPlayers);
+  }
+  if (Number(job.total_players || 0) !== totalPlayers) {
+    const { data: updatedJob, error: updateError } = await supabase
+      .from("league_draft_pool_jobs")
+      .update({ total_players: totalPlayers, updated_date: new Date().toISOString() })
+      .eq("id", job.id)
+      .select("*")
+      .single();
+    if (updateError) throw updateError;
+    return updatedJob;
+  }
+  return job;
+}
+
+async function processDraftPoolPlayerChunk(supabase: ReturnType<typeof createClient>, league: Json, job: Json, scoringRules: Json, scoringRulesHash: string, config: Json[]) {
+  const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  const start = Number(job.processed_players || 0);
+  const end = start + DRAFT_POOL_CHUNK_SIZE - 1;
+  const { data: players, error: playersError } = await supabase
+    .from("players")
+    .select("id,position,team,full_name,player_display_name")
+    .order("id", { ascending: true })
+    .range(start, end);
+  if (playersError) throw playersError;
+  const playerRows = players || [];
+  const playerById = new Map(playerRows.map((player: Json) => [String(player.id), player]));
+  const candidatePlayerIds = playerRows
+    .filter((player: Json) => normalizeTeam(player.team))
+    .filter((player: Json) => rosterLimitBucket(String(player.position || ""), config) !== "UNUSED")
+    .map((player: Json) => player.id);
+
+  const aggregates = new Map<string, { player_id: string; position: string; total: number; weeks: number }>();
+  if (candidatePlayerIds.length) {
+    const { data: weeks, error: weeksError } = await supabase
+      .from("player_week_stats")
+      .select("player_id,raw_stats")
+      .eq("season_year", sourceSeasonYear)
+      .in("player_id", candidatePlayerIds);
+    if (weeksError) throw weeksError;
+    for (const week of weeks || []) {
+      const player = playerById.get(String(week.player_id));
+      if (!player) continue;
+      const rawStats = ((week.raw_stats || {}) as Json);
+      const playerPosition = String(player.position || "");
+      if (!hasActualStatWeek(rawStats, playerPosition, config)) continue;
+      const bucket = rosterLimitBucket(playerPosition, config);
+      if (bucket === "UNUSED") continue;
+      const points = calculateFantasyPoints(rawStats, playerPosition, scoringRules, config);
+      const current = aggregates.get(String(week.player_id)) || {
+        player_id: String(week.player_id),
+        position: bucket,
+        total: 0,
+        weeks: 0,
+      };
+      current.total += Number(points || 0);
+      current.weeks += 1;
+      aggregates.set(String(week.player_id), current);
+    }
+  }
+
+  const candidateRows = [...aggregates.values()]
+    .filter((aggregate) => aggregate.weeks >= MIN_DRAFT_STAT_WEEKS)
+    .map((aggregate) => ({
+      league_id: league.id,
+      player_id: aggregate.player_id,
+      source_season_year: sourceSeasonYear,
+      position: aggregate.position,
+      total_points: Number(aggregate.total.toFixed(4)),
+      expected_avg_points: Number((aggregate.total / aggregate.weeks).toFixed(4)),
+      weeks_played: aggregate.weeks,
+      scoring_rules_hash: scoringRulesHash,
+    }));
+  if (candidateRows.length) {
+    const { error: upsertError } = await supabase
+      .from("league_draft_pool_candidates")
+      .upsert(candidateRows, { onConflict: "league_id,player_id" });
+    if (upsertError) throw upsertError;
+  }
+
+  const processedPlayers = Math.min(Number(job.total_players || 0), start + playerRows.length);
+  const progress = Number(job.total_players || 0)
+    ? Math.min(95, Math.max(1, Math.round((processedPlayers / Number(job.total_players || 1)) * 90)))
+    : 95;
+  const { data: updatedJob, error: updateError } = await supabase
+    .from("league_draft_pool_jobs")
+    .update({
+      status: "RUNNING",
+      progress,
+      processed_players: processedPlayers,
+      summary: `Processed ${processedPlayers} of ${Number(job.total_players || 0)} players.`,
+      updated_date: new Date().toISOString(),
+    })
+    .eq("id", job.id)
+    .select("*")
+    .single();
+  if (updateError) throw updateError;
+  return updatedJob;
+}
+
+async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, job: Json, scoringRulesHash: string) {
+  const { data: candidates, error } = await supabase
+    .from("league_draft_pool_candidates")
+    .select("player_id,position,total_points,expected_avg_points,weeks_played")
+    .eq("league_id", league.id)
+    .eq("scoring_rules_hash", scoringRulesHash);
+  if (error) throw error;
+
+  const byPosition = new Map<string, Json[]>();
+  for (const candidate of candidates || []) {
+    const position = String(candidate.position || "").toUpperCase();
+    const rows = byPosition.get(position) || [];
+    rows.push(candidate);
+    byPosition.set(position, rows);
+  }
+
+  const rows: Json[] = [];
+  for (const [position, players] of byPosition.entries()) {
+    players
+      .sort((a, b) =>
+        Number(b.total_points || 0) - Number(a.total_points || 0) ||
+        Number(b.expected_avg_points || 0) - Number(a.expected_avg_points || 0)
+      )
+      .slice(0, 30)
+      .forEach((player, index) => {
+        const positionRank = index + 1;
+        rows.push({
+          league_id: league.id,
+          player_id: player.player_id,
+          source_season_year: Number(league.source_season_year || new Date().getFullYear() - 1),
+          position,
+          position_rank: positionRank,
+          tier_value: playerTierForRank(positionRank),
+          expected_avg_points: Number(Number(player.expected_avg_points || 0).toFixed(4)),
+          total_points: Number(Number(player.total_points || 0).toFixed(4)),
+          weeks_played: Number(player.weeks_played || 0),
+          scoring_rules_hash: scoringRulesHash,
+        });
+      });
+  }
+
+  assertCompleteDraftPool(rows);
+  await supabase.from("league_player_scores").delete().eq("league_id", league.id);
+  const { error: upsertError } = await supabase
+    .from("league_player_scores")
+    .upsert(rows, { onConflict: "league_id,player_id" });
+  if (upsertError) throw upsertError;
+  await syncLeagueDurabilityRows(supabase, league);
+  await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
+
+  const counts = draftBucketCounts(rows);
+  const { data: completedJob, error: updateError } = await supabase
+    .from("league_draft_pool_jobs")
+    .update({
+      status: "COMPLETED",
+      progress: 100,
+      summary: `Draft pool ready: ${rows.length} players.`,
+      error_details: null,
+      updated_date: new Date().toISOString(),
+    })
+    .eq("id", job.id)
+    .select("*")
+    .single();
+  if (updateError) throw updateError;
+  return { job: completedJob, buckets: counts, eligible_count: rows.length };
+}
+
+async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json) {
+  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
+  const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
+  if (await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
+    await syncLeagueDurabilityRows(supabase, league);
+    const { data: rows, count, error } = await supabase
+      .from("league_player_scores")
+      .select("id,position", { count: "exact" })
+      .eq("league_id", league.id)
+      .lte("position_rank", 30);
+    if (error) throw error;
+    return {
+      league_id: league.id,
+      status: "COMPLETED",
+      complete: true,
+      progress: 100,
+      eligible_count: count || 0,
+      buckets: draftBucketCounts(rows || []),
+    };
+  }
+
+  const config = await positionConfig(supabase);
+  const job = await loadOrCreateDraftPoolJob(supabase, league, scoringRulesHash);
+  try {
+    const processedJob = await processDraftPoolPlayerChunk(supabase, league, job, scoringRules, scoringRulesHash, config);
+    if (Number(processedJob.processed_players || 0) >= Number(processedJob.total_players || 0)) {
+      const finalized = await finalizeLeagueDraftPoolJob(supabase, league, processedJob, scoringRulesHash);
+      return {
+        league_id: league.id,
+        status: "COMPLETED",
+        complete: true,
+        progress: 100,
+        ...finalized,
+      };
+    }
+    return {
+      league_id: league.id,
+      status: "RUNNING",
+      complete: false,
+      progress: Number(processedJob.progress || 1),
+      processed_players: Number(processedJob.processed_players || 0),
+      total_players: Number(processedJob.total_players || 0),
+      summary: processedJob.summary || "Preparing league draft pool.",
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await supabase
+      .from("league_draft_pool_jobs")
+      .update({
+        status: "FAILED",
+        error_details: message,
+        summary: "Draft pool preparation failed.",
+        updated_date: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    throw error;
+  }
+}
+
+async function ensureLeagueDurability(supabase: ReturnType<typeof createClient>, league: Json) {
+  await ensureLeaguePlayerScores(supabase, league);
+  await syncLeagueDurabilityRows(supabase, league);
 }
 
 async function getPlayerTierValue(supabase: ReturnType<typeof createClient>, league: Json, playerId: string) {
@@ -1806,8 +2095,12 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
   if (draft.status === "OPEN") return { draft };
   const start = draft.start ? new Date(draft.start) : null;
   if (!start || Date.now() < start.getTime()) throw new Error("Draft cannot start before its scheduled time");
-  await ensureLeaguePlayerScores(supabase, league);
-  await ensureLeagueDurability(supabase, league);
+  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
+  const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
+  if (!(await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash))) {
+    throw new Error("Draft pool is still preparing. Wait for the Eligible Players panel to finish before starting the draft.");
+  }
+  await syncLeagueDurabilityRows(supabase, league);
 
   const { data: members, error: memberError } = await supabase
     .from("league_members")
@@ -1873,15 +2166,7 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
 async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league: rawLeague } = await requireLeagueAccess(supabase, user, payload.league_id);
   const league = normalizeLeaguePlaySettings(rawLeague);
-  await ensureLeaguePlayerScores(supabase, league);
-  await ensureLeagueDurability(supabase, league);
-  const { data: rows, count, error } = await supabase
-    .from("league_player_scores")
-    .select("id,position", { count: "exact" })
-    .eq("league_id", league.id)
-    .lte("position_rank", 30);
-  if (error) throw error;
-  return { league_id: league.id, eligible_count: count || 0, buckets: draftBucketCounts(rows || []) };
+  return processLeagueDraftPoolJob(supabase, league);
 }
 
 async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, league: Json, draftId: string, memberId?: string) {

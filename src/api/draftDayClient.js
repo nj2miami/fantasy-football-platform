@@ -229,7 +229,16 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
     durabilityEnabled(league) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
   ]);
   if (shouldPrepareDraftPool(tiers, position)) {
-    await functions.prepareDraftPool({ league_id: leagueId });
+    const preparation = await functions.prepareDraftPool({ league_id: leagueId });
+    if (!preparation?.complete) {
+      return {
+        data: [],
+        hasMore: false,
+        totalCount: 0,
+        preparing: true,
+        preparation,
+      };
+    }
     [tiers, tierRangeRows, durabilityRows] = await Promise.all([
       entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
       entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),

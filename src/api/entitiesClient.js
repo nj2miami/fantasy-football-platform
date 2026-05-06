@@ -36,6 +36,7 @@ export const entityTableMap = {
   SeasonScoringRule: "season_scoring_rules",
   LeaguePlayerDraftTier: "league_player_draft_tiers",
   LeaguePlayerTierRange: "league_player_tier_ranges",
+  LeagueDraftPoolJob: "league_draft_pool_jobs",
   LeaguePlayerDurability: "league_player_durability",
   LeagueAuditEvent: "league_audit_events",
   LeagueAuditFeedback: "league_audit_feedback",

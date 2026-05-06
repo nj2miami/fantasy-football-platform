@@ -330,7 +330,7 @@ export default function LeagueDraft() {
     }),
     enabled: !!leagueId && !!currentMember,
     keepPreviousData: true,
-    refetchInterval: isOpen ? 10000 : false,
+    refetchInterval: (query) => query.state.data?.preparing ? 1500 : isOpen ? 10000 : false,
   });
 
   React.useEffect(() => {
@@ -456,6 +456,7 @@ export default function LeagueDraft() {
   const boardGroups = groupBoardByPosition(board);
   const rosterNeeds = buildRosterNeeds(state.league, roster);
   const eligiblePlayers = eligibleResult.data || [];
+  const draftPoolPreparation = eligibleResult.preparation || null;
   const commissioner = state.commissionerProfile;
   const commissionerName = commissioner?.display_name || commissioner?.profile_name || "Commissioner";
   const commissionerProfileUrl = commissioner?.profile_name ? createPageUrl(`Profile?name=${encodeURIComponent(commissioner.profile_name)}`) : null;
@@ -482,8 +483,8 @@ export default function LeagueDraft() {
           <Button className="neo-btn bg-black text-white"><ArrowLeft className="mr-2 h-5 w-5" />Back to League</Button>
         </Link>
         {isCommissioner && (
-          <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending} className="neo-btn bg-[#F7B801] text-black">
-            <Play className="mr-2 h-5 w-5" />Start Draft
+          <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending || eligibleResult.preparing} className="neo-btn bg-[#F7B801] text-black">
+            <Play className="mr-2 h-5 w-5" />{eligibleResult.preparing ? "Preparing Pool" : "Start Draft"}
           </Button>
         )}
       </div>
@@ -661,7 +662,24 @@ export default function LeagueDraft() {
               ))}
               {!eligiblePlayers.length && (
                 <div className="neo-border bg-gray-50 p-6 text-center font-bold text-gray-500">
-                  {isEligibleFetching ? "Loading players..." : isEligibleError ? eligibleError?.message || "Unable to load eligible players." : "No eligible players found."}
+                  {draftPoolPreparation ? (
+                    <div>
+                      <p className="text-lg font-black uppercase text-orange-600">Preparing Draft Pool</p>
+                      <p className="mt-2 text-sm font-bold text-gray-600">
+                        {draftPoolPreparation.summary || "Building this league's eligible player list from the scoring rules."}
+                      </p>
+                      <div className="neo-border mt-4 h-4 overflow-hidden bg-white">
+                        <div
+                          className="h-full bg-[#00D9FF]"
+                          style={{ width: `${Math.max(1, Math.min(100, Number(draftPoolPreparation.progress || 1)))}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs font-black uppercase text-gray-500">
+                        {Number(draftPoolPreparation.progress || 1)}%
+                        {draftPoolPreparation.total_players ? ` | ${draftPoolPreparation.processed_players || 0}/${draftPoolPreparation.total_players} players checked` : ""}
+                      </p>
+                    </div>
+                  ) : isEligibleFetching ? "Loading players..." : isEligibleError ? eligibleError?.message || "Unable to load eligible players." : "No eligible players found."}
                 </div>
               )}
             </div>
