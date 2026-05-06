@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -10,21 +9,6 @@ export default defineConfig({
   },
   plugins: [
     react(),
-    VitePWA({
-      registerType: 'prompt',
-      workbox: {
-        cleanupOutdatedCaches: true,
-      },
-      manifest: {
-        name: 'Offseason Fantasy Football',
-        short_name: 'Offseason FF',
-        description: 'A mobile-friendly fantasy football platform built around hidden randomized historical NFL weeks.',
-        theme_color: '#ff6b35',
-        background_color: '#fafaf9',
-        display: 'standalone',
-        start_url: '/',
-      },
-    }),
   ],
   server: {
     allowedHosts: true

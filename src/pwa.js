@@ -1,12 +1,12 @@
-import { registerSW } from "virtual:pwa-register";
-
 export function registerPwa() {
-  if (!("serviceWorker" in navigator)) return;
-  registerSW({
-    immediate: true,
-    onRegisteredSW(_swUrl, registration) {
-      registration?.update();
-      window.setInterval(() => registration?.update(), 60 * 60 * 1000);
-    },
-  });
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .catch(() => {});
+  }
+  if ("caches" in window) {
+    caches.keys()
+      .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+      .catch(() => {});
+  }
 }
