@@ -1946,6 +1946,15 @@ async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClie
 async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json) {
   const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
   const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
+  const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  const { count: sourceWeekCount, error: sourceWeekError } = await supabase
+    .from("player_week_stats")
+    .select("id", { count: "exact", head: true })
+    .eq("season_year", sourceSeasonYear);
+  if (sourceWeekError) throw sourceWeekError;
+  if (!sourceWeekCount) {
+    throw new Error(`No imported player week stats were found for source season ${sourceSeasonYear}. Choose a season with imported data or import that season before preparing the draft pool.`);
+  }
   if (await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
     await syncLeagueDurabilityRows(supabase, league);
     const { data: rows, count, error } = await supabase

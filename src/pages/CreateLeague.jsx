@@ -97,6 +97,21 @@ export default function CreateLeague() {
     enabled: !!user,
   });
 
+  const { data: latestSourceSeasonYear } = useQuery({
+    queryKey: ["latest-source-season-year"],
+    queryFn: () => appClient.playerStats.latestSourceSeasonYear(),
+    enabled: !!user,
+  });
+
+  useEffect(() => {
+    const calendarFallbackYear = new Date().getFullYear() - 1;
+    if (!latestSourceSeasonYear || formData.source_season_year !== calendarFallbackYear) return;
+    setFormData((current) => ({
+      ...current,
+      source_season_year: latestSourceSeasonYear,
+    }));
+  }, [formData.source_season_year, latestSourceSeasonYear]);
+
   const activeLeagues = allLeagues.filter((league) => !league.archived_at);
   const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
   const activeMemberships = myMemberships.filter((membership) =>

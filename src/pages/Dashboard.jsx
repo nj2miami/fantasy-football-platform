@@ -19,6 +19,11 @@ export default function Dashboard() {
     queryKey: ["auth-route-user"],
     queryFn: () => appClient.auth.me(),
   });
+  const { data: latestSourceSeasonYear } = useQuery({
+    queryKey: ["latest-source-season-year"],
+    queryFn: () => appClient.playerStats.latestSourceSeasonYear(),
+    enabled: !!user,
+  });
 
   const createAILeagueJob = useMutation({
     mutationFn: async () => {
@@ -39,7 +44,7 @@ export default function Dashboard() {
         max_members: 8,
         join_fee_cents: 0,
         join_fee_currency: "usd",
-        source_season_year: new Date().getFullYear() - 1,
+        source_season_year: latestSourceSeasonYear || new Date().getFullYear() - 1,
         scoring_rules: DEFAULT_SCORING_RULES,
         roster_rules: DEFAULT_ROSTER_RULES,
         draft_config: DEFAULT_DRAFT_CONFIG,
