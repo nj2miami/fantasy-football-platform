@@ -2,10 +2,10 @@ import { BadgeCheck, ClipboardList, HeartPulse, Lock } from "lucide-react";
 
 const DRAFT_GROUPS = [
   { label: "Quarterback", value: "2 QB" },
-  { label: "Kicker", value: "2 K" },
+  { label: "Kicker", value: "1 K" },
   { label: "Defense", value: "2 DEF" },
   { label: "Offense", value: "2 OFF" },
-  { label: "Flex", value: "2 FLEX" },
+  { label: "Flex", value: "3 FLEX" },
 ];
 
 const STARTER_SLOTS = [
@@ -43,7 +43,7 @@ export default function LeagueRosterSettings() {
         <div>
           <p className="font-black uppercase">Draft Roster</p>
           <p className="text-sm font-bold text-gray-700">
-            Each team drafts 10 total players: 2 from each roster group.
+            Each team drafts 10 total players: 2 QB, 1 K, 2 DEF, 2 OFF, and 3 Flex players from Offense or Defense.
           </p>
         </div>
       </div>

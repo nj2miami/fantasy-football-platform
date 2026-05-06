@@ -6,7 +6,6 @@ import { normalizePosition } from "@/api/supabaseCore";
 
 const DRAFT_POSITION_ORDER = ["QB", "OFF", "DEF", "K"];
 const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
-const MIN_DRAFT_STAT_WEEKS = 12;
 
 function durabilityLabel(value) {
   return DURABILITY_LABELS[Number(value)] || "Normal";
@@ -49,10 +48,8 @@ function draftBucket(position) {
 }
 
 function shouldPrepareDraftPool(tiers, selectedPosition) {
-  const eligibleTiers = tiers.filter((tier) => Number(tier.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
-  const availableBuckets = new Set(eligibleTiers.map((tier) => draftBucket(tier.position)).filter(Boolean));
+  const availableBuckets = new Set(tiers.map((tier) => draftBucket(tier.position)).filter(Boolean));
   if (!tiers.length) return true;
-  if (!eligibleTiers.length) return true;
   if (selectedPosition && selectedPosition !== "ALL") return !availableBuckets.has(draftBucket(selectedPosition));
   return DRAFT_POSITION_ORDER.some((position) => !availableBuckets.has(position));
 }
@@ -252,7 +249,6 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
   const start = Math.max(0, Number(offset || 0));
   const target = start + pageSize;
   const candidateTiers = tiers
-    .filter((tier) => Number(tier.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS)
     .filter((tier) => Number(tier.position_rank || 0) <= 30)
     .filter((tier) => position === "ALL" || draftBucket(tier.position) === draftBucket(position))
     .sort(compareDraftTiers);

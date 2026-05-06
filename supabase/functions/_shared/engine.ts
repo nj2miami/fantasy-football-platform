@@ -52,7 +52,8 @@ const DEFAULT_SCORING_RULES = {
 
 const DEFAULT_ROSTER_RULES = {
   starters: { QB: 1, OFF: 1, FLEX: 1, K: 1, DEF: 1 },
-  position_limits: { QB: 2, OFF: 4, K: 2, DEF: 2 },
+  draft_groups: { QB: 2, OFF: 2, DEF: 2, K: 1, FLEX: 3 },
+  position_limits: { QB: 2, OFF: 5, K: 1, DEF: 5 },
   bench: 5,
   total_drafted: 10,
   bench_scoring_multiplier: 0.5,
@@ -136,9 +137,9 @@ const DURABILITY_MULTIPLIERS: Record<number, number> = {
 };
 
 const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
-const MIN_DRAFT_STAT_WEEKS = 12;
+const MIN_DRAFT_STAT_WEEKS = 8;
 const TEAM_HIDDEN_WEEK_ASSIGNMENT = "per_nfl_team_hidden_week";
-const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v2";
+const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v3";
 const DRAFT_POOL_CHUNK_SIZE = 200;
 
 const DEFAULT_SCHEDULE_CONFIG = {
@@ -1557,22 +1558,36 @@ async function isDraftEligible(supabase: ReturnType<typeof createClient>, league
   return Boolean(data);
 }
 
-async function enforceRosterPositionLimit(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, position: string) {
-  const limits = ((league.roster_rules as Json | undefined)?.position_limits || DEFAULT_ROSTER_RULES.position_limits) as Record<string, number>;
-  const config = await positionConfig(supabase);
-  const bucket = rosterLimitBucket(position, config);
-  const limit = Number(limits[bucket] || 0);
-  if (limit <= 0) throw new Error(`${String(position || "This position").toUpperCase()} is not draftable in this league.`);
+async function rosterBucketCountsForMember(supabase: ReturnType<typeof createClient>, leagueMemberId: string, config: Json[]) {
   const { data: roster, error } = await supabase
     .from("roster_slots")
     .select("slot_type, players!inner(position)")
     .eq("league_member_id", leagueMemberId);
   if (error) throw error;
-  const currentCount = (roster || []).filter((slot: Json) => {
+  return (roster || []).reduce((counts: Record<string, number>, slot: Json) => {
     const player = Array.isArray(slot.players) ? slot.players[0] : slot.players;
-    return rosterLimitBucket(String(player?.position || slot.slot_type || ""), config) === bucket;
-  }).length;
+    const bucket = rosterLimitBucket(String(player?.position || slot.slot_type || ""), config);
+    counts[bucket] = (counts[bucket] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+async function canDraftPositionForMember(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, position: string) {
+  const limits = ((league.roster_rules as Json | undefined)?.position_limits || DEFAULT_ROSTER_RULES.position_limits) as Record<string, number>;
+  const config = await positionConfig(supabase);
+  const bucket = rosterLimitBucket(position, config);
+  const limit = Number(limits[bucket] || 0);
+  if (limit <= 0) return { allowed: false, bucket, limit, currentCount: 0 };
+  const counts = await rosterBucketCountsForMember(supabase, leagueMemberId, config);
+  const currentCount = Number(counts[bucket] || 0);
+  return { allowed: currentCount < limit, bucket, limit, currentCount };
+}
+
+async function enforceRosterPositionLimit(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, position: string) {
+  const { allowed, bucket, limit, currentCount } = await canDraftPositionForMember(supabase, league, leagueMemberId, position);
+  if (limit <= 0) throw new Error(`${String(position || "This position").toUpperCase()} is not draftable in this league.`);
   if (currentCount >= limit) throw new Error(`Roster already has ${limit} ${bucket} players.`);
+  if (!allowed) throw new Error(`Roster cannot add another ${bucket} player.`);
 }
 
 async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient>, league: Json) {
@@ -2194,13 +2209,21 @@ async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, le
     if (boardError) throw boardError;
     for (const item of board || []) {
       if (pickedIds.has(item.player_id)) continue;
-      if (await isDraftEligible(supabase, league, item.player_id)) return item.player_id;
+      if (!(await isDraftEligible(supabase, league, item.player_id))) continue;
+      const { data: player, error: playerError } = await supabase
+        .from("players")
+        .select("position")
+        .eq("id", item.player_id)
+        .single();
+      if (playerError) throw playerError;
+      const { allowed } = await canDraftPositionForMember(supabase, league, memberId, String(player.position || ""));
+      if (allowed) return item.player_id;
     }
   }
 
   const { data: players, error: playersError } = await supabase
     .from("league_player_scores")
-    .select("player_id,total_points,position_rank")
+    .select("player_id,total_points,position_rank,players!inner(position)")
     .eq("league_id", league.id)
     .lte("position_rank", 30)
     .order("total_points", { ascending: false })
@@ -2210,6 +2233,11 @@ async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, le
 
   for (const player of players || []) {
     if (pickedIds.has(player.player_id)) continue;
+    if (memberId) {
+      const playerRow = Array.isArray(player.players) ? player.players[0] : player.players;
+      const { allowed } = await canDraftPositionForMember(supabase, league, memberId, String(playerRow?.position || ""));
+      if (!allowed) continue;
+    }
     return player.player_id;
   }
   throw new Error("No eligible players remain");

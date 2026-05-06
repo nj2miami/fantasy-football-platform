@@ -427,7 +427,7 @@ export default function CreateLeague() {
               <p className="font-black uppercase">Roster Rules</p>
             </div>
             <p className="text-sm font-bold text-gray-700">
-              Draft 10 total: 2 QB, 2 K, 2 DEF, 2 OFF, 2 FLEX. Start 5 each week: 1 QB, 1 K, 1 DEF, 1 OFF, 1 FLEX.
+              Draft 10 total: 2 QB, 1 K, 2 DEF, 2 OFF, 3 FLEX. Start 5 each week: 1 QB, 1 K, 1 DEF, 1 OFF, 1 FLEX.
             </p>
           </div>
           <div className="neo-border p-4 bg-white">

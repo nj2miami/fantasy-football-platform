@@ -23,9 +23,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { durabilityText, normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
 
 const PAGE_SIZE = 10;
-const MIN_DRAFT_STAT_WEEKS = 12;
+const MIN_DRAFT_STAT_WEEKS = 8;
 const POSITION_OPTIONS = ["ALL", "QB", "OFF", "DEF", "K"];
-const DEFAULT_ROSTER_NEEDS = { QB: 1, OFF: 1, FLEX: 1, K: 1, DEF: 1 };
+const DEFAULT_DRAFT_GROUPS = { QB: 2, OFF: 2, DEF: 2, K: 1, FLEX: 3 };
 const OFFENSE_POSITIONS = new Set(["RB", "FB", "WR", "TE", "OL", "C", "G", "OT", "OFF"]);
 const DEFENSE_POSITIONS = new Set(["DL", "DE", "DT", "NT", "LB", "ILB", "MLB", "OLB", "DB", "CB", "S", "SAF", "FS", "DEF"]);
 
@@ -67,24 +67,37 @@ function getPickRemaining(room, nowMs) {
 }
 
 function buildRosterNeeds(league, roster) {
-  const starters = league?.roster_rules?.starters;
-  const required = starters && typeof starters === "object" && Object.keys(starters).length
-    ? Object.fromEntries(Object.entries(starters).map(([key, value]) => [String(key).toUpperCase(), Number(value || 0)]))
-    : DEFAULT_ROSTER_NEEDS;
+  const draftGroups = league?.roster_rules?.draft_groups;
+  const required = draftGroups && typeof draftGroups === "object" && Object.keys(draftGroups).length
+    ? { ...DEFAULT_DRAFT_GROUPS, ...Object.fromEntries(Object.entries(draftGroups).map(([key, value]) => [String(key).toUpperCase(), Number(value || 0)])) }
+    : DEFAULT_DRAFT_GROUPS;
   const drafted = roster.reduce((counts, slot) => {
     const position = rosterBucket(slot.player?.position || slot.slot_type);
     counts[position] = (counts[position] || 0) + 1;
     return counts;
   }, {});
-  const offenseDrafted = Number(drafted.OFF || 0);
-  return Object.entries(required)
-    .filter(([, needed]) => Number(needed) > 0)
-    .map(([position, needed]) => {
-      const filled = position === "OFF" || position === "FLEX"
-        ? Math.min(Number(needed), offenseDrafted)
-        : Math.min(Number(needed), Number(drafted[position] || 0));
-      return { position, needed: Number(needed), filled, remaining: Math.max(0, Number(needed) - filled) };
-    });
+  const fixedOff = Math.min(Number(required.OFF || 0), Number(drafted.OFF || 0));
+  const fixedDef = Math.min(Number(required.DEF || 0), Number(drafted.DEF || 0));
+  const flexFilled = Math.min(
+    Number(required.FLEX || 0),
+    Math.max(0, Number(drafted.OFF || 0) - Number(required.OFF || 0)) +
+      Math.max(0, Number(drafted.DEF || 0) - Number(required.DEF || 0))
+  );
+  const filledByPosition = {
+    QB: Math.min(Number(required.QB || 0), Number(drafted.QB || 0)),
+    K: Math.min(Number(required.K || 0), Number(drafted.K || 0)),
+    OFF: fixedOff,
+    DEF: fixedDef,
+    FLEX: flexFilled,
+  };
+  return ["QB", "K", "OFF", "DEF", "FLEX"]
+    .filter((position) => Number(required[position] || 0) > 0)
+    .map((position) => ({
+      position,
+      needed: Number(required[position] || 0),
+      filled: Number(filledByPosition[position] || 0),
+      remaining: Math.max(0, Number(required[position] || 0) - Number(filledByPosition[position] || 0)),
+    }));
 }
 
 function groupBoardByPosition(board) {
