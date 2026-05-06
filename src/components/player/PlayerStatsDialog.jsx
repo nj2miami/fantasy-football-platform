@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { User } from "lucide-react";
 import { appClient } from "@/api/appClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { playerHeadshotUrl, playerName, statValue } from "@/lib/playerDisplay";
+import { normalizePlayerPosition, playerName, statValue } from "@/lib/playerDisplay";
 
 function rawNumber(rawStats, key) {
   const parsed = Number(rawStats?.[key] ?? 0);
@@ -22,6 +21,66 @@ function summarizeActualStats(weeks) {
   }, { games: 0, passYards: 0, rushYards: 0, recYards: 0, tds: 0, fgMade: 0 });
 }
 
+function playerBucket(player) {
+  const position = normalizePlayerPosition(player?.position);
+  if (position === "K") return "K";
+  if (position === "DEF" || ["DL", "DE", "DT", "NT", "LB", "ILB", "MLB", "OLB", "DB", "CB", "S", "SAF", "FS"].includes(position)) return "DEF";
+  return "OFF";
+}
+
+function seasonStatCards(player, actualStats) {
+  const bucket = playerBucket(player);
+  if (bucket === "K") {
+    return [
+      ["Games", actualStats.games],
+      ["FG Made", actualStats.fgMade],
+      ["XP Made", actualStats.xpMade],
+      ["Miss", actualStats.fgMissed + actualStats.xpMissed],
+    ];
+  }
+  if (bucket === "DEF") {
+    return [
+      ["Games", actualStats.games],
+      ["Tackle", actualStats.tackles],
+      ["Sack", actualStats.sacks],
+      ["Takeaway", actualStats.takeaways],
+    ];
+  }
+  return [
+    ["Games", actualStats.games],
+    ["TD", actualStats.tds],
+    ["Pass", actualStats.passYards],
+    ["Rush/Rec", actualStats.rushYards + actualStats.recYards],
+  ];
+}
+
+function weeklyActualCells(player, rawStats) {
+  const bucket = playerBucket(player);
+  const raw = rawStats || {};
+  if (bucket === "K") {
+    return {
+      firstLabel: "FG",
+      secondLabel: "XP",
+      first: `${rawNumber(raw, "fg_made")}/${rawNumber(raw, "fg_att")}`,
+      second: `${rawNumber(raw, "pat_made")}/${rawNumber(raw, "pat_att") || rawNumber(raw, "pat_made") + rawNumber(raw, "pat_missed")}`,
+    };
+  }
+  if (bucket === "DEF") {
+    return {
+      firstLabel: "Tkl",
+      secondLabel: "Big",
+      first: rawNumber(raw, "def_tackles_solo") + rawNumber(raw, "def_tackle_assists"),
+      second: rawNumber(raw, "def_sacks") + rawNumber(raw, "def_interceptions") + rawNumber(raw, "def_fumbles_forced") + rawNumber(raw, "def_tds"),
+    };
+  }
+  return {
+    firstLabel: "Yds",
+    secondLabel: "TD",
+    first: rawNumber(raw, "passing_yards") + rawNumber(raw, "rushing_yards") + rawNumber(raw, "receiving_yards"),
+    second: rawNumber(raw, "passing_tds") + rawNumber(raw, "rushing_tds") + rawNumber(raw, "receiving_tds") + rawNumber(raw, "def_tds"),
+  };
+}
+
 export default function PlayerStatsDialog({ player, seasonYear, open, onOpenChange, hideFantasyPoints = false }) {
   const { data: aggregate } = useQuery({
     queryKey: ["draft-player-aggregate", player?.id, seasonYear],
@@ -38,9 +97,25 @@ export default function PlayerStatsDialog({ player, seasonYear, open, onOpenChan
     enabled: open && !!player?.id,
   });
 
-  const headshot = playerHeadshotUrl(player);
   const stats = aggregate || player || {};
-  const actualStats = summarizeActualStats(weeks);
+  const actualStats = weeks.reduce((summary, week) => {
+    const raw = week.raw_stats || {};
+    summary.games += 1;
+    summary.passYards += rawNumber(raw, "passing_yards");
+    summary.rushYards += rawNumber(raw, "rushing_yards");
+    summary.recYards += rawNumber(raw, "receiving_yards");
+    summary.tds += rawNumber(raw, "passing_tds") + rawNumber(raw, "rushing_tds") + rawNumber(raw, "receiving_tds") + rawNumber(raw, "def_tds");
+    summary.fgMade += rawNumber(raw, "fg_made");
+    summary.fgMissed += rawNumber(raw, "fg_missed");
+    summary.xpMade += rawNumber(raw, "pat_made");
+    summary.xpMissed += rawNumber(raw, "pat_missed");
+    summary.tackles += rawNumber(raw, "def_tackles_solo") + rawNumber(raw, "def_tackle_assists");
+    summary.sacks += rawNumber(raw, "def_sacks");
+    summary.takeaways += rawNumber(raw, "def_interceptions") + rawNumber(raw, "def_fumbles_forced") + rawNumber(raw, "fumble_recovery_own") + rawNumber(raw, "fumble_recovery_opp");
+    return summary;
+  }, { ...summarizeActualStats([]), fgMissed: 0, xpMade: 0, xpMissed: 0, tackles: 0, sacks: 0, takeaways: 0 });
+  const statCards = seasonStatCards(player, actualStats);
+  const weeklyLabels = weeklyActualCells(player, {});
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -54,18 +129,14 @@ export default function PlayerStatsDialog({ player, seasonYear, open, onOpenChan
               <p className="text-2xl font-black uppercase leading-tight">{playerName(player)}</p>
               <p className="mt-1 text-sm font-black uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
             </div>
-            <div className="neo-border flex aspect-square w-full items-center justify-center overflow-hidden bg-gray-100">
-              {headshot ? <img src={headshot} alt="" className="h-full w-full object-cover" /> : <User className="h-10 w-10 text-gray-400" />}
-            </div>
             <div className="neo-border bg-[#EFFBFF] p-3">
               <p className="text-xs font-black uppercase text-gray-500">{seasonYear || "Season"} Stats</p>
               <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs font-black uppercase">
                 {hideFantasyPoints ? (
                   <>
-                    <div className="neo-border bg-white p-2"><p className="text-gray-500">Games</p><p className="text-lg">{actualStats.games}</p></div>
-                    <div className="neo-border bg-white p-2"><p className="text-gray-500">TD</p><p className="text-lg">{statValue(actualStats.tds, 0)}</p></div>
-                    <div className="neo-border bg-white p-2"><p className="text-gray-500">Pass</p><p className="text-lg">{statValue(actualStats.passYards, 0)}</p></div>
-                    <div className="neo-border bg-white p-2"><p className="text-gray-500">Rush/Rec</p><p className="text-lg">{statValue(actualStats.rushYards + actualStats.recYards, 0)}</p></div>
+                    {statCards.map(([label, value]) => (
+                      <div key={label} className="neo-border bg-white p-2"><p className="text-gray-500">{label}</p><p className="text-lg">{statValue(value, 0)}</p></div>
+                    ))}
                   </>
                 ) : (
                   <>
@@ -88,8 +159,8 @@ export default function PlayerStatsDialog({ player, seasonYear, open, onOpenChan
                     <th className="p-2 font-black uppercase">Opp</th>
                     {hideFantasyPoints ? (
                       <>
-                        <th className="p-2 text-right font-black uppercase">Yds</th>
-                        <th className="p-2 text-right font-black uppercase">TD</th>
+                        <th className="p-2 text-right font-black uppercase">{weeklyLabels.firstLabel}</th>
+                        <th className="p-2 text-right font-black uppercase">{weeklyLabels.secondLabel}</th>
                       </>
                     ) : (
                       <th className="p-2 text-right font-black uppercase">Pts</th>
@@ -103,8 +174,15 @@ export default function PlayerStatsDialog({ player, seasonYear, open, onOpenChan
                       <td className="p-2 font-bold">{week.opponent_team || week.raw_stats?.opponent_team || "--"}</td>
                       {hideFantasyPoints ? (
                         <>
-                          <td className="p-2 text-right font-black">{statValue(rawNumber(week.raw_stats, "passing_yards") + rawNumber(week.raw_stats, "rushing_yards") + rawNumber(week.raw_stats, "receiving_yards"), 0)}</td>
-                          <td className="p-2 text-right font-black">{statValue(rawNumber(week.raw_stats, "passing_tds") + rawNumber(week.raw_stats, "rushing_tds") + rawNumber(week.raw_stats, "receiving_tds") + rawNumber(week.raw_stats, "def_tds"), 0)}</td>
+                          {(() => {
+                            const cells = weeklyActualCells(player, week.raw_stats);
+                            return (
+                              <>
+                                <td className="p-2 text-right font-black">{typeof cells.first === "string" ? cells.first : statValue(cells.first, 0)}</td>
+                                <td className="p-2 text-right font-black">{typeof cells.second === "string" ? cells.second : statValue(cells.second, 0)}</td>
+                              </>
+                            );
+                          })()}
                         </>
                       ) : (
                         <td className="p-2 text-right font-black">{statValue(week.fantasy_points)}</td>

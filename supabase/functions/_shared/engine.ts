@@ -368,6 +368,19 @@ function scoringRuleNumber(rules: Json, category: string, key: string, fallback:
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function mergeScoringRules(rules: Json | null | undefined) {
+  const configured = rules || {};
+  return Object.fromEntries(
+    Object.entries(DEFAULT_SCORING_RULES).map(([category, defaultRules]) => [
+      category,
+      {
+        ...(defaultRules as Json),
+        ...((configured[category] as Json | undefined) || {}),
+      },
+    ])
+  ) as Json;
+}
+
 function statNumber(stats: Json, key: string) {
   const parsed = Number(stats?.[key] ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -1483,7 +1496,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   const leagueId = String(league.id || "");
   if (!leagueId) throw new Error("League is required to calculate player scores.");
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
-  const scoringRules = { ...DEFAULT_SCORING_RULES, ...((league.scoring_rules as Json | undefined) || {}) };
+  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
   const scoringRulesHash = String(JSON.stringify(scoringRules).length);
   const config = await positionConfig(supabase);
 
@@ -2091,7 +2104,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
         .maybeSingle();
       const assignedPlayer = Array.isArray(assignedPlayerWeek?.players) ? assignedPlayerWeek?.players[0] : assignedPlayerWeek?.players;
       const basePoints = assignedPlayerWeek
-        ? calculateFantasyPoints((assignedPlayerWeek.raw_stats || {}) as Json, String(assignedPlayer?.position || player?.position || ""), (league.scoring_rules || DEFAULT_SCORING_RULES) as Json, config)
+        ? calculateFantasyPoints((assignedPlayerWeek.raw_stats || {}) as Json, String(assignedPlayer?.position || player?.position || ""), mergeScoringRules(league.scoring_rules as Json | undefined), config)
         : 0;
       const slotPoints = basePoints * lineupSlotMultiplier(slot);
       total += durabilityEnabled(league) ? applyDurability(slotPoints, durabilityByPlayer.get(String(playerId))) : Number(slotPoints.toFixed(2));

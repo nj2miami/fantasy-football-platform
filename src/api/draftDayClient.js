@@ -80,12 +80,13 @@ function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPla
   if (!player) return player;
   const tier = tiersByPlayer.get(player.id);
   const tierValue = Number(tier?.tier_value || player.tier_value || 1);
-  const range = tierRangesByBucket.get(tierRangeKey(tier?.position || player.position, tierValue));
+  const draftPosition = draftBucket(tier?.position || player.position) || tier?.position || player.position;
+  const range = tierRangesByBucket.get(tierRangeKey(draftPosition, tierValue));
   const showDurability = canShowDurability(league, options.isDrafted);
   const showTeam = canShowTeam(league, options.isDrafted);
   const showName = canShowName(league, options.isDrafted);
   const durability = showDurability ? durabilityByPlayer.get(player.id) : null;
-  const hiddenName = `${tier?.position || player.position || "Player"} Tier ${tierValue}`;
+  const hiddenName = `${draftPosition || "Player"} Tier ${tierValue}`;
   return {
     ...player,
     player_display_name: showName ? player.player_display_name : hiddenName,
@@ -93,6 +94,7 @@ function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPla
     name_hidden: !showName,
     team: showTeam ? player.team : null,
     team_hidden: !showTeam,
+    draft_position: draftPosition,
     avg_points: null,
     total_points: null,
     expected_avg_points: null,

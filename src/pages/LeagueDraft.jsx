@@ -140,10 +140,46 @@ function playPickChime() {
 function PlayerTierCell({ player }) {
   return (
     <div className="text-left text-sm font-black uppercase md:text-center">
-      <p className="text-gray-500">Tier</p>
-      <p className="text-2xl text-black">{player?.tier_value || 1}</p>
+      <TierBadge tier={player?.tier_value || 1} />
       <p className="text-[11px] text-gray-500">{player?.tier_range ? `${player.tier_range} AVG` : "Range hidden"}</p>
     </div>
+  );
+}
+
+function TierBadge({ tier }) {
+  const tierValue = Number(tier || 1);
+  const classes = {
+    5: "bg-[#F7B801] text-black",
+    4: "bg-[#00D9FF] text-black",
+    3: "bg-[#D7F8E8] text-black",
+    2: "bg-white text-black",
+    1: "bg-gray-200 text-black",
+  };
+  return (
+    <span className={`neo-border inline-flex items-center px-2 py-1 text-xs font-black uppercase ${classes[tierValue] || classes[1]}`}>
+      Tier {tierValue}
+    </span>
+  );
+}
+
+function DurabilityBadge({ player }) {
+  if (player?.durability_hidden) {
+    return <span className="neo-border inline-flex items-center bg-gray-200 px-2 py-1 text-xs font-black uppercase text-black">Dur Hidden</span>;
+  }
+  if (player?.durability === null || player?.durability === undefined) return null;
+  const value = Number(player.durability);
+  const classes = value >= 2
+    ? "bg-[#D7F8E8] text-black"
+    : value === 1
+      ? "bg-white text-black"
+      : value === 0
+        ? "bg-[#F7B801] text-black"
+        : "bg-red-100 text-red-800";
+  const prefix = value > 0 ? "+" : "";
+  return (
+    <span className={`neo-border inline-flex items-center px-2 py-1 text-xs font-black uppercase ${classes}`}>
+      {player.durability_label || "Dur"} {prefix}{value}
+    </span>
   );
 }
 
@@ -155,7 +191,7 @@ function playerTeamText(player) {
 function DraftVisibilityLine({ player }) {
   return (
     <span>
-      {player.position || "--"} | {playerTeamText(player)}
+      {player.draft_position || player.position || "--"} | {playerTeamText(player)}
       {player.durability_hidden ? " | Durability hidden" : player.durability !== null && player.durability !== undefined ? ` | ${durabilityText(player)}` : ""}
     </span>
   );
@@ -173,6 +209,8 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
           >
             {playerName(player)}
           </button>
+          <TierBadge tier={player?.tier_value || 1} />
+          <DurabilityBadge player={player} />
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
         </div>
         <p className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
@@ -209,6 +247,10 @@ function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) 
         >
           {playerName(player)}
         </button>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <TierBadge tier={player?.tier_value || 1} />
+          <DurabilityBadge player={player} />
+        </div>
         <p className="text-xs font-bold uppercase text-gray-500"><DraftVisibilityLine player={player} /></p>
       </div>
       <PlayerTierCell player={player} />
@@ -640,7 +682,11 @@ export default function LeagueDraft() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {roster.map((slot) => (
             <div key={slot.id} className="neo-border bg-gray-50 p-3">
-              <p className="truncate font-black uppercase">{playerName(slot.player)}</p>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <p className="min-w-0 flex-1 truncate font-black uppercase">{playerName(slot.player)}</p>
+                <TierBadge tier={slot.player?.tier_value || 1} />
+                <DurabilityBadge player={slot.player} />
+              </div>
               <p className="text-xs font-bold text-gray-500">
                 {slot.slot_type} | {playerTeamText(slot.player)} | Tier {slot.player?.tier_value || 1}
                 {slot.player?.durability !== null && slot.player?.durability !== undefined ? ` | ${durabilityText(slot.player)}` : ""}
