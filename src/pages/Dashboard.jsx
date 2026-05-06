@@ -44,7 +44,7 @@ export default function Dashboard() {
         roster_rules: DEFAULT_ROSTER_RULES,
         draft_config: DEFAULT_DRAFT_CONFIG,
       });
-      const league = response.data.league;
+      const league = response.league;
       await appClient.functions.invoke("fill_league_with_ai", { league_id: league.id });
       return league;
     },
