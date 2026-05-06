@@ -458,6 +458,24 @@ function hasCompleteDraftBuckets(rows: Json[] = []) {
   return REQUIRED_DRAFT_BUCKETS.every((position) => buckets.has(position));
 }
 
+function draftBucketCounts(rows: Json[] = []) {
+  return REQUIRED_DRAFT_BUCKETS.reduce((counts, bucket) => {
+    counts[bucket] = rows.filter((row) => String(row.position || "").toUpperCase() === bucket).length;
+    return counts;
+  }, {} as Record<string, number>);
+}
+
+function assertCompleteDraftPool(rows: Json[] = []) {
+  const counts = draftBucketCounts(rows);
+  const missing = REQUIRED_DRAFT_BUCKETS.filter((bucket) => !counts[bucket]);
+  if (missing.length) {
+    throw new Error(
+      `Draft pool generation produced no ${missing.join(", ")} players. Check Admin Position Configuration and imported player stat data; draft-eligible players need at least ${MIN_DRAFT_STAT_WEEKS} actual stat weeks.`
+    );
+  }
+  return counts;
+}
+
 function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json, config: Json[] = DEFAULT_POSITION_CONFIG) {
   const r = (category: string, key: string, fallback: number) => scoringRuleNumber(rules, category, key, fallback);
   const n = (key: string) => statNumber(stats, key);
@@ -1647,6 +1665,8 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
       });
   }
 
+  assertCompleteDraftPool(rows);
+
   if (rows.length) {
     const { error } = await supabase.from("league_player_scores").upsert(rows, { onConflict: "league_id,player_id" });
     if (error) throw error;
@@ -1859,13 +1879,13 @@ async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user:
   const league = normalizeLeaguePlaySettings(rawLeague);
   await ensureLeaguePlayerScores(supabase, league);
   await ensureLeagueDurability(supabase, league);
-  const { count, error } = await supabase
+  const { data: rows, count, error } = await supabase
     .from("league_player_scores")
-    .select("id", { count: "exact", head: true })
+    .select("id,position", { count: "exact" })
     .eq("league_id", league.id)
     .lte("position_rank", 30);
   if (error) throw error;
-  return { league_id: league.id, eligible_count: count || 0 };
+  return { league_id: league.id, eligible_count: count || 0, buckets: draftBucketCounts(rows || []) };
 }
 
 async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, league: Json, draftId: string, memberId?: string) {

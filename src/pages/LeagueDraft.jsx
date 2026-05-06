@@ -313,7 +313,12 @@ export default function LeagueDraft() {
     queryClient.invalidateQueries({ queryKey: ["draft-eligible-players", leagueId, draftId] });
   }, [draftId, leagueId, queryClient]);
 
-  const { data: eligibleResult = { data: [], hasMore: false }, isFetching: isEligibleFetching } = useQuery({
+  const {
+    data: eligibleResult = { data: [], hasMore: false },
+    error: eligibleError,
+    isError: isEligibleError,
+    isFetching: isEligibleFetching,
+  } = useQuery({
     queryKey: ["draft-eligible-players", leagueId, draftId, searchTerm, positionFilter, page],
     queryFn: () => appClient.draftDay.listEligiblePlayers({
       leagueId,
@@ -656,7 +661,7 @@ export default function LeagueDraft() {
               ))}
               {!eligiblePlayers.length && (
                 <div className="neo-border bg-gray-50 p-6 text-center font-bold text-gray-500">
-                  {isEligibleFetching ? "Loading players..." : "No eligible players found."}
+                  {isEligibleFetching ? "Loading players..." : isEligibleError ? eligibleError?.message || "Unable to load eligible players." : "No eligible players found."}
                 </div>
               )}
             </div>
@@ -685,8 +690,7 @@ export default function LeagueDraft() {
                 <DurabilityBadge player={slot.player} />
               </div>
               <p className="text-xs font-bold text-gray-500">
-                {slot.slot_type} | {playerTeamText(slot.player)} | Tier {slot.player?.tier_value || 1}
-                {slot.player?.durability !== null && slot.player?.durability !== undefined ? ` | ${durabilityText(slot.player)}` : ""}
+                {slot.slot_type} | {playerTeamText(slot.player)}
               </p>
             </div>
           ))}
