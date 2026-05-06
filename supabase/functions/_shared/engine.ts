@@ -2716,6 +2716,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     head_to_head_points: 0,
     rank_points: league.ranking_system === "offl" ? Math.max(activeTeamCount - index, 1) : 0,
     league_points: league.ranking_system === "offl" ? Math.max(activeTeamCount - index, 1) : 0,
+    scoring_details: row.slots || [],
   }));
 
   const { data: matchups } = await supabase.from("matchups").select("*").eq("league_id", leagueId).eq("week_number", weekNumber);

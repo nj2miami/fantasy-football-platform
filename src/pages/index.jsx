@@ -183,6 +183,7 @@ function PagesContent() {
                         <Route path="/League" element={<League />} />
                         <Route path="/league" element={<League />} />
                         <Route path="/league/manager" element={<League />} />
+                        <Route path="/league/week/:weekNumber" element={<League />} />
                         <Route path="/league/draft" element={<LeagueDraft />} />
                         <Route path="/Home" element={<Home />} />
                         <Route path="/PlayerStats" element={<PlayerStats />} />
