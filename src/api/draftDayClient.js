@@ -6,6 +6,9 @@ import { normalizePosition } from "@/api/supabaseCore";
 
 const DRAFT_POSITION_ORDER = ["QB", "OFF", "DEF", "K"];
 const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
+const DRAFT_BUCKET_TARGETS = { QB: 30, OFF: 30, DEF: 30, K: 24 };
+const DRAFT_BUCKET_MINIMUMS = { QB: 30, OFF: 30, DEF: 30, K: 1 };
+const DRAFT_SCORE_METHOD = "league-raw-actual-stat-weeks-v4";
 
 function durabilityLabel(value) {
   return DURABILITY_LABELS[Number(value)] || "Normal";
@@ -48,10 +51,19 @@ function draftBucket(position) {
 }
 
 function shouldPrepareDraftPool(tiers, selectedPosition) {
-  const availableBuckets = new Set(tiers.map((tier) => draftBucket(tier.position)).filter(Boolean));
   if (!tiers.length) return true;
-  if (selectedPosition && selectedPosition !== "ALL") return !availableBuckets.has(draftBucket(selectedPosition));
-  return DRAFT_POSITION_ORDER.some((position) => !availableBuckets.has(position));
+  if (tiers.some((tier) => !String(tier.scoring_rules_hash || "").startsWith(`${DRAFT_SCORE_METHOD}:`))) return true;
+  if (tiers.some((tier) => Number(tier.weeks_played || 0) < 8)) return true;
+  const bucketCounts = tiers.reduce((counts, tier) => {
+    const bucket = draftBucket(tier.position);
+    if (bucket) counts[bucket] = (counts[bucket] || 0) + 1;
+    return counts;
+  }, {});
+  if (selectedPosition && selectedPosition !== "ALL") {
+    const bucket = draftBucket(selectedPosition);
+    return !bucket || Number(bucketCounts[bucket] || 0) < Number(DRAFT_BUCKET_MINIMUMS[bucket] || DRAFT_BUCKET_TARGETS[bucket] || 30);
+  }
+  return DRAFT_POSITION_ORDER.some((position) => Number(bucketCounts[position] || 0) < Number(DRAFT_BUCKET_MINIMUMS[position] || DRAFT_BUCKET_TARGETS[position] || 30));
 }
 
 function compareDraftTiers(a, b) {
@@ -249,7 +261,7 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
   const start = Math.max(0, Number(offset || 0));
   const target = start + pageSize;
   const candidateTiers = tiers
-    .filter((tier) => Number(tier.position_rank || 0) <= 30)
+    .filter((tier) => Number(tier.position_rank || 0) <= Number(DRAFT_BUCKET_TARGETS[draftBucket(tier.position)] || 30))
     .filter((tier) => position === "ALL" || draftBucket(tier.position) === draftBucket(position))
     .sort(compareDraftTiers);
   const playersById = await loadPlayersById(candidateTiers.map((tier) => tier.player_id));
