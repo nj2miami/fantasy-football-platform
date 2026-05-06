@@ -45,7 +45,7 @@ export const DEFAULT_SCORING_RULES = {
 export const DEFAULT_ROSTER_RULES = {
   starters: { QB: 1, OFF: 1, FLEX: 1, K: 1, DEF: 1 },
   draft_groups: { QB: 2, OFF: 2, DEF: 2, K: 1, FLEX: 3 },
-  position_limits: { QB: 2, OFF: 5, K: 1, DEF: 5 },
+  position_limits: { QB: 2, OFF: 4, K: 1, DEF: 4 },
   bench: 5,
   total_drafted: 10,
   bench_scoring_multiplier: 0.5,

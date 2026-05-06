@@ -55,7 +55,7 @@ export default function LeagueRosterSettings() {
         <div>
           <p className="font-black uppercase">Draft Roster</p>
           <p className="text-sm font-bold text-gray-700">
-            Each team drafts {rosterRules.total_drafted} total players: 2 QB, 1 K, 2 DEF, 2 OFF, and 3 Flex players from Offense or Defense.
+            Each team drafts {rosterRules.total_drafted} total players: 2 QB, 1 K, 2 DEF, 2 OFF, and 3 Flex players from Offense or Defense. Teams may roster no more than 4 Offense or 4 Defense players.
           </p>
         </div>
       </div>

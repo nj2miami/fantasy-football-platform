@@ -179,7 +179,10 @@ function PagesContent() {
                         <Route path="/Profile" element={<Profile />} />
                         <Route path="/Admin" element={<Admin />} />
                         <Route path="/LeagueManage" element={<LeagueManage />} />
+                        <Route path="/leaguemanage" element={<LeagueManage />} />
                         <Route path="/League" element={<League />} />
+                        <Route path="/league" element={<League />} />
+                        <Route path="/league/manager" element={<League />} />
                         <Route path="/league/draft" element={<LeagueDraft />} />
                         <Route path="/Home" element={<Home />} />
                         <Route path="/PlayerStats" element={<PlayerStats />} />
