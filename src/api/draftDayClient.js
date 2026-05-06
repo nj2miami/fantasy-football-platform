@@ -1,4 +1,4 @@
-import { DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
+import { DEFAULT_LEAGUE_VISIBILITY_CONFIG, DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
 import { entities } from "@/api/entitiesClient";
 import { functions } from "@/api/functionsClient";
 import { countPlayerWeeks } from "@/api/playerStatsClient";
@@ -6,9 +6,41 @@ import { normalizePosition } from "@/api/supabaseCore";
 
 const DRAFT_POSITION_ORDER = ["QB", "OFF", "DEF", "K"];
 const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
+const MIN_DRAFT_STAT_WEEKS = 12;
 
 function durabilityLabel(value) {
   return DURABILITY_LABELS[Number(value)] || "Normal";
+}
+
+function leagueVisibility(league = {}) {
+  return {
+    ...DEFAULT_LEAGUE_VISIBILITY_CONFIG,
+    ...league,
+    fantasy_points_visibility: "hidden",
+    league_type: "standard",
+    manager_points_enabled: league.manager_points_enabled === true,
+  };
+}
+
+function durabilityEnabled(league) {
+  return leagueVisibility(league).durability_mode !== "off";
+}
+
+function canShowDurability(league, isDrafted = false) {
+  const visibility = leagueVisibility(league);
+  if (visibility.durability_mode === "off") return false;
+  if (visibility.durability_mode === "revealed_at_draft") return true;
+  return Boolean(isDrafted);
+}
+
+function canShowTeam(league, isDrafted = false) {
+  const visibility = leagueVisibility(league);
+  return visibility.draft_team_visibility === "shown" || Boolean(isDrafted);
+}
+
+function canShowName(league, isDrafted = false) {
+  const visibility = leagueVisibility(league);
+  return visibility.draft_player_name_visibility === "shown" || Boolean(isDrafted);
 }
 
 function draftBucket(position) {
@@ -17,8 +49,10 @@ function draftBucket(position) {
 }
 
 function shouldPrepareDraftPool(tiers, selectedPosition) {
-  const availableBuckets = new Set(tiers.map((tier) => draftBucket(tier.position)).filter(Boolean));
+  const eligibleTiers = tiers.filter((tier) => Number(tier.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
+  const availableBuckets = new Set(eligibleTiers.map((tier) => draftBucket(tier.position)).filter(Boolean));
   if (!tiers.length) return true;
+  if (!eligibleTiers.length) return true;
   if (selectedPosition && selectedPosition !== "ALL") return !availableBuckets.has(draftBucket(selectedPosition));
   return DRAFT_POSITION_ORDER.some((position) => !availableBuckets.has(position));
 }
@@ -31,16 +65,46 @@ function compareDraftTiers(a, b) {
   return Number(a.position_rank || 0) - Number(b.position_rank || 0);
 }
 
-function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer) {
+function tierRangeKey(position, tierValue) {
+  return `${draftBucket(position) || position}:${Number(tierValue || 1)}`;
+}
+
+function formatTierRange(range) {
+  if (!range) return null;
+  const min = Number(range.expected_avg_points_min || 0);
+  const max = Number(range.expected_avg_points_max || 0);
+  return `${min.toFixed(1)}-${max.toFixed(1)}`;
+}
+
+function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer, tierRangesByBucket, league, options = {}) {
   if (!player) return player;
   const tier = tiersByPlayer.get(player.id);
-  const durability = durabilityByPlayer.get(player.id);
+  const tierValue = Number(tier?.tier_value || player.tier_value || 1);
+  const range = tierRangesByBucket.get(tierRangeKey(tier?.position || player.position, tierValue));
+  const showDurability = canShowDurability(league, options.isDrafted);
+  const showTeam = canShowTeam(league, options.isDrafted);
+  const showName = canShowName(league, options.isDrafted);
+  const durability = showDurability ? durabilityByPlayer.get(player.id) : null;
+  const hiddenName = `${tier?.position || player.position || "Player"} Tier ${tierValue}`;
   return {
     ...player,
-    tier_value: Number(tier?.tier_value || player.tier_value || 1),
+    player_display_name: showName ? player.player_display_name : hiddenName,
+    full_name: showName ? player.full_name : hiddenName,
+    name_hidden: !showName,
+    team: showTeam ? player.team : null,
+    team_hidden: !showTeam,
+    avg_points: null,
+    total_points: null,
+    expected_avg_points: null,
+    fantasy_points: null,
+    tier_value: tierValue,
     position_rank: tier?.position_rank || player.position_rank || null,
+    tier_range: formatTierRange(range),
+    tier_range_min: range ? Number(range.expected_avg_points_min || 0) : null,
+    tier_range_max: range ? Number(range.expected_avg_points_max || 0) : null,
     durability: durability ? Number(durability.durability) : null,
-    durability_label: durability ? durabilityLabel(durability.durability) : "Hidden",
+    durability_hidden: durabilityEnabled(league) && !showDurability,
+    durability_label: durability ? durabilityLabel(durability.durability) : durabilityEnabled(league) ? "Hidden" : "Off",
     durability_multiplier: durability ? DURABILITY_MULTIPLIERS[Number(durability.durability)] ?? 1 : 1,
   };
 }
@@ -97,18 +161,23 @@ async function getLeagueDraftState(leagueId) {
   ].filter(Boolean))];
 
   const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
-  const [playersById, tierRows, durabilityRows, managerPointAccounts] = await Promise.all([
+  const visibility = leagueVisibility(league);
+  const [playersById, tierRows, tierRangeRows, durabilityRows, managerPointAccounts] = await Promise.all([
     loadPlayersById(playerIds),
     entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
-    entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
+    entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),
+    durabilityEnabled(visibility) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
     entities.ManagerPointAccount.filter({ league_id: leagueId }),
   ]);
   const tiersByPlayer = new Map(tierRows.map((tier) => [tier.player_id, tier]));
+  const tierRangesByBucket = new Map(tierRangeRows.map((range) => [tierRangeKey(range.position, range.tier_value), range]));
   const durabilityByPlayer = new Map(durabilityRows.map((row) => [row.player_id, row]));
-  const decoratePlayer = (player) => decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer);
+  const pickedIds = new Set(picks.map((pick) => pick.player_id));
+  const rosterIds = new Set(rosterRows.map((slot) => slot.player_id));
+  const decoratePlayer = (player, options = {}) => decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer, tierRangesByBucket, visibility, options);
   const boardWithPlayers = await Promise.all(board.map(async (item) => ({
     ...item,
-    player: decoratePlayer(playersById.get(item.player_id)),
+    player: decoratePlayer(playersById.get(item.player_id), { isDrafted: pickedIds.has(item.player_id) || rosterIds.has(item.player_id) }),
     weeks_played: await countPlayerWeeks(item.player_id, seasonYear),
   })));
   const teamTierTotals = Object.fromEntries(activeMembers.map((member) => [
@@ -119,15 +188,15 @@ async function getLeagueDraftState(leagueId) {
   ]));
 
   return {
-    league,
+    league: visibility,
     commissionerProfile,
     members: activeMembers,
     draft,
     room,
     turns,
     currentTurn,
-    picks: picks.map((pick) => ({ ...pick, player: decoratePlayer(playersById.get(pick.player_id)), member: activeMembers.find((member) => member.id === pick.league_member_id) })),
-    rosters: rosterRows.map((slot) => ({ ...slot, player: decoratePlayer(playersById.get(slot.player_id)), member: activeMembers.find((member) => member.id === slot.league_member_id) })),
+    picks: picks.map((pick) => ({ ...pick, player: decoratePlayer(playersById.get(pick.player_id), { isDrafted: true }), member: activeMembers.find((member) => member.id === pick.league_member_id) })),
+    rosters: rosterRows.map((slot) => ({ ...slot, player: decoratePlayer(playersById.get(slot.player_id), { isDrafted: true }), member: activeMembers.find((member) => member.id === slot.league_member_id) })),
     board: boardWithPlayers,
     teamTierTotals,
     managerPointAccounts,
@@ -135,8 +204,9 @@ async function getLeagueDraftState(leagueId) {
 }
 
 async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", position = "ALL", limit = 10, offset = 0 } = {}) {
-  const league = await entities.League.get(leagueId);
-  if (!league) return { data: [], hasMore: false, totalCount: 0 };
+  const rawLeague = await entities.League.get(leagueId);
+  if (!rawLeague) return { data: [], hasMore: false, totalCount: 0 };
+  const league = leagueVisibility(rawLeague);
   const [draft, members, rosters, leaguePicks] = await Promise.all([
     draftId ? entities.Draft.get(draftId) : null,
     entities.LeagueMember.filter({ league_id: leagueId }),
@@ -151,23 +221,27 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
       .filter((slot) => leagueMemberIds.has(slot.league_member_id))
       .map((slot) => slot.player_id),
   ]);
-  let [tiers, durabilityRows] = await Promise.all([
+  let [tiers, tierRangeRows, durabilityRows] = await Promise.all([
     entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
-    entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
+    entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),
+    durabilityEnabled(league) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
   ]);
   if (shouldPrepareDraftPool(tiers, position)) {
     await functions.prepareDraftPool({ league_id: leagueId });
-    [tiers, durabilityRows] = await Promise.all([
+    [tiers, tierRangeRows, durabilityRows] = await Promise.all([
       entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
-      entities.LeaguePlayerDurability.filter({ league_id: leagueId }),
+      entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),
+      durabilityEnabled(league) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
     ]);
   }
   const tiersByPlayer = new Map(tiers.map((tier) => [tier.player_id, tier]));
+  const tierRangesByBucket = new Map(tierRangeRows.map((range) => [tierRangeKey(range.position, range.tier_value), range]));
   const durabilityByPlayer = new Map(durabilityRows.map((row) => [row.player_id, row]));
   const pageSize = Math.max(1, Number(limit || 10));
   const start = Math.max(0, Number(offset || 0));
   const target = start + pageSize;
   const candidateTiers = tiers
+    .filter((tier) => Number(tier.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS)
     .filter((tier) => Number(tier.position_rank || 0) <= 30)
     .filter((tier) => position === "ALL" || draftBucket(tier.position) === draftBucket(position))
     .sort(compareDraftTiers);
@@ -179,11 +253,14 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
     const player = playersById.get(tier.player_id);
     if (!player) continue;
     if (searchTerm) {
-      const haystack = `${player.player_display_name || ""} ${player.full_name || ""}`.toLowerCase();
+      const displayedName = canShowName(league, false)
+        ? `${player.player_display_name || ""} ${player.full_name || ""}`
+        : `${tier.position || player.position || ""} Tier ${tier.tier_value || ""}`;
+      const haystack = displayedName.toLowerCase();
       if (!haystack.includes(String(searchTerm).toLowerCase())) continue;
     }
     rows.push({
-      ...decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer),
+      ...decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPlayer, tierRangesByBucket, league, { isDrafted: false }),
       weeks_played: Number(tier.weeks_played || 0),
     });
   }

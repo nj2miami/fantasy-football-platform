@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Bot, Clock3, Edit, Eye, EyeOff, PenSquare, Shuffle, Trophy } from "lucide-react";
+import { ArrowLeft, Bot, Clock3, Edit, Eye, EyeOff, PenSquare, Shuffle, ThumbsDown, ThumbsUp, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import { useAvailablePlayers, useLeagueWeek, useLineup, useReleasedPlayers } from "@/api/hooks";
@@ -14,7 +14,7 @@ function MatchupHeader({ week, revealState, league, sourceSeasonYear }) {
       <h2 className="text-slate-700 text-4xl font-black text-center uppercase">Week {week} Matchup</h2>
       <div className="flex flex-wrap justify-center gap-3 mt-4 text-xs font-black uppercase">
         <span className="neo-border px-3 py-2 bg-[#00D9FF] text-black">{league.draft_mode === "weekly_redraft" || league.mode === "weekly_redraft" ? "Weekly Redraft" : "Season Snake"}</span>
-        <span className="neo-border px-3 py-2 bg-[#9EF01A] text-black">{league.ranking_system === "offl" ? "OFFL" : "Standard"}</span>
+        <span className="neo-border px-3 py-2 bg-[#9EF01A] text-black">{league.ranking_system === "offl" ? "H2H + League Points" : "Head to Head"}</span>
         <span className="neo-border px-3 py-2 bg-[#F7B801] text-black">Source Season {sourceSeasonYear}</span>
         <span className="neo-border px-3 py-2 bg-white text-black">{revealState === "revealed" ? "Hidden Week Revealed" : "Hidden Week Protected"}</span>
       </div>
@@ -128,6 +128,62 @@ function ReleasedPlayersReport({ leagueId }) {
   );
 }
 
+function LeagueRulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
+  const feedbackCounts = (eventId) => {
+    const rows = auditFeedback.filter((item) => item.audit_event_id === eventId);
+    return {
+      up: rows.filter((item) => item.vote === "up").length,
+      down: rows.filter((item) => item.vote === "down").length,
+    };
+  };
+
+  return (
+    <div className="neo-card bg-white p-6">
+      <h3 className="mb-4 text-2xl font-black uppercase text-orange-600">League Rules</h3>
+      <div className="flex flex-wrap gap-2">
+        <span className="neo-border bg-[#EFFBFF] px-3 py-2 text-xs font-black uppercase text-black">Standard League</span>
+        <span className="neo-border bg-white px-3 py-2 text-xs font-black uppercase text-black">Fantasy Points Hidden</span>
+        <span className="neo-border bg-white px-3 py-2 text-xs font-black uppercase text-black">
+          Player Names {league.draft_player_name_visibility === "hidden_until_drafted" ? "Hidden Until Drafted" : "Shown"}
+        </span>
+        <span className="neo-border bg-white px-3 py-2 text-xs font-black uppercase text-black">Teams Hidden Until Drafted</span>
+        <span className="neo-border bg-white px-3 py-2 text-xs font-black uppercase text-black">
+          Durability {league.durability_mode === "off" ? "Off" : league.durability_mode === "revealed_at_draft" ? "Revealed At Draft" : "Hidden Until Drafted"}
+        </span>
+        <span className="neo-border bg-white px-3 py-2 text-xs font-black uppercase text-black">
+          Manager Points {league.manager_points_enabled ? `Enabled (${league.manager_points_starting || 0})` : "Disabled"}
+        </span>
+      </div>
+      {auditEvents.length > 0 && (
+        <div className="mt-5 space-y-3">
+          <p className="text-sm font-black uppercase text-gray-500">Rule Change Log</p>
+          {auditEvents.slice(0, 5).map((event) => {
+            const counts = feedbackCounts(event.id);
+            return (
+              <div key={event.id} className="neo-border bg-gray-50 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="font-black uppercase">{(event.changed_keys || []).join(", ")}</p>
+                    <p className="text-xs font-bold text-gray-600">{event.actor_email || "League admin"} | {new Date(event.created_date).toLocaleString()}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={() => onVote(event.id, "up")} disabled={isVoting} className="neo-btn bg-[#D7F8E8] px-3 py-2 text-black">
+                      <ThumbsUp className="mr-1 h-4 w-4" />{counts.up}
+                    </Button>
+                    <Button onClick={() => onVote(event.id, "down")} disabled={isVoting} className="neo-btn bg-red-100 px-3 py-2 text-black">
+                      <ThumbsDown className="mr-1 h-4 w-4" />{counts.down}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LineupPanel({ league, currentWeek, leagueMemberId }) {
   const { data: lineup } = useLineup(league.id, currentWeek, leagueMemberId);
   const finalizeLineupMutation = useMutation({
@@ -206,11 +262,17 @@ export default function League() {
 
   const { data: standings = [], isLoading: isLoadingStandings } = useQuery({
     queryKey: ["league-standings", leagueId, league?.ranking_system],
-    queryFn: () => appClient.entities.Standing.filter(
-      { league_id: leagueId },
-      league?.ranking_system === "offl" ? "-league_points" : "-wins",
-      "-points_for"
-    ),
+    queryFn: async () => {
+      const rows = await appClient.entities.Standing.filter({ league_id: leagueId });
+      return rows.sort((a, b) =>
+        Number(b.wins || 0) - Number(a.wins || 0) ||
+        Number(b.ties || 0) - Number(a.ties || 0) ||
+        (league?.ranking_system === "offl"
+          ? Number(b.league_points || 0) - Number(a.league_points || 0)
+          : 0) ||
+        Number(b.points_for || 0) - Number(a.points_for || 0)
+      );
+    },
     enabled: !!leagueId && !!league,
   });
 
@@ -218,6 +280,18 @@ export default function League() {
     queryKey: ["league-members", leagueId],
     queryFn: () => appClient.entities.LeagueMember.filter({ league_id: leagueId }),
     enabled: !!leagueId,
+  });
+
+  const { data: auditEvents = [] } = useQuery({
+    queryKey: ["league-audit-events", leagueId],
+    queryFn: () => appClient.entities.LeagueAuditEvent.filter({ league_id: leagueId }, "-created_date"),
+    enabled: !!leagueId && !!league,
+  });
+
+  const { data: auditFeedback = [], refetch: refetchAuditFeedback } = useQuery({
+    queryKey: ["league-audit-feedback", leagueId],
+    queryFn: () => appClient.entities.LeagueAuditFeedback.filter({ league_id: leagueId }),
+    enabled: !!leagueId && !!league,
   });
 
   const { data: season = null } = useQuery({
@@ -236,6 +310,15 @@ export default function League() {
     mutationFn: () => appClient.functions.invoke("reveal_week_results", { league_id: leagueId, week_number: displayedWeek }),
     onSuccess: () => toast.success("Week reveal requested."),
     onError: () => toast.error("Failed to reveal week."),
+  });
+
+  const voteMutation = useMutation({
+    mutationFn: ({ auditEventId, vote }) => appClient.functions.invoke("vote_league_audit", { audit_event_id: auditEventId, vote }),
+    onSuccess: () => {
+      toast.success("Feedback saved.");
+      refetchAuditFeedback();
+    },
+    onError: (error) => toast.error(error.message || "Failed to save feedback."),
   });
 
   if (isLoadingLeague) {
@@ -300,6 +383,16 @@ export default function League() {
         sourceSeasonYear={currentSourceYear}
       />
 
+      <div className="mb-8">
+        <LeagueRulesPanel
+          league={league}
+          auditEvents={auditEvents}
+          auditFeedback={auditFeedback}
+          isVoting={voteMutation.isPending}
+          onVote={(auditEventId, vote) => voteMutation.mutate({ auditEventId, vote })}
+        />
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
         <div className="neo-card bg-white p-4">
           <p className="text-xs font-black uppercase text-gray-500 mb-1">Current Week</p>
@@ -347,7 +440,7 @@ export default function League() {
               </div>
               <div className="neo-border p-4 bg-white">
                 <p className="text-xs font-black uppercase text-gray-500 mb-1">Assignment Method</p>
-                <p className="text-xl font-black">{leagueWeekData?.randomization?.assignment_method || "per_player_hidden_week"}</p>
+                <p className="text-xl font-black">{leagueWeekData?.randomization?.assignment_method || "per_nfl_team_hidden_week"}</p>
               </div>
               <div className="neo-border p-4 bg-white">
                 <p className="text-xs font-black uppercase text-gray-500 mb-1">Visibility</p>

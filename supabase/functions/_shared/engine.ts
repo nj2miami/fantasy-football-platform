@@ -99,6 +99,21 @@ const DEFAULT_DRAFT_CONFIG = {
 
 const DEFAULT_TEAM_TIER_CAP = 25;
 const DEFAULT_MANAGER_POINTS_STARTING = 0;
+const DEFAULT_MANAGER_POINT_ACTIONS = {
+  treat_bench_player: { label: "Treat Bench Player", active: false, cost: 1 },
+  player_enhance: { label: "Player Enhance", active: false, cost: 1 },
+  stat_reveal: { label: "Stat Reveal", active: false, cost: 1 },
+  bench_productivity: { label: "Bench Productivity", active: false, cost: 1 },
+};
+const DEFAULT_LEAGUE_VISIBILITY_CONFIG = {
+  league_type: "standard",
+  fantasy_points_visibility: "hidden",
+  draft_player_name_visibility: "shown",
+  draft_team_visibility: "hidden_until_drafted",
+  durability_mode: "hidden_until_drafted",
+  manager_points_enabled: false,
+  manager_point_actions: DEFAULT_MANAGER_POINT_ACTIONS,
+};
 
 const DURABILITY_LABELS: Record<number, string> = {
   3: "Perfect",
@@ -121,6 +136,8 @@ const DURABILITY_MULTIPLIERS: Record<number, number> = {
 };
 
 const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
+const MIN_DRAFT_STAT_WEEKS = 12;
+const TEAM_HIDDEN_WEEK_ASSIGNMENT = "per_nfl_team_hidden_week";
 
 const DEFAULT_SCHEDULE_CONFIG = {
   type: "interval",
@@ -292,14 +309,23 @@ function makeInviteCode() {
 
 function normalizeLeaguePlaySettings(payload: Json | null | undefined) {
   const league = payload || {};
+  const managerPointsEnabled = league.manager_points_enabled === true;
   const draftMode = String(league.draft_mode || (league.mode === "weekly_redraft" ? "weekly_redraft" : "season_snake"));
   return {
+    ...DEFAULT_LEAGUE_VISIBILITY_CONFIG,
     ...DEFAULT_LEAGUE_PLAY_SETTINGS,
     ...league,
+    league_type: "standard",
+    fantasy_points_visibility: "hidden",
+    draft_player_name_visibility: String(league.draft_player_name_visibility || DEFAULT_LEAGUE_VISIBILITY_CONFIG.draft_player_name_visibility),
+    draft_team_visibility: String(league.draft_team_visibility || DEFAULT_LEAGUE_VISIBILITY_CONFIG.draft_team_visibility),
+    durability_mode: String(league.durability_mode || DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode),
+    manager_points_enabled: managerPointsEnabled,
+    manager_point_actions: { ...DEFAULT_MANAGER_POINT_ACTIONS, ...((league.manager_point_actions as Json | undefined) || {}) },
     mode: draftMode === "weekly_redraft" ? "weekly_redraft" : "traditional",
     draft_mode: draftMode,
     team_tier_cap: Number(league.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
-    manager_points_starting: Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING),
+    manager_points_starting: managerPointsEnabled ? Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING) : 0,
     schedule_config: { ...DEFAULT_SCHEDULE_CONFIG, ...((league.schedule_config as Json | undefined) || {}) },
   };
 }
@@ -311,6 +337,10 @@ function durabilityLabel(value: unknown) {
 function applyDurability(points: number, durability: unknown) {
   const multiplier = DURABILITY_MULTIPLIERS[Number(durability)] ?? 1;
   return Number((points * multiplier).toFixed(2));
+}
+
+function durabilityEnabled(league: Json) {
+  return String(league.durability_mode || DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode) !== "off";
 }
 
 function lineupSlotStatus(slot: Json) {
@@ -341,6 +371,11 @@ function scoringRuleNumber(rules: Json, category: string, key: string, fallback:
 function statNumber(stats: Json, key: string) {
   const parsed = Number(stats?.[key] ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeTeam(team: unknown) {
+  const value = String(team || "").trim().toUpperCase();
+  return value && value !== "FA" && value !== "UNK" && value !== "UNKNOWN" ? value : "";
 }
 
 async function positionConfig(supabase: ReturnType<typeof createClient>) {
@@ -509,14 +544,67 @@ async function ensureWeekRandomization(supabase: ReturnType<typeof createClient>
     .eq("fantasy_week", weekNumber)
     .maybeSingle();
   if (existingError) throw existingError;
-  if (existing) return existing;
+  if (existing?.assignment_method === TEAM_HIDDEN_WEEK_ASSIGNMENT) return existing;
+  if (existing) {
+    const { error: staleRandomizationError } = await supabase
+      .from("week_randomizations")
+      .delete()
+      .eq("id", existing.id);
+    if (staleRandomizationError) throw staleRandomizationError;
+  }
 
-  const { data: players, error: playerError } = await supabase.from("players").select("id").eq("source_season_year", sourceSeasonYear);
-  if (playerError) throw playerError;
-  const assignments = (players || []).reduce((acc: Record<string, number>, player: { id: string }, index: number) => {
-    acc[player.id] = ((weekNumber + index * 2) % 18) + 1;
-    return acc;
-  }, {});
+  const playoffStartWeek = Number(league.playoff_start_week || 999);
+  const isPlayoff = weekNumber >= playoffStartWeek;
+  const { data: teamWeeks, error: teamWeeksError } = await supabase
+    .from("player_week_stats")
+    .select("week,players!inner(team)")
+    .eq("season_year", sourceSeasonYear);
+  if (teamWeeksError) throw teamWeeksError;
+
+  const availableByTeam = new Map<string, Set<number>>();
+  for (const row of teamWeeks || []) {
+    const player = Array.isArray(row.players) ? row.players[0] : row.players;
+    const team = normalizeTeam(player?.team);
+    const week = Number(row.week || 0);
+    if (!team || !week) continue;
+    const weeks = availableByTeam.get(team) || new Set<number>();
+    weeks.add(week);
+    availableByTeam.set(team, weeks);
+  }
+
+  const { data: priorRandomizations, error: priorError } = await supabase
+    .from("week_randomizations")
+    .select("fantasy_week,assignments")
+    .eq("league_id", league.id)
+    .lt("fantasy_week", weekNumber);
+  if (priorError) throw priorError;
+  const usedByTeam = new Map<string, Set<number>>();
+  for (const prior of priorRandomizations || []) {
+    const priorWeek = Number(prior.fantasy_week || 0);
+    const priorIsPlayoff = priorWeek >= playoffStartWeek;
+    if (priorIsPlayoff !== isPlayoff) continue;
+    for (const [team, assignedWeek] of Object.entries((prior.assignments || {}) as Record<string, unknown>)) {
+      const normalizedTeam = normalizeTeam(team);
+      const sourceWeek = Number(assignedWeek || 0);
+      if (!normalizedTeam || !sourceWeek) continue;
+      const usedWeeks = usedByTeam.get(normalizedTeam) || new Set<number>();
+      usedWeeks.add(sourceWeek);
+      usedByTeam.set(normalizedTeam, usedWeeks);
+    }
+  }
+
+  const assignments: Record<string, number> = {};
+  for (const [team, weeks] of availableByTeam.entries()) {
+    const usedWeeks = usedByTeam.get(team) || new Set<number>();
+    const unusedWeeks = [...weeks].filter((sourceWeek) => !usedWeeks.has(sourceWeek)).sort((a, b) => a - b);
+    if (!unusedWeeks.length) {
+      throw new Error(`${team} has no unused source stat weeks remaining for ${isPlayoff ? "playoff" : "regular-season"} week ${weekNumber}.`);
+    }
+    const randomIndex = crypto.getRandomValues(new Uint32Array(1))[0] % unusedWeeks.length;
+    assignments[team] = unusedWeeks[randomIndex];
+  }
+  if (!Object.keys(assignments).length) throw new Error("No NFL team stat weeks are available for hidden week assignment.");
+
   const { data, error } = await supabase
     .from("week_randomizations")
     .insert({
@@ -524,7 +612,7 @@ async function ensureWeekRandomization(supabase: ReturnType<typeof createClient>
       fantasy_week: weekNumber,
       source_season_year: sourceSeasonYear,
       reveal_state: "hidden",
-      assignment_method: "per_player_hidden_week",
+      assignment_method: TEAM_HIDDEN_WEEK_ASSIGNMENT,
       assignments,
     })
     .select("*")
@@ -534,7 +622,7 @@ async function ensureWeekRandomization(supabase: ReturnType<typeof createClient>
 }
 
 async function generateMatchups(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number) {
-  if (league.schedule_type !== "head_to_head") return [];
+  if (league.schedule_type !== "head_to_head" && league.ranking_system !== "offl") return [];
   const { data: existing, error: existingError } = await supabase
     .from("matchups")
     .select("*")
@@ -751,7 +839,14 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
       roster_rules: payload.roster_rules || DEFAULT_ROSTER_RULES,
       draft_config: payload.draft_config || DEFAULT_DRAFT_CONFIG,
       team_tier_cap: Number(payload.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
-      manager_points_starting: Number(payload.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING),
+      league_type: "standard",
+      fantasy_points_visibility: "hidden",
+      draft_player_name_visibility: payload.draft_player_name_visibility || DEFAULT_LEAGUE_VISIBILITY_CONFIG.draft_player_name_visibility,
+      draft_team_visibility: payload.draft_team_visibility || DEFAULT_LEAGUE_VISIBILITY_CONFIG.draft_team_visibility,
+      durability_mode: payload.durability_mode || DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode,
+      manager_points_enabled: payload.manager_points_enabled === true,
+      manager_points_starting: payload.manager_points_enabled === true ? Number(payload.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING) : 0,
+      manager_point_actions: { ...DEFAULT_MANAGER_POINT_ACTIONS, ...((payload.manager_point_actions as Json | undefined) || {}) },
       header_image_url: payload.header_image_url ?? null,
     })
     .select("*")
@@ -776,8 +871,9 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
     league_id: league.id,
     league_member_id: member.id,
   });
-  await ensureLeaguePlayerScores(supabase, league);
-  await ensureLeagueDurability(supabase, league);
+  const normalizedLeague = normalizeLeaguePlaySettings(league);
+  await ensureLeaguePlayerScores(supabase, normalizedLeague);
+  await ensureLeagueDurability(supabase, normalizedLeague);
 
   if (isPaidLeague && role === "manager") {
     await supabase
@@ -1108,7 +1204,9 @@ async function createOfficialLeague(supabase: ReturnType<typeof createClient>, u
     roster_rules: DEFAULT_ROSTER_RULES,
     draft_config: DEFAULT_DRAFT_CONFIG,
     team_tier_cap: Number(payload.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
-    manager_points_starting: Number(payload.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING),
+    manager_points_enabled: payload.manager_points_enabled === true,
+    manager_points_starting: payload.manager_points_enabled === true ? Number(payload.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING) : 0,
+    manager_point_actions: payload.manager_point_actions || DEFAULT_MANAGER_POINT_ACTIONS,
   });
   await supabase.from("official_leagues").insert({ league_id: result.league.id, label: payload.label || "Official league" });
   return result;
@@ -1122,6 +1220,98 @@ async function setLeagueStatus(supabase: ReturnType<typeof createClient>, user: 
   const { data, error } = await supabase.from("leagues").update(update).eq("id", league.id).select("*").single();
   if (error) throw error;
   return { league: data };
+}
+
+const LEAGUE_SETTINGS_UPDATE_KEYS = [
+  "name",
+  "description",
+  "is_public",
+  "max_members",
+  "league_type",
+  "fantasy_points_visibility",
+  "draft_player_name_visibility",
+  "draft_team_visibility",
+  "durability_mode",
+  "manager_points_enabled",
+  "manager_points_starting",
+  "manager_point_actions",
+];
+
+function jsonValueChanged(previous: unknown, next: unknown) {
+  return JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null);
+}
+
+function standardLeagueSettingsPayload(payload: Json) {
+  const managerPointsEnabled = payload.manager_points_enabled === true;
+  const update: Json = {};
+  for (const key of LEAGUE_SETTINGS_UPDATE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) update[key] = payload[key];
+  }
+  update.league_type = "standard";
+  update.fantasy_points_visibility = "hidden";
+  if (!update.draft_player_name_visibility) update.draft_player_name_visibility = DEFAULT_LEAGUE_VISIBILITY_CONFIG.draft_player_name_visibility;
+  if (!update.draft_team_visibility) update.draft_team_visibility = DEFAULT_LEAGUE_VISIBILITY_CONFIG.draft_team_visibility;
+  if (!update.durability_mode) update.durability_mode = DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode;
+  update.manager_points_enabled = managerPointsEnabled;
+  update.manager_points_starting = managerPointsEnabled ? Number(payload.manager_points_starting || 0) : 0;
+  update.manager_point_actions = { ...DEFAULT_MANAGER_POINT_ACTIONS, ...((payload.manager_point_actions as Json | undefined) || {}) };
+  update.updated_date = new Date().toISOString();
+  return update;
+}
+
+async function updateLeagueSettings(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league, profile } = await requireLeagueControl(supabase, user, payload.league_id);
+  const update = standardLeagueSettingsPayload(payload);
+  if (update.manager_points_enabled && Number(update.manager_points_starting || 0) <= 0) {
+    throw new Error("Manager Points starting value is required when Manager Points are enabled.");
+  }
+  const changedKeys = Object.keys(update).filter((key) => key !== "updated_date" && jsonValueChanged(league[key], update[key]));
+  if (!changedKeys.length) return { league };
+
+  const previousValues = Object.fromEntries(changedKeys.map((key) => [key, league[key] ?? null]));
+  const newValues = Object.fromEntries(changedKeys.map((key) => [key, update[key] ?? null]));
+  const { data, error } = await supabase.from("leagues").update(update).eq("id", league.id).select("*").single();
+  if (error) throw error;
+
+  if (league.rules_locked_at) {
+    const { error: auditError } = await supabase.from("league_audit_events").insert({
+      league_id: league.id,
+      actor_profile_id: user.id,
+      actor_email: user.email || profile?.user_email || null,
+      changed_keys: changedKeys,
+      previous_values: previousValues,
+      new_values: newValues,
+    });
+    if (auditError) throw auditError;
+  }
+
+  if (changedKeys.includes("durability_mode")) await ensureLeagueDurability(supabase, normalizeLeaguePlaySettings(data));
+  return { league: data, changed_keys: changedKeys };
+}
+
+async function voteLeagueAudit(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const vote = String(payload.vote || "").toLowerCase();
+  if (!["up", "down"].includes(vote)) throw new Error("Vote must be up or down.");
+  const { data: event, error: eventError } = await supabase
+    .from("league_audit_events")
+    .select("id,league_id")
+    .eq("id", payload.audit_event_id)
+    .single();
+  if (eventError) throw eventError;
+  await requireLeagueAccess(supabase, user, event.league_id);
+  const { data, error } = await supabase
+    .from("league_audit_feedback")
+    .upsert({
+      audit_event_id: event.id,
+      league_id: event.league_id,
+      profile_id: user.id,
+      vote,
+      updated_date: new Date().toISOString(),
+    }, { onConflict: "audit_event_id,profile_id" })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { feedback: data };
 }
 
 async function startSeason(supabase: ReturnType<typeof createClient>, payload: Json) {
@@ -1214,7 +1404,8 @@ async function openWeekDraft(supabase: ReturnType<typeof createClient>, payload:
 }
 
 async function scheduleDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
-  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
+  const league = normalizeLeaguePlaySettings(rawLeague);
   const start = new Date(String(payload.start || ""));
   if (Number.isNaN(start.getTime())) throw new Error("Draft start date/time is required");
 
@@ -1298,12 +1489,17 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_scores")
-    .select("id,position,scoring_rules_hash")
+    .select("id,position,weeks_played,scoring_rules_hash,players!inner(team)")
     .eq("league_id", leagueId)
     .lte("position_rank", 30);
   if (existingError) throw existingError;
   const existingHashMatches = Boolean(existing?.length) && existing.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
-  if (existingHashMatches && hasCompleteDraftBuckets(existing || [])) return;
+  const existingWeeksEligible = Boolean(existing?.length) && existing.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
+  const existingTeamsEligible = Boolean(existing?.length) && existing.every((row: Json) => {
+    const player = Array.isArray(row.players) ? row.players[0] : row.players;
+    return Boolean(normalizeTeam(player?.team));
+  });
+  if (existingHashMatches && existingWeeksEligible && existingTeamsEligible && hasCompleteDraftBuckets(existing || [])) return;
   if (existing?.length) {
     const { error: deleteError } = await supabase.from("league_player_scores").delete().eq("league_id", leagueId);
     if (deleteError) throw deleteError;
@@ -1311,7 +1507,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
   const { data: weeks, error: weeksError } = await supabase
     .from("player_week_stats")
-    .select("player_id,season_year,raw_stats,fantasy_points,players!inner(id,position,full_name,player_display_name)")
+    .select("player_id,season_year,raw_stats,fantasy_points,players!inner(id,position,team,full_name,player_display_name)")
     .eq("season_year", sourceSeasonYear);
   if (weeksError) throw weeksError;
 
@@ -1322,6 +1518,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
     if (!playerId) continue;
     const rawStats = ((week.raw_stats || {}) as Json);
     const playerPosition = String(player?.position || "");
+    if (!normalizeTeam(player?.team)) continue;
     const bucket = rosterLimitBucket(playerPosition, config);
     if (bucket === "UNUSED") continue;
     const points = calculateFantasyPoints(rawStats, playerPosition, scoringRules, config);
@@ -1339,6 +1536,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
   const byPosition = new Map<string, Array<{ player_id: string; position: string; full_name: string; total: number; weeks: number; avg: number }>>();
   for (const aggregate of aggregates.values()) {
+    if (aggregate.weeks < MIN_DRAFT_STAT_WEEKS) continue;
     const avg = aggregate.weeks ? aggregate.total / aggregate.weeks : 0;
     const rows = byPosition.get(aggregate.position) || [];
     rows.push({ ...aggregate, avg });
@@ -1367,50 +1565,6 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
       });
   }
 
-  if (!rows.length) {
-    const { data: players, error: playerError } = await supabase
-      .from("players")
-      .select("id,source_season_year,position,full_name,player_display_name,avg_points,total_points")
-      .eq("source_season_year", sourceSeasonYear);
-    if (playerError) throw playerError;
-
-    const fallbackByPosition = new Map<string, Array<{ player_id: string; position: string; full_name: string; avg: number; total: number }>>();
-    for (const player of players || []) {
-      const bucket = rosterLimitBucket(String(player.position || ""), config);
-      if (bucket === "UNUSED") continue;
-      const list = fallbackByPosition.get(bucket) || [];
-      list.push({
-        player_id: String(player.id),
-        position: bucket,
-        full_name: String(player.player_display_name || player.full_name || ""),
-        avg: Number(player.avg_points || 0),
-        total: Number(player.total_points || 0),
-      });
-      fallbackByPosition.set(bucket, list);
-    }
-
-    for (const [, playersForPosition] of fallbackByPosition.entries()) {
-      playersForPosition
-        .sort((a, b) => b.total - a.total || b.avg - a.avg || a.full_name.localeCompare(b.full_name))
-        .slice(0, 30)
-        .forEach((player, index) => {
-          const positionRank = index + 1;
-          rows.push({
-            league_id: leagueId,
-            player_id: player.player_id,
-            source_season_year: sourceSeasonYear,
-            position: player.position,
-            position_rank: positionRank,
-            tier_value: playerTierForRank(positionRank),
-            expected_avg_points: Number(player.avg.toFixed(4)),
-            total_points: Number(player.total.toFixed(4)),
-            weeks_played: 0,
-            scoring_rules_hash: "fallback-player-aggregates",
-          });
-        });
-    }
-  }
-
   if (rows.length) {
     const { error } = await supabase.from("league_player_scores").upsert(rows, { onConflict: "league_id,player_id" });
     if (error) throw error;
@@ -1418,30 +1572,46 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 }
 
 async function ensureLeagueDurability(supabase: ReturnType<typeof createClient>, league: Json) {
-  const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  await ensureLeaguePlayerScores(supabase, league);
+  if (!durabilityEnabled(league)) {
+    const { error } = await supabase.from("league_player_durability").delete().eq("league_id", league.id);
+    if (error) throw error;
+    return;
+  }
   const { data: players, error: playersError } = await supabase
-    .from("players")
-    .select("id")
-    .eq("source_season_year", sourceSeasonYear);
+    .from("league_player_scores")
+    .select("player_id")
+    .eq("league_id", league.id)
+    .lte("position_rank", 30);
   if (playersError) throw playersError;
   if (!players?.length) return;
+  const playerIds = new Set((players || []).map((player: Json) => player.player_id));
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_durability")
     .select("player_id")
     .eq("league_id", league.id);
   if (existingError) throw existingError;
-  const existingIds = new Set((existing || []).map((row: Json) => row.player_id));
+  const staleIds = (existing || []).map((row: Json) => row.player_id).filter((playerId: unknown) => !playerIds.has(playerId));
+  if (staleIds.length) {
+    const { error: staleDeleteError } = await supabase
+      .from("league_player_durability")
+      .delete()
+      .eq("league_id", league.id)
+      .in("player_id", staleIds);
+    if (staleDeleteError) throw staleDeleteError;
+  }
+  const existingIds = new Set((existing || []).map((row: Json) => row.player_id).filter((playerId: unknown) => playerIds.has(playerId)));
   const rows = (players || [])
-    .filter((player: Json) => !existingIds.has(player.id))
+    .filter((player: Json) => !existingIds.has(player.player_id))
     .map((player: Json) => {
       const durability = crypto.getRandomValues(new Uint32Array(1))[0] % 4;
       return {
         league_id: league.id,
-        player_id: player.id,
+        player_id: player.player_id,
         durability,
         initial_durability: durability,
-        revealed_at: new Date().toISOString(),
+        revealed_at: String(league.durability_mode || "") === "revealed_at_draft" ? new Date().toISOString() : null,
       };
     });
   if (rows.length) {
@@ -1526,7 +1696,8 @@ function shuffleRows<T>(rows: T[]) {
 }
 
 async function startDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
-  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
+  const league = normalizeLeaguePlaySettings(rawLeague);
   const { data: draft, error: draftError } = await supabase
     .from("drafts")
     .select("*")
@@ -1593,11 +1764,17 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .select("*")
     .single();
   if (updateError) throw updateError;
+  await supabase
+    .from("leagues")
+    .update({ rules_locked_at: league.rules_locked_at || new Date().toISOString(), updated_date: new Date().toISOString() })
+    .eq("id", league.id)
+    .is("rules_locked_at", null);
   return { draft: updatedDraft };
 }
 
 async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
-  const { league } = await requireLeagueAccess(supabase, user, payload.league_id);
+  const { league: rawLeague } = await requireLeagueAccess(supabase, user, payload.league_id);
+  const league = normalizeLeaguePlaySettings(rawLeague);
   await ensureLeaguePlayerScores(supabase, league);
   await ensureLeagueDurability(supabase, league);
   const { count, error } = await supabase
@@ -1631,10 +1808,11 @@ async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, le
 
   const { data: players, error: playersError } = await supabase
     .from("league_player_scores")
-    .select("player_id,expected_avg_points")
+    .select("player_id,total_points,position_rank")
     .eq("league_id", league.id)
     .lte("position_rank", 30)
-    .order("expected_avg_points", { ascending: false })
+    .order("total_points", { ascending: false })
+    .order("position_rank", { ascending: true })
     .limit(1000);
   if (playersError) throw playersError;
 
@@ -1867,12 +2045,19 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     .select("*, league_members(team_name)")
     .eq("league_id", leagueId)
     .eq("week_number", weekNumber);
+  const { data: activeMembers, error: activeMembersError } = await supabase
+    .from("league_members")
+    .select("id,team_name")
+    .eq("league_id", leagueId)
+    .eq("is_active", true);
+  if (activeMembersError) throw activeMembersError;
 
   const assignments = (randomization?.assignments || {}) as Record<string, number>;
+  const sourceSeasonYear = Number(randomization?.source_season_year || league.source_season_year || new Date().getFullYear() - 1);
   const lineupPlayerIds = [...new Set((lineups || []).flatMap((lineup: Json) =>
     Array.isArray(lineup.slots) ? lineup.slots.map((slot: Json) => String(slot.player_id || "")).filter(Boolean) : []
   ))];
-  const { data: durabilityRows, error: durabilityError } = lineupPlayerIds.length
+  const { data: durabilityRows, error: durabilityError } = lineupPlayerIds.length && durabilityEnabled(league)
     ? await supabase
       .from("league_player_durability")
       .select("player_id,durability")
@@ -1887,24 +2072,45 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     let total = 0;
     for (const slot of lineup.slots || []) {
       const playerId = slot.player_id;
-      const sourceWeek = assignments[playerId];
-      const { data: playerWeek } = await supabase
+      const { data: player, error: scoringPlayerError } = await supabase
+        .from("players")
+        .select("position,team")
+        .eq("id", playerId)
+        .single();
+      if (scoringPlayerError) throw scoringPlayerError;
+      const team = normalizeTeam(player?.team);
+      const sourceWeek = team ? assignments[team] : null;
+      if (!team) throw new Error(`Player ${playerId} does not have a valid NFL team for weekly scoring.`);
+      if (!sourceWeek) throw new Error(`No hidden source week assignment exists for NFL team ${team}.`);
+      const { data: assignedPlayerWeek } = await supabase
         .from("player_week_stats")
-        .select("raw_stats,fantasy_points,players!inner(position)")
+        .select("raw_stats,fantasy_points,players!inner(position,team)")
         .eq("player_id", playerId)
-        .eq("week", sourceWeek || weekNumber)
+        .eq("season_year", sourceSeasonYear)
+        .eq("week", sourceWeek)
         .maybeSingle();
-      const player = Array.isArray(playerWeek?.players) ? playerWeek?.players[0] : playerWeek?.players;
-      const basePoints = playerWeek
-        ? calculateFantasyPoints((playerWeek.raw_stats || {}) as Json, String(player?.position || ""), (league.scoring_rules || DEFAULT_SCORING_RULES) as Json, config)
+      const assignedPlayer = Array.isArray(assignedPlayerWeek?.players) ? assignedPlayerWeek?.players[0] : assignedPlayerWeek?.players;
+      const basePoints = assignedPlayerWeek
+        ? calculateFantasyPoints((assignedPlayerWeek.raw_stats || {}) as Json, String(assignedPlayer?.position || player?.position || ""), (league.scoring_rules || DEFAULT_SCORING_RULES) as Json, config)
         : 0;
-      total += applyDurability(basePoints * lineupSlotMultiplier(slot), durabilityByPlayer.get(String(playerId)));
+      const slotPoints = basePoints * lineupSlotMultiplier(slot);
+      total += durabilityEnabled(league) ? applyDurability(slotPoints, durabilityByPlayer.get(String(playerId))) : Number(slotPoints.toFixed(2));
     }
     lineupTotals.push({
       league_member_id: lineup.league_member_id,
       team_name: lineup.league_members?.team_name || null,
       total: Number(total.toFixed(2)),
       slots: lineup.slots || [],
+    });
+  }
+  const lineupMemberIds = new Set(lineupTotals.map((row) => row.league_member_id));
+  for (const member of activeMembers || []) {
+    if (lineupMemberIds.has(member.id)) continue;
+    lineupTotals.push({
+      league_member_id: member.id,
+      team_name: member.team_name || null,
+      total: 0,
+      slots: [],
     });
   }
 
@@ -1922,7 +2128,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
       for (const slot of lineup.slots || []) {
         const playerId = String(slot.player_id || "");
         const currentDurability = durabilityByPlayer.get(playerId);
-        if (currentDurability !== undefined) {
+        if (durabilityEnabled(league) && currentDurability !== undefined) {
           const status = lineupSlotStatus(slot);
           const nextDurability = status === "treating" || status === "treatment" || status === "treated"
             ? Math.min(3, currentDurability + 1)
@@ -1993,7 +2199,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
 
   await supabase.from("league_week_results").delete().eq("league_id", leagueId).eq("week_number", weekNumber);
   const sortedTotals = [...lineupTotals].sort((a, b) => b.total - a.total);
-  const rankPoints = [4, 3, 2, 1];
+  const activeTeamCount = sortedTotals.length;
   const resultRows = sortedTotals.map((row, index) => ({
     league_id: leagueId,
     league_member_id: row.league_member_id,
@@ -2001,8 +2207,8 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     total_points: row.total,
     weekly_rank: index + 1,
     head_to_head_points: 0,
-    rank_points: league.ranking_system === "offl" ? (rankPoints[index] || 0) : 0,
-    league_points: league.schedule_type === "league_wide" || league.ranking_system === "offl" ? (rankPoints[index] || 0) : 0,
+    rank_points: league.ranking_system === "offl" ? Math.max(activeTeamCount - index, 1) : 0,
+    league_points: league.ranking_system === "offl" ? Math.max(activeTeamCount - index, 1) : 0,
   }));
 
   const { data: matchups } = await supabase.from("matchups").select("*").eq("league_id", leagueId).eq("week_number", weekNumber);
@@ -2011,14 +2217,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     const away = resultRows.find((row) => row.league_member_id === matchup.away_member_id);
     if (!home || !away) continue;
     await supabase.from("matchups").update({ home_score: home.total_points, away_score: away.total_points }).eq("id", matchup.id);
-    if (home.total_points > away.total_points) home.head_to_head_points += 4;
-    else if (away.total_points > home.total_points) away.head_to_head_points += 4;
-    else {
-      home.head_to_head_points += 2;
-      away.head_to_head_points += 2;
-    }
   }
-  for (const row of resultRows) row.league_points = league.ranking_system === "offl" ? row.head_to_head_points + row.rank_points : row.league_points;
   if (resultRows.length) {
     const { error: resultError } = await supabase.from("league_week_results").insert(resultRows);
     if (resultError) throw resultError;
@@ -2165,13 +2364,16 @@ async function recalculateStandings(supabase: ReturnType<typeof createClient>, p
     if (error) throw error;
   }
 
-  const { data: standings, error: standingsError } = await supabase
+  let standingsQuery = supabase
     .from("standings")
     .select("*")
     .eq("league_id", leagueId)
-    .order(league.ranking_system === "offl" ? "league_points" : "wins", { ascending: false })
-    .order(league.ranking_system === "offl" ? "wins" : "points_for", { ascending: false })
-    .order("points_for", { ascending: false });
+    .order("wins", { ascending: false })
+    .order("ties", { ascending: false });
+  standingsQuery = league.ranking_system === "offl"
+    ? standingsQuery.order("league_points", { ascending: false }).order("points_for", { ascending: false })
+    : standingsQuery.order("points_for", { ascending: false });
+  const { data: standings, error: standingsError } = await standingsQuery;
   if (standingsError) throw standingsError;
   return { standings };
 }
@@ -2216,6 +2418,10 @@ export async function handleAction(action: string, request: Request) {
                                 ? await restoreLeague(supabase, user, payload)
                                 : action === "create_official_league"
                                   ? await createOfficialLeague(supabase, user, payload)
+                                  : action === "update_league_settings"
+                                    ? await updateLeagueSettings(supabase, user, payload)
+                                    : action === "vote_league_audit"
+                                      ? await voteLeagueAudit(supabase, user, payload)
                                   : action === "pause_league"
                                     ? await setLeagueStatus(supabase, user, payload, "PAUSED")
                                     : action === "resume_league"

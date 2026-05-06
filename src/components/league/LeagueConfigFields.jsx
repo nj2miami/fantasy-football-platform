@@ -139,11 +139,11 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           },
           {
             value: "offl",
-            label: compactLabels ? "OFFL" : "OFFL Points",
-            description: "Adds standings points for wins and weekly scoring ranks.",
+            label: compactLabels ? "H2H + Points" : "H2H + League Points",
+            description: "Keeps head-to-head records and adds weekly league points by total score rank.",
           },
         ]}
-        description={showDescriptions ? "OFFL adds 4 points per win plus 4/3/2/1 for weekly top scorers." : null}
+        description={showDescriptions ? "H2H + League Points uses record first, then weekly league points as the standings tiebreaker." : null}
         className="neo-border p-4 bg-[#EFFBFF]"
       />}
       {visible.has("advancement_mode") && <SelectField
@@ -268,7 +268,7 @@ export function ScheduleConfigFields({ value, onChange, disabled = false, boxed 
   );
 }
 
-export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeasonYear, onSourceSeasonYearChange, teamTierCap, onTeamTierCapChange, managerPointsStarting, onManagerPointsStartingChange, disabled = false }) {
+export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeasonYear, onSourceSeasonYearChange, teamTierCap, onTeamTierCapChange, disabled = false }) {
   const updateDraft = (patch) => onDraftConfigChange({ ...draftConfig, ...patch });
   return (
     <>
@@ -294,7 +294,6 @@ export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeas
       <NumberField label="Timer Seconds" min="10" value={draftConfig.timer_seconds} disabled={disabled} onChange={(timerSeconds) => updateDraft({ timer_seconds: timerSeconds || 60 })} description="Seconds each manager has to make a pick." />
       <NumberField label="Source Year" value={sourceSeasonYear} disabled={disabled} onChange={(year) => onSourceSeasonYearChange(year || sourceSeasonYear)} description="Completed NFL season used as the hidden source pool." />
       <NumberField label="Team Tier Cap" min="0" value={teamTierCap} disabled={disabled} onChange={(cap) => onTeamTierCapChange(cap || 0)} description="Maximum combined roster tier value. Use 0 for no cap." />
-      <NumberField label="Manager Points" min="0" value={managerPointsStarting} disabled={disabled} onChange={(points) => onManagerPointsStartingChange(points || 0)} description="Starting points for manager actions. Use 0 to disable." />
     </>
   );
 }

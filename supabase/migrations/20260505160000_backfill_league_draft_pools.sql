@@ -43,6 +43,15 @@ position_config as (
   ) merged
   order by upper(position), priority
 ),
+player_week_counts as (
+  select
+    player_id,
+    season_year,
+    count(*) as weeks_played
+  from public.player_week_stats
+  group by player_id, season_year
+  having count(*) >= 12
+),
 ranked_players as (
   select
     l.id as league_id,
@@ -59,6 +68,7 @@ ranked_players as (
     end as draft_position,
     coalesce(p.avg_points, 0) as expected_avg_points,
     coalesce(p.total_points, 0) as total_points,
+    pwc.weeks_played,
     row_number() over (
       partition by l.id,
         case
@@ -75,9 +85,14 @@ ranked_players as (
   from public.leagues l
   join public.players p
     on p.source_season_year = l.source_season_year
+  join player_week_counts pwc
+    on pwc.player_id = p.id
+    and pwc.season_year = l.source_season_year
   join position_config pc
     on upper(pc.position) = upper(p.position)
   where l.archived_at is null
+    and nullif(trim(p.team), '') is not null
+    and upper(p.team) not in ('FA', 'UNK', 'UNKNOWN')
     and pc.enabled is not false
     and not exists (
       select 1
@@ -112,7 +127,7 @@ select
   end,
   expected_avg_points,
   total_points,
-  0,
+  weeks_played,
   'fallback-player-aggregates'
 from ranked_players
 where draft_position is not null

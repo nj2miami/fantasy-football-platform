@@ -60,6 +60,23 @@ export const DEFAULT_DRAFT_CONFIG = {
 export const DEFAULT_TEAM_TIER_CAP = 25;
 export const DEFAULT_MANAGER_POINTS_STARTING = 0;
 
+export const DEFAULT_MANAGER_POINT_ACTIONS = {
+  treat_bench_player: { label: "Treat Bench Player", active: false, cost: 1 },
+  player_enhance: { label: "Player Enhance", active: false, cost: 1 },
+  stat_reveal: { label: "Stat Reveal", active: false, cost: 1 },
+  bench_productivity: { label: "Bench Productivity", active: false, cost: 1 },
+};
+
+export const DEFAULT_LEAGUE_VISIBILITY_CONFIG = {
+  league_type: "standard",
+  fantasy_points_visibility: "hidden",
+  draft_player_name_visibility: "shown",
+  draft_team_visibility: "hidden_until_drafted",
+  durability_mode: "hidden_until_drafted",
+  manager_points_enabled: false,
+  manager_point_actions: DEFAULT_MANAGER_POINT_ACTIONS,
+};
+
 export const DURABILITY_LABELS = {
   3: "Perfect",
   2: "Healthy",

@@ -20,9 +20,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
+import { durabilityText, normalizePlayerPosition, playerName } from "@/lib/playerDisplay";
 
 const PAGE_SIZE = 10;
+const MIN_DRAFT_STAT_WEEKS = 12;
 const POSITION_OPTIONS = ["ALL", "QB", "OFF", "DEF", "K"];
 const DEFAULT_ROSTER_NEEDS = { QB: 1, OFF: 1, FLEX: 1, K: 1, DEF: 1 };
 const OFFENSE_POSITIONS = new Set(["RB", "FB", "WR", "TE", "OL", "C", "G", "OT", "OFF"]);
@@ -141,7 +142,22 @@ function PlayerTierCell({ player }) {
     <div className="text-left text-sm font-black uppercase md:text-center">
       <p className="text-gray-500">Tier</p>
       <p className="text-2xl text-black">{player?.tier_value || 1}</p>
+      <p className="text-[11px] text-gray-500">{player?.tier_range ? `${player.tier_range} AVG` : "Range hidden"}</p>
     </div>
+  );
+}
+
+function playerTeamText(player) {
+  if (player?.team_hidden) return "Team hidden";
+  return player?.team || "FA";
+}
+
+function DraftVisibilityLine({ player }) {
+  return (
+    <span>
+      {player.position || "--"} | {playerTeamText(player)}
+      {player.durability_hidden ? " | Durability hidden" : player.durability !== null && player.durability !== undefined ? ` | ${durabilityText(player)}` : ""}
+    </span>
   );
 }
 
@@ -160,7 +176,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
         </div>
         <p className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
-          <span>{player.position || "--"} | {player.team || "FA"}</span>
+          <DraftVisibilityLine player={player} />
           <button
             type="button"
             onClick={() => (isInBoard ? onRemove(player) : onAdd(player))}
@@ -193,7 +209,7 @@ function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) 
         >
           {playerName(player)}
         </button>
-        <p className="text-xs font-bold uppercase text-gray-500">{player?.position || "--"} | {player?.team || "FA"}</p>
+        <p className="text-xs font-bold uppercase text-gray-500"><DraftVisibilityLine player={player} /></p>
       </div>
       <PlayerTierCell player={player} />
       <div className="flex flex-nowrap gap-2 md:justify-end lg:justify-start xl:justify-end">
@@ -245,7 +261,7 @@ export default function LeagueDraft() {
   const isOpen = String(state?.draft?.status || "").toUpperCase() === "OPEN";
   const isCompleted = String(state?.draft?.status || "").toUpperCase() === "COMPLETED";
   const canStart = isCommissioner && state?.draft?.start && Date.now() >= new Date(state.draft.start).getTime() && !isOpen && !isCompleted;
-  const requiredWeeks = Number(state?.league?.season_length_weeks || 8) + 4;
+  const requiredWeeks = MIN_DRAFT_STAT_WEEKS;
   const seasonYear = Number(state?.league?.source_season_year || new Date().getFullYear() - 1);
   const currentTurnMember = state?.members?.find((member) => member.id === state?.currentTurn?.league_member_id);
   const isMyTurn = isOpen && currentMember?.id && currentMember.id === state?.currentTurn?.league_member_id;
@@ -388,7 +404,10 @@ export default function LeagueDraft() {
   const board = (state.board || []).filter((item) => item.league_member_id === currentMember?.id && !pickedIds.has(item.player_id));
   const roster = (state.rosters || []).filter((slot) => slot.league_member_id === currentMember?.id);
   const currentTierTotal = Number(state.teamTierTotals?.[currentMember?.id] || roster.reduce((sum, slot) => sum + Number(slot.player?.tier_value || 1), 0));
-  const currentManagerPoints = (state.managerPointAccounts || []).find((account) => account.league_member_id === currentMember?.id)?.current_points ?? state.league?.manager_points_starting ?? 0;
+  const managerPointsEnabled = state.league?.manager_points_enabled === true;
+  const currentManagerPoints = managerPointsEnabled
+    ? (state.managerPointAccounts || []).find((account) => account.league_member_id === currentMember?.id)?.current_points ?? state.league?.manager_points_starting ?? 0
+    : 0;
   const boardPlayerIds = new Set(board.map((item) => item.player_id));
   const boardGroups = groupBoardByPosition(board);
   const rosterNeeds = buildRosterNeeds(state.league, roster);
@@ -537,7 +556,7 @@ export default function LeagueDraft() {
                     <span className={`neo-border px-2 py-1 text-xs font-black uppercase ${tierCap && currentTierTotal > tierCap ? "bg-red-500 text-white" : "bg-white text-black"}`}>
                       Tier {currentTierTotal}{tierCap ? ` / ${tierCap}` : ""}
                     </span>
-                    <span className="neo-border bg-white px-2 py-1 text-xs font-black uppercase text-black">Manager Pts {currentManagerPoints}</span>
+                    {managerPointsEnabled && <span className="neo-border bg-white px-2 py-1 text-xs font-black uppercase text-black">Manager Pts {currentManagerPoints}</span>}
                   </div>
                   <div className="flex flex-wrap gap-2 lg:justify-end">
                     {rosterNeeds.map((need) => (
@@ -622,7 +641,10 @@ export default function LeagueDraft() {
           {roster.map((slot) => (
             <div key={slot.id} className="neo-border bg-gray-50 p-3">
               <p className="truncate font-black uppercase">{playerName(slot.player)}</p>
-              <p className="text-xs font-bold text-gray-500">{slot.slot_type} | Tier {slot.player?.tier_value || 1}</p>
+              <p className="text-xs font-bold text-gray-500">
+                {slot.slot_type} | {playerTeamText(slot.player)} | Tier {slot.player?.tier_value || 1}
+                {slot.player?.durability !== null && slot.player?.durability !== undefined ? ` | ${durabilityText(slot.player)}` : ""}
+              </p>
             </div>
           ))}
           {!roster.length && <p className="text-sm font-bold text-gray-500">Draft picks will appear here.</p>}

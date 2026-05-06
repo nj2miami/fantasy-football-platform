@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Play, RefreshCw, Eye, FastForward, Lock, Unlock, Pause, Save } from "lucide-react";
 import { toast } from "sonner";
-import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_MANAGER_POINTS_STARTING, DEFAULT_TEAM_TIER_CAP } from "@/api/appClient";
+import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_TEAM_TIER_CAP } from "@/api/appClient";
 import { DraftConfigFields, LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,6 @@ export default function LeagueDraftSettings({ league }) {
   });
   const [sourceSeasonYear, setSourceSeasonYear] = useState(league.source_season_year || new Date().getFullYear() - 1);
   const [teamTierCap, setTeamTierCap] = useState(Number(league.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP));
-  const [managerPointsStarting, setManagerPointsStarting] = useState(Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING));
   const [draftStart, setDraftStart] = useState("");
 
   const { data: seasons = [] } = useQuery({
@@ -73,7 +72,6 @@ export default function LeagueDraftSettings({ league }) {
       playoff_team_count: Number(playSettings.playoff_team_count) || 4,
       schedule_config: playSettings.schedule_config,
       team_tier_cap: Number(teamTierCap) || 0,
-      manager_points_starting: Number(managerPointsStarting) || 0,
     }),
     onSuccess: () => {
       toast.success("Draft settings saved.");
@@ -213,8 +211,6 @@ export default function LeagueDraftSettings({ league }) {
             onSourceSeasonYearChange={setSourceSeasonYear}
             teamTierCap={teamTierCap}
             onTeamTierCapChange={setTeamTierCap}
-            managerPointsStarting={managerPointsStarting}
-            onManagerPointsStartingChange={setManagerPointsStarting}
             disabled={leagueStarted}
           />
         </div>

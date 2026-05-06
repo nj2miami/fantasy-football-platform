@@ -35,7 +35,10 @@ export const entityTableMap = {
   PlayerPositionYearCount: "player_position_year_counts",
   SeasonScoringRule: "season_scoring_rules",
   LeaguePlayerDraftTier: "league_player_draft_tiers",
+  LeaguePlayerTierRange: "league_player_tier_ranges",
   LeaguePlayerDurability: "league_player_durability",
+  LeagueAuditEvent: "league_audit_events",
+  LeagueAuditFeedback: "league_audit_feedback",
   ManagerPointAccount: "manager_point_accounts",
   ManagerPointTransaction: "manager_point_transactions",
 };
