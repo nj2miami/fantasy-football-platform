@@ -138,6 +138,7 @@ const DURABILITY_MULTIPLIERS: Record<number, number> = {
 const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
 const MIN_DRAFT_STAT_WEEKS = 12;
 const TEAM_HIDDEN_WEEK_ASSIGNMENT = "per_nfl_team_hidden_week";
+const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v2";
 
 const DEFAULT_SCHEDULE_CONFIG = {
   type: "interval",
@@ -386,6 +387,10 @@ function statNumber(stats: Json, key: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function statSum(stats: Json, keys: string[]) {
+  return keys.reduce((sum, key) => sum + Math.abs(statNumber(stats, key)), 0);
+}
+
 function normalizeTeam(team: unknown) {
   const value = String(team || "").trim().toUpperCase();
   return value && value !== "FA" && value !== "UNK" && value !== "UNKNOWN" ? value : "";
@@ -509,6 +514,69 @@ function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json
     (n("rushing_yards") + n("receiving_yards") >= 100 ? r("OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
     (n("passing_yards") >= 300 ? r("OFFENSE", "bonus_300_pass_yards", 3) : 0)
   );
+}
+
+function hasActualStatWeek(stats: Json, playerPosition: string, config: Json[] = DEFAULT_POSITION_CONFIG) {
+  const category = scoringCategory(playerPosition, config);
+  if (category === "KICKER") {
+    return statSum(stats, [
+      "fg_att",
+      "fg_made",
+      "fg_made_0_19",
+      "fg_made_20_29",
+      "fg_made_30_39",
+      "fg_made_40_49",
+      "fg_made_50_59",
+      "fg_made_60_",
+      "fg_missed",
+      "pat_att",
+      "pat_made",
+      "pat_missed",
+      "gwfg_made",
+    ]) > 0;
+  }
+  if (category === "DEFENSE") {
+    return statSum(stats, [
+      "def_tackles_solo",
+      "def_tackle_assists",
+      "def_tackles_for_loss",
+      "def_sacks",
+      "def_qb_hits",
+      "def_interceptions",
+      "def_pass_defended",
+      "def_fumbles_forced",
+      "def_fumbles_recovered",
+      "fumble_recovery_own",
+      "fumble_recovery_opp",
+      "def_safeties",
+      "def_tds",
+      "special_teams_tds",
+    ]) > 0;
+  }
+  if (category === "OFFENSE") {
+    return statSum(stats, [
+      "attempts",
+      "completions",
+      "passing_yards",
+      "passing_tds",
+      "passing_interceptions",
+      "passing_first_downs",
+      "carries",
+      "rushing_yards",
+      "rushing_tds",
+      "rushing_first_downs",
+      "targets",
+      "receptions",
+      "receiving_yards",
+      "receiving_tds",
+      "receiving_first_downs",
+      "rushing_fumbles",
+      "receiving_fumbles",
+      "rushing_fumbles_lost",
+      "receiving_fumbles_lost",
+    ]) > 0;
+  }
+  return false;
 }
 
 function scheduleDatesForLeague(league: Json) {
@@ -1497,7 +1565,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   if (!leagueId) throw new Error("League is required to calculate player scores.");
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
-  const scoringRulesHash = String(JSON.stringify(scoringRules).length);
+  const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
   const config = await positionConfig(supabase);
 
   const { data: existing, error: existingError } = await supabase
@@ -1534,6 +1602,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
     if (!normalizeTeam(player?.team)) continue;
     const bucket = rosterLimitBucket(playerPosition, config);
     if (bucket === "UNUSED") continue;
+    if (!hasActualStatWeek(rawStats, playerPosition, config)) continue;
     const points = calculateFantasyPoints(rawStats, playerPosition, scoringRules, config);
     const current = aggregates.get(playerId) || {
       player_id: playerId,
@@ -1573,7 +1642,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
           expected_avg_points: Number(player.avg.toFixed(4)),
           total_points: Number(player.total.toFixed(4)),
           weeks_played: player.weeks,
-          scoring_rules_hash: String(JSON.stringify(scoringRules).length),
+          scoring_rules_hash: scoringRulesHash,
         });
       });
   }

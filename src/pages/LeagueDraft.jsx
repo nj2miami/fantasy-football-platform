@@ -188,33 +188,27 @@ function playerTeamText(player) {
   return player?.team || "FA";
 }
 
-function DraftVisibilityLine({ player }) {
-  return (
-    <span>
-      {player.draft_position || player.position || "--"} | {playerTeamText(player)}
-      {player.durability_hidden ? " | Durability hidden" : player.durability !== null && player.durability !== undefined ? ` | ${durabilityText(player)}` : ""}
-    </span>
-  );
-}
-
 function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted }) {
+  const nameClass = "block max-w-full truncate text-left text-sm font-black uppercase sm:text-base";
   return (
     <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_260px_auto] md:items-center">
       <div className="min-w-0 pr-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onStats(player)}
-            className="block max-w-full truncate text-left text-sm font-black uppercase underline decoration-2 underline-offset-2 sm:text-base"
-          >
-            {playerName(player)}
-          </button>
-          <TierBadge tier={player?.tier_value || 1} />
+          {player?.name_hidden ? (
+            <span className={nameClass}>{playerName(player)}</span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onStats(player)}
+              className={`${nameClass} underline decoration-2 underline-offset-2`}
+            >
+              {playerName(player)}
+            </button>
+          )}
           <DurabilityBadge player={player} />
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
         </div>
-        <p className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
-          <DraftVisibilityLine player={player} />
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
           <button
             type="button"
             onClick={() => (isInBoard ? onRemove(player) : onAdd(player))}
@@ -223,7 +217,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
           >
             {isInBoard ? "Remove from Board" : "Add to Draft Board"}
           </button>
-        </p>
+        </div>
       </div>
       <PlayerTierCell player={player} />
       <div className="flex flex-nowrap md:justify-end">
@@ -237,21 +231,24 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
 
 function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) {
   const player = item.player;
+  const nameClass = "block max-w-full truncate text-left text-sm font-black uppercase sm:text-base";
   return (
     <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(170px,1fr)_220px_auto] md:items-center lg:grid-cols-1 xl:grid-cols-[minmax(170px,1fr)_220px_auto]">
       <div className="min-w-0 pr-2">
-        <button
-          type="button"
-          onClick={() => onStats(player)}
-          className="block max-w-full truncate text-left text-sm font-black uppercase underline decoration-2 underline-offset-2 sm:text-base"
-        >
-          {playerName(player)}
-        </button>
+        {player?.name_hidden ? (
+          <span className={nameClass}>{playerName(player)}</span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onStats(player)}
+            className={`${nameClass} underline decoration-2 underline-offset-2`}
+          >
+            {playerName(player)}
+          </button>
+        )}
         <div className="mt-2 flex flex-wrap gap-2">
-          <TierBadge tier={player?.tier_value || 1} />
           <DurabilityBadge player={player} />
         </div>
-        <p className="text-xs font-bold uppercase text-gray-500"><DraftVisibilityLine player={player} /></p>
       </div>
       <PlayerTierCell player={player} />
       <div className="flex flex-nowrap gap-2 md:justify-end lg:justify-start xl:justify-end">
