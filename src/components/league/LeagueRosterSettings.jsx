@@ -1,20 +1,25 @@
 import { BadgeCheck, ClipboardList, HeartPulse, Lock } from "lucide-react";
+import { DEFAULT_ROSTER_RULES } from "@/api/appClient";
 
-const DRAFT_GROUPS = [
-  { label: "Quarterback", value: "2 QB" },
-  { label: "Kicker", value: "1 K" },
-  { label: "Defense", value: "2 DEF" },
-  { label: "Offense", value: "2 OFF" },
-  { label: "Flex", value: "3 FLEX" },
-];
+const ROSTER_LABELS = {
+  QB: "Quarterback",
+  K: "Kicker",
+  DEF: "Defense",
+  OFF: "Offense",
+  FLEX: "Flex",
+};
 
-const STARTER_SLOTS = [
-  { label: "Quarterback", value: "1 QB" },
-  { label: "Kicker", value: "1 K" },
-  { label: "Defense", value: "1 DEF" },
-  { label: "Offense", value: "1 OFF" },
-  { label: "Flex", value: "1 FLEX" },
-];
+const ROSTER_ORDER = ["QB", "K", "DEF", "OFF", "FLEX"];
+
+function rosterGroupsFromRules(rules, key) {
+  const values = { ...(DEFAULT_ROSTER_RULES[key] || {}), ...((rules?.[key] && typeof rules[key] === "object") ? rules[key] : {}) };
+  return ROSTER_ORDER
+    .filter((position) => Number(values[position] || 0) > 0)
+    .map((position) => ({
+      label: ROSTER_LABELS[position] || position,
+      value: `${Number(values[position] || 0)} ${position}`,
+    }));
+}
 
 function RuleCard({ label, value }) {
   return (
@@ -26,6 +31,13 @@ function RuleCard({ label, value }) {
 }
 
 export default function LeagueRosterSettings() {
+  const rosterRules = DEFAULT_ROSTER_RULES;
+  const draftGroups = rosterGroupsFromRules(rosterRules, "draft_groups");
+  const starterSlots = rosterGroupsFromRules(rosterRules, "starters");
+  const benchCount = Number(rosterRules.bench || 0);
+  const benchScoring = Math.round(Number(rosterRules.bench_scoring_multiplier || 0) * 100);
+  const treatmentScoring = Math.round(Number(rosterRules.treatment_scoring_multiplier || 0) * 100);
+
   return (
     <div className="space-y-6">
       <div>
@@ -43,13 +55,13 @@ export default function LeagueRosterSettings() {
         <div>
           <p className="font-black uppercase">Draft Roster</p>
           <p className="text-sm font-bold text-gray-700">
-            Each team drafts 10 total players: 2 QB, 1 K, 2 DEF, 2 OFF, and 3 Flex players from Offense or Defense.
+            Each team drafts {rosterRules.total_drafted} total players: 2 QB, 1 K, 2 DEF, 2 OFF, and 3 Flex players from Offense or Defense.
           </p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {DRAFT_GROUPS.map((group) => (
+        {draftGroups.map((group) => (
           <RuleCard key={group.label} label={group.label} value={group.value} />
         ))}
       </div>
@@ -65,15 +77,15 @@ export default function LeagueRosterSettings() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {STARTER_SLOTS.map((slot) => (
+        {starterSlots.map((slot) => (
           <RuleCard key={slot.label} label={slot.label} value={slot.value} />
         ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <RuleCard label="Bench" value="5 Players" />
-        <RuleCard label="Bench Scoring" value="50%" />
-        <RuleCard label="Treatment Scoring" value="25%" />
+        <RuleCard label="Bench" value={`${benchCount} Players`} />
+        <RuleCard label="Bench Scoring" value={`${benchScoring}%`} />
+        <RuleCard label="Treatment Scoring" value={`${treatmentScoring}%`} />
       </div>
 
       <div className="neo-border bg-gray-50 p-4 flex gap-3">
