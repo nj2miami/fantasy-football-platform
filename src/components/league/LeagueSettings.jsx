@@ -26,6 +26,49 @@ function actionConfig(actions) {
   );
 }
 
+const RULE_NOTE_FIELDS = [
+  {
+    key: "draft_cadence",
+    label: "Draft",
+    description: "How managers acquire players for the season or week.",
+  },
+  {
+    key: "schedule",
+    label: "Schedule",
+    description: "How weekly matchups are generated and presented.",
+  },
+  {
+    key: "ranking",
+    label: "Ranking",
+    description: "How standings are ordered after weekly scoring.",
+  },
+  {
+    key: "retention",
+    label: "Retention",
+    description: "How long players remain on manager rosters.",
+  },
+  {
+    key: "player_names",
+    label: "Player Names",
+    description: "How much player identity is visible during the draft.",
+  },
+  {
+    key: "durability",
+    label: "Durability",
+    description: "How durability is applied and revealed.",
+  },
+  {
+    key: "manager_points",
+    label: "Manager Points",
+    description: "How the manager points bank should be understood.",
+  },
+  {
+    key: "roster_draft",
+    label: "Roster / Draft Settings",
+    description: "How roster shape and draft group rules work in this league.",
+  },
+];
+
 export default function LeagueSettings({ league }) {
   const queryClient = useQueryClient();
   const visibility = { ...DEFAULT_LEAGUE_VISIBILITY_CONFIG, ...league };
@@ -42,6 +85,8 @@ export default function LeagueSettings({ league }) {
     manager_points_enabled: league.manager_points_enabled === true,
     manager_points_starting: Number(league.manager_points_starting || 0),
     manager_point_actions: actionConfig(league.manager_point_actions),
+    commissioner_message_of_day: league.commissioner_message_of_day || "",
+    league_rule_notes: league.league_rule_notes || {},
   });
   const [uploadingImage, setUploadingImage] = useState(false);
 
@@ -74,6 +119,7 @@ export default function LeagueSettings({ league }) {
     onSuccess: () => {
       toast.success("League settings saved!");
       queryClient.invalidateQueries(["league", league.id]);
+      queryClient.invalidateQueries(["league-details", league.id]);
       queryClient.invalidateQueries(["league-audit-events", league.id]);
     },
     onError: (error) => {
@@ -150,6 +196,16 @@ export default function LeagueSettings({ league }) {
     });
   };
 
+  const updateRuleNote = (key, value) => {
+    setFormData({
+      ...formData,
+      league_rule_notes: {
+        ...formData.league_rule_notes,
+        [key]: value,
+      },
+    });
+  };
+
   const feedbackCounts = (eventId) => {
     const rows = auditFeedback.filter((item) => item.audit_event_id === eventId);
     return {
@@ -161,6 +217,33 @@ export default function LeagueSettings({ league }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <h3 className="mb-4 text-2xl font-black uppercase">League Settings</h3>
+
+      <div className="neo-border bg-[#FFF7D6] p-6">
+        <h4 className="mb-4 text-xl font-black uppercase">Commissioner Notes</h4>
+        <div>
+          <Label className="mb-2 block text-sm font-black uppercase">League Message</Label>
+          <Textarea
+            value={formData.commissioner_message_of_day}
+            onChange={(event) => setFormData({ ...formData, commissioner_message_of_day: event.target.value })}
+            className="neo-border min-h-32 font-bold"
+            placeholder="Add the current commissioner message shown on the league hub."
+          />
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {RULE_NOTE_FIELDS.map((rule) => (
+            <div key={rule.key} className="neo-border bg-white p-4">
+              <Label className="mb-2 block text-sm font-black uppercase">{rule.label}</Label>
+              <p className="mb-2 text-xs font-bold text-gray-600">{rule.description}</p>
+              <Textarea
+                value={formData.league_rule_notes?.[rule.key] || ""}
+                onChange={(event) => updateRuleNote(rule.key, event.target.value)}
+                className="neo-border min-h-24 font-bold"
+                placeholder={`Commissioner note for ${rule.label.toLowerCase()}`}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div className="neo-border bg-white p-6">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

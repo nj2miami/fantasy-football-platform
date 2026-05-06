@@ -287,6 +287,7 @@ export default function LeagueDraft() {
   const [page, setPage] = React.useState(0);
   const [selectedPlayer, setSelectedPlayer] = React.useState(null);
   const [boardDraftNotice, setBoardDraftNotice] = React.useState(null);
+  const [draftPoolProgress, setDraftPoolProgress] = React.useState(null);
   const previousBoardRef = React.useRef(new Map());
   const notifiedPickIdsRef = React.useRef(new Set());
 
@@ -343,8 +344,13 @@ export default function LeagueDraft() {
     }),
     enabled: !!leagueId && !!currentMember,
     keepPreviousData: true,
-    refetchInterval: (query) => query.state.data?.preparing ? 1500 : isOpen ? 10000 : false,
+    refetchInterval: isOpen ? 10000 : false,
   });
+
+  const draftPoolNeedsPreparation = Boolean(eligibleResult.draftPoolStatus?.needsPreparation || state?.draftPoolStatus?.needsPreparation);
+  const currentDraftPoolPreparation = draftPoolProgress || eligibleResult.preparation || state?.draftPoolJob || null;
+  const currentDraftPoolStatus = String(currentDraftPoolPreparation?.status || "").toUpperCase();
+  const draftPoolIsRunning = currentDraftPoolStatus === "RUNNING" || currentDraftPoolStatus === "PENDING";
 
   React.useEffect(() => {
     if (!isOpen || !draftId) return undefined;
@@ -361,6 +367,19 @@ export default function LeagueDraft() {
       invalidate();
     },
     onError: (error) => toast.error(error.message || "Failed to start draft."),
+  });
+
+  const prepareDraftPoolMutation = useMutation({
+    mutationFn: () => appClient.draftDay.preparePool({
+      leagueId,
+      onProgress: (progress) => setDraftPoolProgress(progress),
+    }),
+    onSuccess: (result) => {
+      setDraftPoolProgress(result);
+      toast.success(result?.complete || String(result?.status || "").toUpperCase() === "COMPLETED" ? "Draft pool ready." : "Draft pool preparation updated.");
+      invalidate();
+    },
+    onError: (error) => toast.error(error.message || "Failed to prepare draft pool."),
   });
 
   const pickMutation = useMutation({
@@ -469,7 +488,7 @@ export default function LeagueDraft() {
   const boardGroups = groupBoardByPosition(board);
   const rosterNeeds = buildRosterNeeds(state.league, roster);
   const eligiblePlayers = eligibleResult.data || [];
-  const draftPoolPreparation = eligibleResult.preparation || null;
+  const draftPoolPreparation = currentDraftPoolPreparation;
   const commissioner = state.commissionerProfile;
   const commissionerName = commissioner?.display_name || commissioner?.profile_name || "Commissioner";
   const commissionerProfileUrl = commissioner?.profile_name ? createPageUrl(`Profile?name=${encodeURIComponent(commissioner.profile_name)}`) : null;
@@ -496,9 +515,22 @@ export default function LeagueDraft() {
           <Button className="neo-btn bg-black text-white"><ArrowLeft className="mr-2 h-5 w-5" />Back to League</Button>
         </Link>
         {isCommissioner && (
-          <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending || eligibleResult.preparing} className="neo-btn bg-[#F7B801] text-black">
-            <Play className="mr-2 h-5 w-5" />{eligibleResult.preparing ? "Preparing Pool" : "Start Draft"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => prepareDraftPoolMutation.mutate()}
+              disabled={prepareDraftPoolMutation.isPending || isOpen || isCompleted}
+              className="neo-btn bg-[#00D9FF] text-black"
+            >
+              {prepareDraftPoolMutation.isPending
+                ? "Preparing Pool"
+                : draftPoolNeedsPreparation || draftPoolIsRunning
+                  ? "Prepare Draft Pool"
+                  : "Rebuild Draft Pool"}
+            </Button>
+            <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending || draftPoolNeedsPreparation || prepareDraftPoolMutation.isPending} className="neo-btn bg-[#F7B801] text-black">
+              <Play className="mr-2 h-5 w-5" />Start Draft
+            </Button>
+          </div>
         )}
       </div>
 
@@ -675,22 +707,41 @@ export default function LeagueDraft() {
               ))}
               {!eligiblePlayers.length && (
                 <div className="neo-border bg-gray-50 p-6 text-center font-bold text-gray-500">
-                  {draftPoolPreparation ? (
+                  {draftPoolNeedsPreparation ? (
                     <div>
-                      <p className="text-lg font-black uppercase text-orange-600">Preparing Draft Pool</p>
+                      <p className="text-lg font-black uppercase text-orange-600">
+                        {prepareDraftPoolMutation.isPending ? "Preparing Draft Pool" : "Draft Pool Needs Preparation"}
+                      </p>
                       <p className="mt-2 text-sm font-bold text-gray-600">
-                        {draftPoolPreparation.summary || "Building this league's eligible player list from the scoring rules."}
+                        {prepareDraftPoolMutation.isPending
+                          ? draftPoolPreparation?.summary || "Building this league's eligible player list from the scoring rules."
+                          : eligibleResult.draftPoolStatus?.reason || state?.draftPoolStatus?.reason || "The commissioner must prepare the draft pool before players can be shown."}
                       </p>
-                      <div className="neo-border mt-4 h-4 overflow-hidden bg-white">
-                        <div
-                          className="h-full bg-[#00D9FF]"
-                          style={{ width: `${Math.max(1, Math.min(100, Number(draftPoolPreparation.progress || 1)))}%` }}
-                        />
-                      </div>
-                      <p className="mt-2 text-xs font-black uppercase text-gray-500">
-                        {Number(draftPoolPreparation.progress || 1)}%
-                        {draftPoolPreparation.total_players ? ` | ${draftPoolPreparation.processed_players || 0}/${draftPoolPreparation.total_players} players checked` : ""}
-                      </p>
+                      {(prepareDraftPoolMutation.isPending || draftPoolIsRunning || draftPoolPreparation?.progress) && (
+                        <>
+                          <div className="neo-border mt-4 h-4 overflow-hidden bg-white">
+                            <div
+                              className="h-full bg-[#00D9FF]"
+                              style={{ width: `${Math.max(1, Math.min(100, Number(draftPoolPreparation?.progress || 1)))}%` }}
+                            />
+                          </div>
+                          <p className="mt-2 text-xs font-black uppercase text-gray-500">
+                            {Number(draftPoolPreparation?.progress || 1)}%
+                            {draftPoolPreparation?.total_players ? ` | ${draftPoolPreparation.processed_players || 0}/${draftPoolPreparation.total_players} players checked` : ""}
+                          </p>
+                        </>
+                      )}
+                      {isCommissioner ? (
+                        <Button
+                          onClick={() => prepareDraftPoolMutation.mutate()}
+                          disabled={prepareDraftPoolMutation.isPending || isOpen || isCompleted}
+                          className="neo-btn mt-5 bg-[#00D9FF] text-black"
+                        >
+                          {prepareDraftPoolMutation.isPending ? "Preparing..." : "Prepare Draft Pool"}
+                        </Button>
+                      ) : (
+                        <p className="mt-4 text-xs font-black uppercase text-gray-500">Waiting for the commissioner to prepare the pool.</p>
+                      )}
                     </div>
                   ) : isEligibleFetching ? "Loading players..." : isEligibleError ? eligibleError?.message || "Unable to load eligible players." : "No eligible players found."}
                 </div>

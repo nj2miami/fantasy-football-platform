@@ -1,4 +1,4 @@
-import { DEFAULT_LEAGUE_VISIBILITY_CONFIG, DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
+import { DEFAULT_LEAGUE_VISIBILITY_CONFIG, DEFAULT_SCORING_RULES, DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
 import { entities } from "@/api/entitiesClient";
 import { functions } from "@/api/functionsClient";
 import { countPlayerWeeks } from "@/api/playerStatsClient";
@@ -50,9 +50,39 @@ function draftBucket(position) {
   return DRAFT_POSITION_SET.has(normalized) ? normalized : null;
 }
 
-function shouldPrepareDraftPool(tiers, selectedPosition) {
+function mergeScoringRules(rules = {}) {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_SCORING_RULES).map(([category, defaultRules]) => [
+      category,
+      {
+        ...defaultRules,
+        ...((rules || {})[category] || {}),
+      },
+    ])
+  );
+}
+
+function expectedDraftScoreHash(league = {}) {
+  const scoringRules = mergeScoringRules(league.scoring_rules);
+  return `${DRAFT_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
+}
+
+function draftPoolHashStatus(tiers, league, job) {
+  const expectedHash = expectedDraftScoreHash(league);
+  const jobHash = job?.scoring_rules_hash || null;
+  const tierHashes = [...new Set((tiers || []).map((tier) => tier.scoring_rules_hash).filter(Boolean))];
+  if (tierHashes.length) {
+    return { known: true, stale: tierHashes.some((hash) => hash !== expectedHash), expectedHash, actualHash: tierHashes.join(",") };
+  }
+  if (jobHash) {
+    return { known: true, stale: jobHash !== expectedHash, expectedHash, actualHash: jobHash };
+  }
+  return { known: false, stale: false, expectedHash, actualHash: null };
+}
+
+function shouldPrepareDraftPool(tiers, selectedPosition, league, job) {
   if (!tiers.length) return true;
-  if (tiers.some((tier) => !String(tier.scoring_rules_hash || "").startsWith(`${DRAFT_SCORE_METHOD}:`))) return true;
+  if (draftPoolHashStatus(tiers, league, job).stale) return true;
   if (tiers.some((tier) => Number(tier.weeks_played || 0) < 8)) return true;
   const bucketCounts = tiers.reduce((counts, tier) => {
     const bucket = draftBucket(tier.position);
@@ -64,6 +94,32 @@ function shouldPrepareDraftPool(tiers, selectedPosition) {
     return !bucket || Number(bucketCounts[bucket] || 0) < Number(DRAFT_BUCKET_MINIMUMS[bucket] || DRAFT_BUCKET_TARGETS[bucket] || 30);
   }
   return DRAFT_POSITION_ORDER.some((position) => Number(bucketCounts[position] || 0) < Number(DRAFT_BUCKET_MINIMUMS[position] || DRAFT_BUCKET_TARGETS[position] || 30));
+}
+
+function draftPoolStatus(tiers, selectedPosition, league, job) {
+  const hashStatus = draftPoolHashStatus(tiers, league, job);
+  const needsPreparation = shouldPrepareDraftPool(tiers, selectedPosition, league, job);
+  const bucketCounts = tiers.reduce((counts, tier) => {
+    const bucket = draftBucket(tier.position);
+    if (bucket) counts[bucket] = (counts[bucket] || 0) + 1;
+    return counts;
+  }, {});
+  return {
+    ready: !needsPreparation,
+    needsPreparation,
+    bucketCounts,
+    scoringMethod: DRAFT_SCORE_METHOD,
+    scoringHashKnown: hashStatus.known,
+    expectedScoringHash: hashStatus.expectedHash,
+    actualScoringHash: hashStatus.actualHash,
+    reason: !tiers.length
+      ? "No draft pool has been prepared for this league."
+      : hashStatus.stale
+        ? "League scoring rules changed since the last draft pool was prepared."
+        : tiers.some((tier) => Number(tier.weeks_played || 0) < 8)
+          ? "Draft pool was prepared with the old stat-week eligibility cutoff."
+          : "Draft pool is missing required position buckets.",
+  };
 }
 
 function compareDraftTiers(a, b) {
@@ -173,12 +229,13 @@ async function getLeagueDraftState(leagueId) {
 
   const seasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const visibility = leagueVisibility(league);
-  const [playersById, tierRows, tierRangeRows, durabilityRows, managerPointAccounts] = await Promise.all([
+  const [playersById, tierRows, tierRangeRows, durabilityRows, managerPointAccounts, draftPoolJobs] = await Promise.all([
     loadPlayersById(playerIds),
     entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
     entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),
     durabilityEnabled(visibility) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
     entities.ManagerPointAccount.filter({ league_id: leagueId }),
+    entities.LeagueDraftPoolJob.filter({ league_id: leagueId }),
   ]);
   const tiersByPlayer = new Map(tierRows.map((tier) => [tier.player_id, tier]));
   const tierRangesByBucket = new Map(tierRangeRows.map((range) => [tierRangeKey(range.position, range.tier_value), range]));
@@ -211,6 +268,8 @@ async function getLeagueDraftState(leagueId) {
     board: boardWithPlayers,
     teamTierTotals,
     managerPointAccounts,
+    draftPoolJob: draftPoolJobs[0] || null,
+    draftPoolStatus: draftPoolStatus(tierRows, null, league, draftPoolJobs[0] || null),
   };
 }
 
@@ -232,27 +291,21 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
       .filter((slot) => leagueMemberIds.has(slot.league_member_id))
       .map((slot) => slot.player_id),
   ]);
-  let [tiers, tierRangeRows, durabilityRows] = await Promise.all([
+  const [tiers, tierRangeRows, durabilityRows] = await Promise.all([
     entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
     entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),
     durabilityEnabled(league) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
   ]);
-  if (shouldPrepareDraftPool(tiers, position)) {
-    const preparation = await functions.prepareDraftPool({ league_id: leagueId });
-    if (!preparation?.complete) {
-      return {
-        data: [],
-        hasMore: false,
-        totalCount: 0,
-        preparing: true,
-        preparation,
-      };
-    }
-    [tiers, tierRangeRows, durabilityRows] = await Promise.all([
-      entities.LeaguePlayerDraftTier.filter({ league_id: leagueId }),
-      entities.LeaguePlayerTierRange.filter({ league_id: leagueId }),
-      durabilityEnabled(league) ? entities.LeaguePlayerDurability.filter({ league_id: leagueId }) : [],
-    ]);
+  const jobs = await entities.LeagueDraftPoolJob.filter({ league_id: leagueId });
+  const draftPoolJob = jobs[0] || null;
+  if (shouldPrepareDraftPool(tiers, position, rawLeague, draftPoolJob)) {
+    return {
+      data: [],
+      hasMore: false,
+      totalCount: 0,
+      draftPoolStatus: draftPoolStatus(tiers, position, rawLeague, draftPoolJob),
+      preparation: draftPoolJob,
+    };
   }
   const tiersByPlayer = new Map(tiers.map((tier) => [tier.player_id, tier]));
   const tierRangesByBucket = new Map(tierRangeRows.map((range) => [tierRangeKey(range.position, range.tier_value), range]));
@@ -294,6 +347,16 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
 export const draftDay = {
   getState: getLeagueDraftState,
   listEligiblePlayers: listDraftEligiblePlayers,
+  async preparePool({ leagueId, onProgress } = {}) {
+    let result = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      result = await functions.prepareDraftPool({ league_id: leagueId });
+      if (onProgress) onProgress(result);
+      if (result?.complete || String(result?.status || result?.job?.status || "").toUpperCase() === "COMPLETED") return result;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return result;
+  },
   async addBoardItem({ draftId, leagueId, leagueMemberId, playerId } = {}) {
     const existing = (await entities.DraftBoardItem.list()).filter((item) =>
       item.league_member_id === leagueMemberId &&

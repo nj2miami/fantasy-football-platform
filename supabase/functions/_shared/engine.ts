@@ -1352,6 +1352,8 @@ const LEAGUE_SETTINGS_UPDATE_KEYS = [
   "manager_points_enabled",
   "manager_points_starting",
   "manager_point_actions",
+  "commissioner_message_of_day",
+  "league_rule_notes",
 ];
 
 function jsonValueChanged(previous: unknown, next: unknown) {
@@ -2207,7 +2209,7 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
 }
 
 async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
-  const { league: rawLeague } = await requireLeagueAccess(supabase, user, payload.league_id);
+  const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
   const league = normalizeLeaguePlaySettings(rawLeague);
   return processLeagueDraftPoolJob(supabase, league);
 }

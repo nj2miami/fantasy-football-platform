@@ -35,6 +35,64 @@ const HUB_TABS = [
   { id: "schedule", label: "Full Schedule", icon: CalendarDays },
 ];
 
+const FREE_AGENT_POSITIONS = ["QB", "OFF", "DEF", "K"];
+const FREE_AGENT_TIERS = [5, 4, 3, 2, 1];
+const RULE_DEFINITIONS = [
+  {
+    key: "draft_cadence",
+    label: "Draft",
+    value: (league) => league.draft_mode === "weekly_redraft" || league.mode === "weekly_redraft" ? "Weekly redraft" : "Season snake",
+    description: "Controls whether managers draft once for the season or draft from the available pool each week.",
+  },
+  {
+    key: "schedule",
+    label: "Schedule",
+    value: (league) => league.schedule_type === "league_wide" ? "League-wide scoring" : "Head to head",
+    description: "Controls how teams are paired and how weekly matchups are presented.",
+  },
+  {
+    key: "ranking",
+    label: "Ranking",
+    value: (league) => league.ranking_system === "offl" ? "H2H + league points" : "Standard record",
+    description: "Controls how standings are ordered after weekly matchups and scoring are resolved.",
+  },
+  {
+    key: "retention",
+    label: "Retention",
+    value: (league) => league.player_retention_mode === "two_use_release" ? "Two-use release" : "Retained rosters",
+    description: "Controls whether players stay rostered or return to the free agent board after usage limits.",
+  },
+  {
+    key: "player_names",
+    label: "Player Names",
+    value: (league) => league.draft_player_name_visibility === "hidden_until_drafted" ? "Hidden until drafted" : "Shown",
+    description: "Controls whether player names are visible during the draft before a player is selected.",
+  },
+  {
+    key: "durability",
+    label: "Durability",
+    value: (league) => league.durability_mode === "off" ? "Off" : league.durability_mode === "revealed_at_draft" ? "Revealed at draft" : "Hidden until drafted",
+    description: "Controls whether durability changes affect scoring and when managers can see durability state.",
+  },
+  {
+    key: "manager_points",
+    label: "Manager Points",
+    value: (league) => league.manager_points_enabled ? `${Number(league.manager_points_starting || 0)} starting points` : "Off",
+    description: "Controls whether managers have a points bank for future league actions and skills.",
+  },
+  {
+    key: "roster_draft",
+    label: "Roster / Draft Settings",
+    value: (league) => {
+      const rules = league.roster_rules || {};
+      const draftGroups = rules.draft_groups || {};
+      const total = Number(rules.total_drafted || 0);
+      return total ? `${total} drafted players` : Object.entries(draftGroups).map(([key, value]) => `${key} ${value}`).join(" / ") || "Standard roster";
+    },
+    description: "Controls roster composition, draft group counts, and the shape of each manager's team.",
+  },
+];
+
 function formatNumber(value, digits = 1) {
   const numeric = Number(value || 0);
   return Number.isFinite(numeric) ? numeric.toFixed(digits) : "--";
@@ -64,6 +122,13 @@ function slotGroupLabel(slot) {
 
 function memberName(member) {
   return member?.team_name || (member?.is_ai ? "AI Manager" : "Manager");
+}
+
+function draftBucket(position) {
+  const value = String(position || "").toUpperCase();
+  if (value === "QB" || value === "K") return value;
+  if (value === "DEF" || value === "DST" || value === "D/ST") return "DEF";
+  return "OFF";
 }
 
 function EmptyState({ icon: Icon = Inbox, title, detail }) {
@@ -323,18 +388,27 @@ function RulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
       down: rows.filter((item) => item.vote === "down").length,
     };
   };
-  const rules = [
-    ["Draft", league.draft_mode === "weekly_redraft" || league.mode === "weekly_redraft" ? "Weekly redraft" : "Season snake"],
-    ["Schedule", league.schedule_type === "league_wide" ? "League-wide scoring" : "Head to head"],
-    ["Ranking", league.ranking_system === "offl" ? "H2H + league points" : "Standard record"],
-    ["Retention", league.player_retention_mode === "two_use_release" ? "Two-use release" : "Retained rosters"],
-    ["Names", league.draft_player_name_visibility === "hidden_until_drafted" ? "Hidden until drafted" : "Shown"],
-    ["Durability", league.durability_mode === "off" ? "Off" : league.durability_mode === "revealed_at_draft" ? "Revealed at draft" : "Hidden until drafted"],
-  ];
+  const ruleNotes = league.league_rule_notes || {};
   return (
     <Panel title="League Rules" icon={ClipboardList}>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {rules.map(([label, value]) => <StatTile key={label} label={label} value={value} />)}
+      <div className="grid gap-3 lg:grid-cols-2">
+        {RULE_DEFINITIONS.map((rule) => (
+          <div key={rule.key} className="neo-border bg-gray-50 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase text-gray-500">{rule.label}</p>
+                <p className="text-xl font-black text-black">{rule.value(league)}</p>
+              </div>
+            </div>
+            <p className="mt-3 text-sm font-bold text-gray-700">{rule.description}</p>
+            {ruleNotes[rule.key] && (
+              <div className="neo-border mt-3 bg-[#FFF7D6] p-3">
+                <p className="text-xs font-black uppercase text-gray-500">Commissioner Note</p>
+                <p className="mt-1 text-sm font-bold text-black">{ruleNotes[rule.key]}</p>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
       {auditEvents.length > 0 && (
         <div className="mt-5 space-y-3">
@@ -363,32 +437,66 @@ function RulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
 
 function FreeAgentBoard({ league, currentWeek, currentMember }) {
   const { data: players = [] } = useAvailablePlayers(league.id, currentWeek, currentMember?.id);
-  const sortedPlayers = [...players].sort((a, b) => Number(b.avg_points || 0) - Number(a.avg_points || 0) || String(a.player_display_name || a.full_name || "").localeCompare(String(b.player_display_name || b.full_name || "")));
+  const { data: tiers = [] } = useQuery({
+    queryKey: ["free-agent-draft-tiers", league.id],
+    queryFn: () => appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id }),
+    enabled: Boolean(league.id),
+  });
+  const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
+  const availableIds = useMemo(() => new Set(players.map((player) => player.id)), [players]);
+  const rowsByPosition = useMemo(() => {
+    const grouped = Object.fromEntries(FREE_AGENT_POSITIONS.map((position) => [position, []]));
+    tiers
+      .filter((tier) => availableIds.has(tier.player_id))
+      .forEach((tier) => {
+        const bucket = draftBucket(tier.position);
+        if (!grouped[bucket]) return;
+        const player = playerById.get(tier.player_id);
+        if (!player) return;
+        grouped[bucket].push({ tier, player });
+      });
+    for (const position of FREE_AGENT_POSITIONS) {
+      grouped[position] = grouped[position]
+        .sort((a, b) => Number(a.tier.position_rank || 999) - Number(b.tier.position_rank || 999))
+        .slice(0, 30);
+    }
+    return grouped;
+  }, [availableIds, playerById, tiers]);
   return (
     <Panel title="Free Agent Board" icon={Shuffle}>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b-4 border-black">
-            <tr>
-              <th className="p-2 font-black uppercase">Player</th>
-              <th className="p-2 font-black uppercase">Pos</th>
-              <th className="p-2 font-black uppercase">Team</th>
-              <th className="p-2 font-black uppercase">Avg</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedPlayers.map((player) => (
-              <tr key={player.id} className="border-b-2 border-gray-200">
-                <td className="p-2 font-black">{player.player_display_name || player.full_name}</td>
-                <td className="p-2 font-bold">{player.position || "--"}</td>
-                <td className="p-2 font-bold">{player.team || "FA"}</td>
-                <td className="p-2 font-bold">{formatNumber(player.avg_points, 1)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="grid gap-4 xl:grid-cols-4">
+        {FREE_AGENT_POSITIONS.map((position) => (
+          <div key={position} className="neo-border bg-gray-50">
+            <div className="border-b-4 border-black bg-black p-3 text-white">
+              <p className="text-center text-lg font-black uppercase">{position}</p>
+            </div>
+            <div className="p-3">
+              {FREE_AGENT_TIERS.map((tierValue) => {
+                const tierRows = rowsByPosition[position].filter((row) => Number(row.tier.tier_value || 1) === tierValue);
+                if (!tierRows.length) return null;
+                return (
+                  <div key={`${position}-${tierValue}`} className="mb-4 last:mb-0">
+                    <div className="mb-2 border-b-4 border-black pb-1">
+                      <p className="text-xs font-black uppercase text-gray-500">Tier {tierValue}</p>
+                    </div>
+                    <div className="space-y-1">
+                      {tierRows.map(({ player, tier }) => (
+                        <Link key={player.id} to={createPageUrl(`PlayerStats?id=${player.id}`)} className="block bg-white p-2 text-sm font-bold hover:bg-[#FFF7D6]">
+                          <span className="font-black">{player.player_display_name || player.full_name}</span>
+                          <span className="text-gray-500"> | {player.team || "FA"}</span>
+                          <span className="sr-only"> Rank {tier.position_rank}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {!rowsByPosition[position].length && <p className="p-3 text-center text-sm font-bold text-gray-500">No available players</p>}
+            </div>
+          </div>
+        ))}
       </div>
-      {!sortedPlayers.length && <EmptyState title="No free agents visible" detail="A draft or roster lock may still be in progress." />}
+      {!players.length && <EmptyState title="No free agents visible" detail="A draft or roster lock may still be in progress." />}
     </Panel>
   );
 }
