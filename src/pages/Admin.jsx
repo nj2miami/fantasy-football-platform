@@ -2,20 +2,16 @@ import React, { useState, useEffect } from "react";
 import { appClient } from "@/api/appClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { ShieldCheck, UploadCloud, Settings, Users, ClipboardList, Trophy, Terminal, RefreshCw, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { ShieldCheck, Database, ClipboardList, Trophy, Terminal, RefreshCw, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import DataImport from "../components/admin/DataImport";
-import ScoringSettings from "../components/admin/ScoringSettings";
-import PlayerManagement from "../components/admin/PlayerManagement";
+import SeasonDataPipeline from "../components/admin/SeasonDataPipeline";
 import RosterSettings from "../components/admin/RosterSettings";
 import LeagueManagement from "../components/admin/LeagueManagement";
 
 const AdminTabs = ({ activeTab, setActiveTab }) => {
   const tabs = [
-    { name: "Data Import", icon: UploadCloud, id: "import" },
-    { name: "Scoring Rules", icon: Settings, id: "scoring" },
-    { name: "Player Jobs", icon: Users, id: "players" },
+    { name: "Season Data", icon: Database, id: "season-data" },
     { name: "Roster Rules", icon: ClipboardList, id: "roster" },
     { name: "Leagues", icon: Trophy, id: "leagues" },
   ];
@@ -55,7 +51,7 @@ const StatusIndicator = ({ status }) => {
 
 export default function Admin() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("import");
+  const [activeTab, setActiveTab] = useState("season-data");
 
   useEffect(() => {
     const checkAdmin = async () => {
@@ -162,9 +158,7 @@ export default function Admin() {
       <AdminTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
       <div>
-        {activeTab === "import" && <DataImport />}
-        {activeTab === "scoring" && <ScoringSettings />}
-        {activeTab === "players" && <PlayerManagement />}
+        {activeTab === "season-data" && <SeasonDataPipeline />}
         {activeTab === "roster" && <RosterSettings />}
         {activeTab === "leagues" && <LeagueManagement />}
       </div>

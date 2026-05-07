@@ -48,5 +48,4 @@ export const functions = {
   prepareDraftPool: (payload = {}) => invokeFunction("prepare_draft_pool", payload),
   fillLeagueWithAI: (payload = {}) => invokeFunction("fill_league_with_ai", payload),
   importHistoricalStats: (payload = {}) => invokeFunction("processImportJobs", { job_type: "HISTORICAL_STATS", ...payload }),
-  cleanAll: (payload = {}) => invokeFunction("processImportJobs", { job_type: "CLEAN_ALL", ...payload }),
 };

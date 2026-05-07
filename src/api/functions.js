@@ -4,7 +4,6 @@ export const processImportJobs = appClient.functions.processImportJobs;
 export const createOfficialLeague = appClient.functions.createOfficialLeague;
 export const fillLeagueWithAI = appClient.functions.fillLeagueWithAI;
 export const importHistoricalStats = appClient.functions.importHistoricalStats;
-export const cleanAll = appClient.functions.cleanAll;
 
 export const createLeague = (payload) => appClient.functions.invoke("create_league", payload);
 export const joinLeague = (payload) => appClient.functions.invoke("join_league", payload);
