@@ -8,7 +8,7 @@ const DRAFT_POSITION_ORDER = ["QB", "OFF", "DEF", "K"];
 const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
 const DRAFT_BUCKET_TARGETS = { QB: 30, OFF: 30, DEF: 30, K: 24 };
 const DRAFT_BUCKET_MINIMUMS = { QB: 30, OFF: 30, DEF: 30, K: 1 };
-const DRAFT_SCORE_METHOD = "league-raw-actual-stat-weeks-v5";
+const DRAFT_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
 
 function durabilityLabel(value) {
   return DURABILITY_LABELS[Number(value)] || "Normal";

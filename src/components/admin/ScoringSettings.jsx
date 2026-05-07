@@ -18,6 +18,44 @@ const mergeRules = (rules) => {
   return merged;
 };
 
+const SCORING_SECTIONS = [
+  {
+    title: "Offense - QB",
+    category: "OFFENSE",
+    rules: [
+      "completion",
+      "incompletion",
+      "passing_yard",
+      "passing_td",
+      "passing_int",
+      "passing_first_down",
+      "qb_rushing_yard",
+      "qb_rushing_td",
+      "qb_rushing_first_down",
+      "two_pt_conversion",
+      "bonus_300_pass_yards",
+    ],
+  },
+  {
+    title: "Offense - Skill",
+    category: "OFFENSE",
+    rules: [
+      "rushing_yard",
+      "rushing_td",
+      "rushing_first_down",
+      "reception",
+      "receiving_yard",
+      "receiving_td",
+      "receiving_first_down",
+      "fumble",
+      "fumble_lost",
+      "bonus_100_rush_rec_yards",
+    ],
+  },
+  { title: "Kicker", category: "KICKER" },
+  { title: "Defense", category: "DEFENSE" },
+];
+
 const ScoringRuleInput = ({ label, value, onChange }) => (
   <div>
     <Label className="text-xs font-bold text-gray-600 uppercase">{label.replace(/_/g, " ")}</Label>
@@ -236,26 +274,33 @@ export default function ScoringSettings() {
       )}
 
       <div className="space-y-8">
-        {Object.entries(scoringRules).map(([category, rules]) => (
-          <div key={category}>
-            <h4 className="text-xl font-black uppercase text-black pb-2 mb-4 border-b-4 border-black">
-              {category}
-            </h4>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {Object.entries(rules).map(([rule, value]) => (
-                <ScoringRuleInput
-                  key={rule}
-                  label={rule}
-                  value={value}
-                  onChange={(newValue) => {
-                    setLastSaved(null);
-                    handleRuleChange(category, rule, newValue);
-                  }}
-                />
-              ))}
+        {SCORING_SECTIONS.map((section) => {
+          const rules = scoringRules[section.category] || {};
+          const ruleEntries = section.rules
+            ? section.rules.filter((rule) => Object.prototype.hasOwnProperty.call(rules, rule)).map((rule) => [rule, rules[rule]])
+            : Object.entries(rules);
+          if (!ruleEntries.length) return null;
+          return (
+            <div key={section.title}>
+              <h4 className="text-xl font-black uppercase text-black pb-2 mb-4 border-b-4 border-black">
+                {section.title}
+              </h4>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {ruleEntries.map(([rule, value]) => (
+                  <ScoringRuleInput
+                    key={rule}
+                    label={rule}
+                    value={value}
+                    onChange={(newValue) => {
+                      setLastSaved(null);
+                      handleRuleChange(section.category, rule, newValue);
+                    }}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <Button

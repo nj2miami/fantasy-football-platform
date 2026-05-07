@@ -108,7 +108,12 @@ function buildScoringSections(week, rules = DEFAULT_SCORING_RULES, playerPositio
   const completionEfficiencyPoints =
     completions * r("OFFENSE", "completion", 0.2) +
     incompletions * r("OFFENSE", "incompletion", -0.3);
-  const isDefense = String(playerPosition || "").toUpperCase() === "DEF";
+  const normalizedPosition = String(playerPosition || "").toUpperCase();
+  const isDefense = normalizedPosition === "DEF";
+  const isQuarterback = normalizedPosition === "QB";
+  const rushingYardRule = isQuarterback ? "qb_rushing_yard" : "rushing_yard";
+  const rushingTdRule = isQuarterback ? "qb_rushing_td" : "rushing_td";
+  const rushingFirstDownRule = isQuarterback ? "qb_rushing_first_down" : "rushing_first_down";
   const passing = [
     { label: "Completion Efficiency", value: `${completions}/${attempts}`, points: completionEfficiencyPoints },
     { label: "Passing Yards", value: n("passing_yards"), points: n("passing_yards") * r("OFFENSE", "passing_yard", 0.04) },
@@ -119,9 +124,9 @@ function buildScoringSections(week, rules = DEFAULT_SCORING_RULES, playerPositio
   ];
   const rushing = [
     { label: "Carries", value: n("carries"), points: 0 },
-    { label: "Rushing Yards", value: n("rushing_yards"), points: n("rushing_yards") * r("OFFENSE", "rushing_yard", 0.1) },
-    { label: "Rushing TDs", value: n("rushing_tds"), points: n("rushing_tds") * r("OFFENSE", "rushing_td", 6) },
-    { label: "First Downs", value: n("rushing_first_downs"), points: n("rushing_first_downs") * r("OFFENSE", "rushing_first_down", 0.5) },
+    { label: isQuarterback ? "QB Rushing Yards" : "Rushing Yards", value: n("rushing_yards"), points: n("rushing_yards") * r("OFFENSE", rushingYardRule, isQuarterback ? 0.05 : 0.1) },
+    { label: isQuarterback ? "QB Rushing TDs" : "Rushing TDs", value: n("rushing_tds"), points: n("rushing_tds") * r("OFFENSE", rushingTdRule, isQuarterback ? 4 : 6) },
+    { label: "First Downs", value: n("rushing_first_downs"), points: n("rushing_first_downs") * r("OFFENSE", rushingFirstDownRule, isQuarterback ? 0.25 : 0.5) },
     { label: "Fumbles", value: n("rushing_fumbles"), points: n("rushing_fumbles") * r("OFFENSE", "fumble", -1) },
     { label: "Fumbles Lost", value: n("rushing_fumbles_lost"), points: n("rushing_fumbles_lost") * r("OFFENSE", "fumble_lost", -2) },
     { label: "2PT Conv", value: n("rushing_2pt_conversions"), points: n("rushing_2pt_conversions") * r("OFFENSE", "two_pt_conversion", 2) },
@@ -162,7 +167,7 @@ function buildScoringSections(week, rules = DEFAULT_SCORING_RULES, playerPositio
   const fumbles = [
     { label: "Own Recovered", value: n("fumble_recovery_own"), points: isDefense ? n("fumble_recovery_own") * r("DEFENSE", "fumble_recovered", 2) : 0 },
     { label: "Opp Recovered", value: n("fumble_recovery_opp"), points: isDefense ? n("fumble_recovery_opp") * r("DEFENSE", "fumble_recovered", 2) : 0 },
-    { label: "Recovery TDs", value: n("fumble_recovery_tds"), points: n("fumble_recovery_tds") * (isDefense ? r("DEFENSE", "touchdown", 6) : r("OFFENSE", "rushing_td", 6)) },
+    { label: "Recovery TDs", value: n("fumble_recovery_tds"), points: n("fumble_recovery_tds") * (isDefense ? r("DEFENSE", "touchdown", 6) : r("OFFENSE", rushingTdRule, isQuarterback ? 4 : 6)) },
   ];
   const bonuses = [
     { label: "300 Pass Yards", value: n("passing_yards") >= 300 ? 1 : 0, points: n("passing_yards") >= 300 ? r("OFFENSE", "bonus_300_pass_yards", 3) : 0 },

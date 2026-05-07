@@ -156,6 +156,9 @@ const DEFAULT_SCORING_RULES: Json = {
     passing_td: 4,
     passing_int: -2,
     passing_first_down: 0.5,
+    qb_rushing_yard: 0.05,
+    qb_rushing_td: 4,
+    qb_rushing_first_down: 0.25,
     rushing_yard: 0.1,
     rushing_td: 6,
     rushing_first_down: 0.5,
@@ -446,6 +449,10 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES, 
 
   if (category !== "OFFENSE") return 0;
 
+  const isQuarterback = String(playerPosition || normalizeRawPosition(row) || "").toUpperCase() === "QB";
+  const rushingYardKey = isQuarterback ? "qb_rushing_yard" : "rushing_yard";
+  const rushingTdKey = isQuarterback ? "qb_rushing_td" : "rushing_td";
+  const rushingFirstDownKey = isQuarterback ? "qb_rushing_first_down" : "rushing_first_down";
   const offensivePoints =
     n(row, "completions") * rule(rules, "OFFENSE", "completion", 0.2) +
     Math.max(n(row, "attempts") - n(row, "completions"), 0) * rule(rules, "OFFENSE", "incompletion", -0.3) +
@@ -453,16 +460,16 @@ function calculateFantasyPoints(row: Json, rules: Json = DEFAULT_SCORING_RULES, 
     n(row, "passing_tds") * rule(rules, "OFFENSE", "passing_td", 4) +
     n(row, "passing_interceptions") * rule(rules, "OFFENSE", "passing_int", -2) +
     n(row, "passing_first_downs") * rule(rules, "OFFENSE", "passing_first_down", 0.5) +
-    n(row, "rushing_yards") * rule(rules, "OFFENSE", "rushing_yard", 0.1) +
-    n(row, "rushing_tds") * rule(rules, "OFFENSE", "rushing_td", 6) +
-    n(row, "rushing_first_downs") * rule(rules, "OFFENSE", "rushing_first_down", 0.5) +
+    n(row, "rushing_yards") * rule(rules, "OFFENSE", rushingYardKey, isQuarterback ? 0.05 : 0.1) +
+    n(row, "rushing_tds") * rule(rules, "OFFENSE", rushingTdKey, isQuarterback ? 4 : 6) +
+    n(row, "rushing_first_downs") * rule(rules, "OFFENSE", rushingFirstDownKey, isQuarterback ? 0.25 : 0.5) +
     n(row, "receptions") * rule(rules, "OFFENSE", "reception", 1) +
     n(row, "receiving_yards") * rule(rules, "OFFENSE", "receiving_yard", 0.1) +
     n(row, "receiving_tds") * rule(rules, "OFFENSE", "receiving_td", 6) +
     n(row, "receiving_first_downs") * rule(rules, "OFFENSE", "receiving_first_down", 0.5) +
     (n(row, "rushing_fumbles") + n(row, "receiving_fumbles")) * rule(rules, "OFFENSE", "fumble", -1) +
     (n(row, "rushing_fumbles_lost") + n(row, "receiving_fumbles_lost")) * rule(rules, "OFFENSE", "fumble_lost", -2) +
-    n(row, "fumble_recovery_tds") * rule(rules, "OFFENSE", "rushing_td", 6) +
+    n(row, "fumble_recovery_tds") * rule(rules, "OFFENSE", rushingTdKey, isQuarterback ? 4 : 6) +
     (n(row, "passing_2pt_conversions") + n(row, "rushing_2pt_conversions") + n(row, "receiving_2pt_conversions")) * rule(rules, "OFFENSE", "two_pt_conversion", 2) +
     (n(row, "rushing_yards") + n(row, "receiving_yards") >= 100 ? rule(rules, "OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
     (n(row, "passing_yards") >= 300 ? rule(rules, "OFFENSE", "bonus_300_pass_yards", 3) : 0);

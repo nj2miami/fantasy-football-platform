@@ -14,6 +14,9 @@ const DEFAULT_SCORING_RULES = {
     passing_td: 4,
     passing_int: -2,
     passing_first_down: 0.5,
+    qb_rushing_yard: 0.05,
+    qb_rushing_td: 4,
+    qb_rushing_first_down: 0.25,
     rushing_yard: 0.1,
     rushing_td: 6,
     rushing_first_down: 0.5,
@@ -141,7 +144,7 @@ const DRAFT_BUCKET_TARGETS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30,
 const DRAFT_BUCKET_MINIMUMS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30, K: 1 };
 const MIN_DRAFT_STAT_WEEKS = 8;
 const PLAYER_TWO_WEEK_ASSIGNMENT = "per_lineup_player_two_week_average_v1";
-const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v5";
+const LEAGUE_PLAYER_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
 const DRAFT_POOL_ENGINE_VERSION = "draft-pool-finalizer-pagination-v2";
 const DRAFT_POOL_CHUNK_SIZE = 200;
 
@@ -411,6 +414,10 @@ function statSum(stats: Json, keys: string[]) {
   return keys.reduce((sum, key) => sum + Math.abs(statNumber(stats, key)), 0);
 }
 
+function positiveStatSum(stats: Json, keys: string[]) {
+  return keys.reduce((sum, key) => sum + Math.max(0, statNumber(stats, key)), 0);
+}
+
 function normalizeTeam(team: unknown) {
   const value = String(team || "").trim().toUpperCase();
   return value && value !== "FA" && value !== "UNK" && value !== "UNKNOWN" ? value : "";
@@ -535,6 +542,10 @@ function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json
   if (category !== "OFFENSE") return 0;
 
   const incompletions = Math.max(n("attempts") - n("completions"), 0);
+  const isQuarterback = String(playerPosition || "").toUpperCase() === "QB";
+  const rushingYardKey = isQuarterback ? "qb_rushing_yard" : "rushing_yard";
+  const rushingTdKey = isQuarterback ? "qb_rushing_td" : "rushing_td";
+  const rushingFirstDownKey = isQuarterback ? "qb_rushing_first_down" : "rushing_first_down";
   return (
     n("completions") * r("OFFENSE", "completion", 0.2) +
     incompletions * r("OFFENSE", "incompletion", -0.3) +
@@ -542,16 +553,16 @@ function calculateFantasyPoints(stats: Json, playerPosition: string, rules: Json
     n("passing_tds") * r("OFFENSE", "passing_td", 4) +
     n("passing_interceptions") * r("OFFENSE", "passing_int", -2) +
     n("passing_first_downs") * r("OFFENSE", "passing_first_down", 0.5) +
-    n("rushing_yards") * r("OFFENSE", "rushing_yard", 0.1) +
-    n("rushing_tds") * r("OFFENSE", "rushing_td", 6) +
-    n("rushing_first_downs") * r("OFFENSE", "rushing_first_down", 0.5) +
+    n("rushing_yards") * r("OFFENSE", rushingYardKey, isQuarterback ? 0.05 : 0.1) +
+    n("rushing_tds") * r("OFFENSE", rushingTdKey, isQuarterback ? 4 : 6) +
+    n("rushing_first_downs") * r("OFFENSE", rushingFirstDownKey, isQuarterback ? 0.25 : 0.5) +
     n("receptions") * r("OFFENSE", "reception", 1) +
     n("receiving_yards") * r("OFFENSE", "receiving_yard", 0.1) +
     n("receiving_tds") * r("OFFENSE", "receiving_td", 6) +
     n("receiving_first_downs") * r("OFFENSE", "receiving_first_down", 0.5) +
     (n("rushing_fumbles") + n("receiving_fumbles")) * r("OFFENSE", "fumble", -1) +
     (n("rushing_fumbles_lost") + n("receiving_fumbles_lost")) * r("OFFENSE", "fumble_lost", -2) +
-    n("fumble_recovery_tds") * r("OFFENSE", "rushing_td", 6) +
+    n("fumble_recovery_tds") * r("OFFENSE", rushingTdKey, isQuarterback ? 4 : 6) +
     (n("passing_2pt_conversions") + n("rushing_2pt_conversions") + n("receiving_2pt_conversions")) * r("OFFENSE", "two_pt_conversion", 2) +
     (n("rushing_yards") + n("receiving_yards") >= 100 ? r("OFFENSE", "bonus_100_rush_rec_yards", 3) : 0) +
     (n("passing_yards") >= 300 ? r("OFFENSE", "bonus_300_pass_yards", 3) : 0)
@@ -596,26 +607,20 @@ function hasActualStatWeek(stats: Json, playerPosition: string, config: Json[] =
     ]) > 0;
   }
   if (category === "OFFENSE") {
-    return statSum(stats, [
-      "attempts",
-      "completions",
+    return positiveStatSum(stats, [
       "passing_yards",
       "passing_tds",
-      "passing_interceptions",
       "passing_first_downs",
-      "carries",
       "rushing_yards",
       "rushing_tds",
       "rushing_first_downs",
-      "targets",
       "receptions",
       "receiving_yards",
       "receiving_tds",
       "receiving_first_downs",
-      "rushing_fumbles",
-      "receiving_fumbles",
-      "rushing_fumbles_lost",
-      "receiving_fumbles_lost",
+      "passing_2pt_conversions",
+      "rushing_2pt_conversions",
+      "receiving_2pt_conversions",
     ]) > 0;
   }
   return false;
