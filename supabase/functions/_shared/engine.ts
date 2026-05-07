@@ -200,17 +200,27 @@ export function json(body: unknown, status = 200) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) return error.message || error.name || "Unknown error";
   if (error && typeof error === "object") {
     const payload = error as Json;
-    const message = payload.message || payload.error || payload.details || payload.hint;
+    const message = payload.message || payload.error || payload.details || payload.hint || payload.code;
     if (typeof message === "string") return message;
     if (message && typeof message === "object") return errorMessage(message);
+    const propertyPayload = Object.fromEntries(
+      Object.getOwnPropertyNames(error)
+        .map((key) => [key, (error as Record<string, unknown>)[key]])
+        .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    );
+    if (Object.keys(propertyPayload).length) return errorMessage(propertyPayload);
     try {
-      return JSON.stringify(payload);
+      const serialized = JSON.stringify(payload);
+      if (serialized && serialized !== "{}") return serialized;
     } catch {
-      return "Unknown error";
+      // Fall through to the generic message.
     }
+    const stringified = String(error);
+    if (stringified && stringified !== "[object Object]") return stringified;
+    return "Unknown server error";
   }
   return String(error);
 }
@@ -1148,7 +1158,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
     })
     .select("*")
     .single();
-  if (leagueError) throw leagueError;
+  if (leagueError) throw new Error(`Could not create league record: ${errorMessage(leagueError)}`);
   const activeLeague = payload.lock_scoring_rules === true
     ? await lockLeagueScoringRules(supabase, league, "commissioner")
     : league;
@@ -1165,17 +1175,19 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
     })
     .select("*")
     .single();
-  if (memberError) throw memberError;
+  if (memberError) throw new Error(`League was created, but commissioner membership could not be created: ${errorMessage(memberError)}`);
 
-  await supabase.from("standings").insert({
+  const { error: standingError } = await supabase.from("standings").insert({
     league_id: league.id,
     league_member_id: member.id,
   });
+  if (standingError) throw new Error(`League was created, but initial standings could not be created: ${errorMessage(standingError)}`);
   if (isPaidLeague && role === "manager") {
-    await supabase
+    const { error: profileUpdateError } = await supabase
       .from("profiles")
       .update({ role: "premium" })
       .eq("id", user.id);
+    if (profileUpdateError) throw new Error(`League was created, but premium profile update failed: ${errorMessage(profileUpdateError)}`);
   }
 
   return { league: activeLeague, member };

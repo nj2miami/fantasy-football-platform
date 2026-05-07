@@ -13,12 +13,17 @@ async function parseFunctionResponse(response) {
 
 function functionErrorMessage(body, status) {
   if (body && typeof body === "object") {
-    const message = body.error || body.message || body.details || body.hint;
+    const message = body.error || body.message || body.details || body.hint || body.code;
     if (typeof message === "string") return message;
     if (message && typeof message === "object") {
-      return message.message || message.details || JSON.stringify(message);
+      const nested = message.message || message.details || message.hint || message.code;
+      if (typeof nested === "string") return nested;
+      const serializedMessage = JSON.stringify(message);
+      if (serializedMessage && serializedMessage !== "{}") return serializedMessage;
     }
-    return JSON.stringify(body) || `Edge Function failed with status ${status}`;
+    const serializedBody = JSON.stringify(body);
+    if (serializedBody && serializedBody !== "{}") return serializedBody;
+    return `Edge Function failed with status ${status}`;
   }
   return body || `Edge Function failed with status ${status}`;
 }

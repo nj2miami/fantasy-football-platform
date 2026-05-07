@@ -34,10 +34,16 @@ const listValue = (value) => (Array.isArray(value) ? value : []);
 function errorText(error, fallback) {
   if (typeof error?.message === "string" && error.message !== "[object Object]") return error.message;
   if (error?.message && typeof error.message === "object") {
-    return error.message.message || error.message.details || JSON.stringify(error.message);
+    const nested = error.message.message || error.message.details || error.message.hint || error.message.code;
+    if (typeof nested === "string") return nested;
+    const serializedMessage = JSON.stringify(error.message);
+    if (serializedMessage && serializedMessage !== "{}") return serializedMessage;
   }
   if (error && typeof error === "object") {
-    return error.error || error.details || error.hint || JSON.stringify(error);
+    const nested = error.error || error.details || error.hint || error.code;
+    if (typeof nested === "string") return nested;
+    const serializedError = JSON.stringify(error);
+    if (serializedError && serializedError !== "{}") return serializedError;
   }
   return fallback;
 }
