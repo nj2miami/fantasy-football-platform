@@ -101,15 +101,6 @@ async function adminSeasonScoringRules(sourceSeasonYear) {
   return { rules: mergeScoringRules(DEFAULT_SCORING_RULES), sourceUpdatedAt: null, source: "code_default" };
 }
 
-async function commissionerScoringOverrideEligible(league = {}) {
-  if (String(league.league_tier || "").toUpperCase() === "PAID") return true;
-  const profiles = league.commissioner_email
-    ? await entities.UserProfile.filter({ user_email: league.commissioner_email })
-    : [];
-  const role = String(profiles[0]?.role || "").toLowerCase();
-  return role === "premium" || role === "admin";
-}
-
 async function effectiveLeagueScoringRules(league = {}) {
   return (await effectiveLeagueScoringContext(league)).rules;
 }
@@ -122,7 +113,7 @@ async function effectiveLeagueScoringContext(league = {}) {
       locked: true,
     };
   }
-  if (league.scoring_overrides_enabled === true && await commissionerScoringOverrideEligible(league)) {
+  if (league.scoring_overrides_enabled === true) {
     return {
       rules: mergeScoringRules(league.scoring_rules),
       sourceUpdatedAt: league.scoring_rules_source_updated_at || league.scoring_rules_locked_at || league.updated_date || null,

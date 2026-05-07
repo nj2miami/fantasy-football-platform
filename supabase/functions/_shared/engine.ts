@@ -517,7 +517,7 @@ async function commissionerScoringOverrideEligible(supabase: ReturnType<typeof c
 
 async function effectiveLeagueScoringRules(supabase: ReturnType<typeof createClient>, league: Json) {
   if (league.scoring_rules_locked_at) return mergeScoringRules(league.scoring_rules as Json | undefined);
-  if (league.scoring_overrides_enabled === true && await commissionerScoringOverrideEligible(supabase, league)) {
+  if (league.scoring_overrides_enabled === true) {
     return mergeScoringRules(league.scoring_rules as Json | undefined);
   }
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
@@ -527,7 +527,7 @@ async function effectiveLeagueScoringRules(supabase: ReturnType<typeof createCli
 async function scoringRulesHashForLeague(supabase: ReturnType<typeof createClient>, league: Json) {
   const scoringRules = await effectiveLeagueScoringRules(supabase, league);
   const usesAdminDefaults = !league.scoring_rules_locked_at &&
-    !(league.scoring_overrides_enabled === true && await commissionerScoringOverrideEligible(supabase, league));
+    league.scoring_overrides_enabled !== true;
   const sourceUpdatedAt = usesAdminDefaults
     ? (await adminSeasonScoringRules(supabase, Number(league.source_season_year || new Date().getFullYear() - 1))).sourceUpdatedAt
     : String(league.scoring_rules_source_updated_at || league.scoring_rules_locked_at || league.updated_date || "");
@@ -1600,9 +1600,45 @@ async function updateLeagueScoring(supabase: ReturnType<typeof createClient>, us
   const { league } = await requireLeagueControl(supabase, user, payload.league_id);
   await assertLeagueSetupEditable(supabase, league.id);
   if (league.scoring_rules_locked_at) throw new Error("Scoring rules are locked for this league.");
+  if (payload.decline_admin_scoring_change === true) {
+    if (league.scoring_overrides_enabled === true) throw new Error("This league is already using league scoring overrides.");
+    if (!(await commissionerScoringOverrideEligible(supabase, league))) {
+      throw new Error("Declining admin scoring changes requires a paid league or Pro commissioner access.");
+    }
+    const { data: job, error: jobError } = await supabase
+      .from("league_draft_pool_jobs")
+      .select("scoring_rules_snapshot,scoring_rules_source_updated_at,updated_date")
+      .eq("league_id", league.id)
+      .maybeSingle();
+    if (jobError) throw jobError;
+    if (!job?.scoring_rules_snapshot) {
+      throw new Error("No prepared draft pool scoring snapshot was found for this league. Refresh the draft pool before declining admin scoring changes.");
+    }
+    const now = new Date().toISOString();
+    const sourceUpdatedAt = String(job.scoring_rules_source_updated_at || job.updated_date || now);
+    const { data, error } = await supabase
+      .from("leagues")
+      .update({
+        scoring_overrides_enabled: true,
+        scoring_rules: mergeScoringRules(job.scoring_rules_snapshot as Json),
+        scoring_rules_source_updated_at: sourceUpdatedAt,
+        scoring_rules_synced_at: now,
+        updated_date: now,
+      })
+      .eq("id", league.id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return {
+      league: data,
+      effective_scoring_rules: await effectiveLeagueScoringRules(supabase, data),
+      draft_pool_invalidated: false,
+      declined_admin_scoring_change: true,
+    };
+  }
   const overridesEnabled = payload.scoring_overrides_enabled === true;
   if (overridesEnabled && !(await commissionerScoringOverrideEligible(supabase, league))) {
-    throw new Error("This league is not eligible for scoring overrides.");
+    throw new Error("League scoring overrides require a paid league or Pro commissioner access.");
   }
   const { count: existingPoolCount, error: existingPoolError } = await supabase
     .from("league_player_scores")
@@ -2017,7 +2053,15 @@ async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient
   }
 }
 
-async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, totalPlayers: number, clearExistingScores = false) {
+async function resetLeagueDraftPoolJob(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  scoringRulesHash: string,
+  scoringRules: Json,
+  sourceUpdatedAt: string | null | undefined,
+  totalPlayers: number,
+  clearExistingScores = false,
+) {
   await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
   if (clearExistingScores) {
     await supabase.from("league_player_scores").delete().eq("league_id", league.id);
@@ -2032,6 +2076,8 @@ async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>
       processed_players: 0,
       total_players: totalPlayers,
       scoring_rules_hash: scoringRulesHash,
+      scoring_rules_snapshot: scoringRules,
+      scoring_rules_source_updated_at: sourceUpdatedAt || null,
       error_details: null,
       summary: "Preparing league draft pool.",
     }, { onConflict: "league_id" })
@@ -2041,7 +2087,14 @@ async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>
   return data;
 }
 
-async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, forceRebuild = false) {
+async function loadOrCreateDraftPoolJob(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  scoringRulesHash: string,
+  scoringRules: Json,
+  sourceUpdatedAt: string | null | undefined,
+  forceRebuild = false,
+) {
   const { count, error: countError } = await supabase
     .from("players")
     .select("id", { count: "exact", head: true });
@@ -2060,12 +2113,17 @@ async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient
     job.scoring_rules_hash !== scoringRulesHash ||
     !["PENDING", "RUNNING"].includes(String(job.status || "").toUpperCase())
   ) {
-    return resetLeagueDraftPoolJob(supabase, league, scoringRulesHash, totalPlayers, forceRebuild);
+    return resetLeagueDraftPoolJob(supabase, league, scoringRulesHash, scoringRules, sourceUpdatedAt, totalPlayers, forceRebuild);
   }
   if (Number(job.total_players || 0) !== totalPlayers) {
     const { data: updatedJob, error: updateError } = await supabase
       .from("league_draft_pool_jobs")
-      .update({ total_players: totalPlayers, updated_date: new Date().toISOString() })
+      .update({
+        total_players: totalPlayers,
+        scoring_rules_snapshot: scoringRules,
+        scoring_rules_source_updated_at: sourceUpdatedAt || null,
+        updated_date: new Date().toISOString(),
+      })
       .eq("id", job.id)
       .select("*")
       .single();
@@ -2195,7 +2253,14 @@ async function loadDraftPoolCandidates(supabase: ReturnType<typeof createClient>
   }
 }
 
-async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, job: Json, scoringRulesHash: string) {
+async function finalizeLeagueDraftPoolJob(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  job: Json,
+  scoringRulesHash: string,
+  scoringRules: Json,
+  sourceUpdatedAt: string | null | undefined,
+) {
   const candidates = await loadDraftPoolCandidates(supabase, league.id, scoringRulesHash);
   const candidateCounts = draftBucketCounts(candidates);
 
@@ -2255,6 +2320,8 @@ async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClie
       status: "COMPLETED",
       progress: 100,
       summary: `Draft pool ready: ${rows.length} players.`,
+      scoring_rules_snapshot: scoringRules,
+      scoring_rules_source_updated_at: sourceUpdatedAt || null,
       error_details: null,
       updated_date: new Date().toISOString(),
     })
@@ -2295,6 +2362,17 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
   if (!forceRebuild && await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
     await syncLeagueDurabilityRows(supabase, league);
     await syncLeagueScoringSource();
+    await supabase
+      .from("league_draft_pool_jobs")
+      .update({
+        status: "COMPLETED",
+        progress: 100,
+        scoring_rules_hash: scoringRulesHash,
+        scoring_rules_snapshot: scoringRules,
+        scoring_rules_source_updated_at: sourceUpdatedAt || null,
+        updated_date: new Date().toISOString(),
+      })
+      .eq("league_id", league.id);
     const { data: rows, count, error } = await supabase
       .from("league_player_scores")
       .select("id,position", { count: "exact" })
@@ -2315,11 +2393,11 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
   }
 
   const config = await positionConfig(supabase);
-  const job = await loadOrCreateDraftPoolJob(supabase, league, scoringRulesHash, forceRebuild);
+  const job = await loadOrCreateDraftPoolJob(supabase, league, scoringRulesHash, scoringRules, sourceUpdatedAt, forceRebuild);
   try {
     const processedJob = await processDraftPoolPlayerChunk(supabase, league, job, scoringRules, scoringRulesHash, config);
     if (Number(processedJob.processed_players || 0) >= Number(processedJob.total_players || 0)) {
-      const finalized = await finalizeLeagueDraftPoolJob(supabase, league, processedJob, scoringRulesHash);
+      const finalized = await finalizeLeagueDraftPoolJob(supabase, league, processedJob, scoringRulesHash, scoringRules, sourceUpdatedAt);
       await syncLeagueScoringSource();
       return {
         league_id: league.id,

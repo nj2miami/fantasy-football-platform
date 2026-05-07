@@ -86,6 +86,23 @@ const errorText = (error, fallback) => {
   return fallback;
 };
 
+const flattenRuleDifferences = (currentRules, preparedRules) => {
+  if (!isCategorizedRules(preparedRules)) return [];
+  const current = mergeRules(currentRules, {});
+  const prepared = mergeRules(DEFAULT_SCORING_RULES, preparedRules);
+  const differences = [];
+  for (const [category, rules] of Object.entries(current)) {
+    for (const key of Object.keys(rules || {})) {
+      const currentValue = Number(rules[key]);
+      const preparedValue = Number(prepared?.[category]?.[key]);
+      if (Number.isFinite(currentValue) && Number.isFinite(preparedValue) && currentValue !== preparedValue) {
+        differences.push({ category, key, currentValue, preparedValue });
+      }
+    }
+  }
+  return differences;
+};
+
 export default function LeagueScoring({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [scoringRules, setScoringRules] = useState(null);
@@ -134,14 +151,14 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     enabled: !!league.commissioner_email,
   });
 
-  const { data: draftPoolPresence = { hasPool: false } } = useQuery({
+  const { data: draftPoolPresence = { hasPool: false, job: null } } = useQuery({
     queryKey: ["league-draft-pool-presence", league.id],
     queryFn: async () => {
       const [jobs, tiers] = await Promise.all([
         appClient.entities.LeagueDraftPoolJob.filter({ league_id: league.id }, "-updated_date", 1),
         appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id }, "position_rank", 1),
       ]);
-      return { hasPool: Boolean(jobs.length || tiers.length) };
+      return { hasPool: Boolean(jobs.length || tiers.length), job: jobs[0] || null };
     },
     enabled: !!league.id && !isLocked,
   });
@@ -159,7 +176,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   );
   const storedRules = useMemo(() => mergeRules(DEFAULT_SCORING_RULES, league.scoring_rules), [league.scoring_rules]);
   const activeDefaultRules = useMemo(() => mergeRules(defaultRules, {}), [defaultRules]);
-  const shouldDisplayStoredRules = isLocked || (overridesEnabled && overrideEligible);
+  const shouldDisplayStoredRules = isLocked || overridesEnabled;
 
   useEffect(() => {
     setScoringRules(shouldDisplayStoredRules ? storedRules : activeDefaultRules);
@@ -217,6 +234,26 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     },
   });
 
+  const declineAdminScoringMutation = useMutation({
+    mutationFn: () => appClient.functions.invoke("update_league_scoring", {
+      league_id: league.id,
+      decline_admin_scoring_change: true,
+    }),
+    onSuccess: (result) => {
+      setPoolRefreshNotice(false);
+      setLocalScoringSyncedAt(result?.league?.scoring_rules_synced_at || new Date().toISOString());
+      setPoolSyncConfirmation("League declined the admin scoring change and kept its current calculated scoring as league-specific rules.");
+      toast.success("Admin scoring change declined.");
+      queryClient.invalidateQueries({ queryKey: ["league", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-draft-pool-presence", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["draft-eligible-players", league.id] });
+    },
+    onError: (error) => {
+      toast.error(errorText(error, "Failed to decline admin scoring change."));
+    },
+  });
+
   const lockScoringMutation = useMutation({
     mutationFn: () => appClient.functions.invoke("lock_scoring_rules", { league_id: league.id }),
     onSuccess: () => {
@@ -268,13 +305,16 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   );
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
+  const pendingScoringDifferences = flattenRuleDifferences(scoringRules, draftPoolPresence.job?.scoring_rules_snapshot);
   const disabledReason = setupLocked
     ? "League setup is locked after the draft starts."
     : isLocked
     ? `Scoring locked ${league.scoring_rules_locked_at ? new Date(league.scoring_rules_locked_at).toLocaleString() : ""}.`
-    : overrideEligible
-      ? "Turn on league overrides to edit scoring."
-      : "Scoring overrides require a paid league or premium commissioner.";
+    : overridesEnabled
+      ? "League-specific scoring is active."
+      : overrideEligible
+        ? "Turn on league overrides to edit scoring."
+        : "League scoring overrides require a paid league or Pro commissioner access.";
 
   return (
     <div className="space-y-8">
@@ -315,15 +355,55 @@ export default function LeagueScoring({ league, setupLocked = false }) {
             )}
           </div>
           {draftPoolRefreshNeeded && (
-            <Button
-              onClick={() => prepareDraftPoolMutation.mutate()}
-              disabled={prepareDraftPoolMutation.isPending || setupLocked}
-              className="neo-btn bg-[#00D9FF] text-black"
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${prepareDraftPoolMutation.isPending ? "animate-spin" : ""}`} />
-              {prepareDraftPoolMutation.isPending ? "Refreshing Pool" : "Refresh Draft Pool"}
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {overrideEligible && adminDefaultsOutOfSync && pendingScoringDifferences.length > 0 && (
+                <Button
+                  onClick={() => declineAdminScoringMutation.mutate()}
+                  disabled={declineAdminScoringMutation.isPending || prepareDraftPoolMutation.isPending || setupLocked}
+                  className="neo-btn bg-white text-black"
+                >
+                  {declineAdminScoringMutation.isPending ? "Declining..." : "Decline Admin Change"}
+                </Button>
+              )}
+              <Button
+                onClick={() => prepareDraftPoolMutation.mutate()}
+                disabled={prepareDraftPoolMutation.isPending || declineAdminScoringMutation.isPending || setupLocked}
+                className="neo-btn bg-[#00D9FF] text-black"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${prepareDraftPoolMutation.isPending ? "animate-spin" : ""}`} />
+                {prepareDraftPoolMutation.isPending ? "Refreshing Pool" : "Refresh Draft Pool"}
+              </Button>
+            </div>
           )}
+        </div>
+      )}
+
+      {draftPoolRefreshNeeded && pendingScoringDifferences.length > 0 && (
+        <div className="neo-border bg-white p-4">
+          <p className="text-sm font-black uppercase">Pending Scoring Changes</p>
+          <p className="mt-1 text-xs font-bold text-gray-600">
+            These values changed since this draft pool was last calculated.
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[520px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b-4 border-black text-left text-xs font-black uppercase">
+                  <th className="py-2 pr-3">Rule</th>
+                  <th className="py-2 pr-3">Current</th>
+                  <th className="py-2 pr-3">Pool Used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingScoringDifferences.map((difference) => (
+                  <tr key={`${difference.category}.${difference.key}`} className="border-b-2 border-gray-200 font-bold">
+                    <td className="py-2 pr-3 uppercase">{difference.category} / {difference.key.replace(/_/g, " ")}</td>
+                    <td className="py-2 pr-3">{difference.currentValue}</td>
+                    <td className="py-2 pr-3">{difference.preparedValue}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -340,7 +420,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
         />
       </div>
 
-      {!overrideEligible && !isLocked && (
+      {!overridesEnabled && !isLocked && (
         <div className="neo-border bg-[#FFF1E8] p-4 flex items-center gap-3">
           <Lock className="w-5 h-5 text-[#6A4C93]" />
           <p className="font-black uppercase text-sm">
