@@ -1821,6 +1821,25 @@ async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient
   return job;
 }
 
+async function loadDraftPoolSourceWeeks(supabase: ReturnType<typeof createClient>, sourceSeasonYear: number, playerIds: unknown[]) {
+  const rows: Json[] = [];
+  if (!playerIds.length) return rows;
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("player_week_stats")
+      .select("player_id,raw_stats")
+      .eq("season_year", sourceSeasonYear)
+      .in("player_id", playerIds)
+      .order("player_id", { ascending: true })
+      .order("week", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
+
 async function processDraftPoolPlayerChunk(supabase: ReturnType<typeof createClient>, league: Json, job: Json, scoringRules: Json, scoringRulesHash: string, config: Json[]) {
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const start = Number(job.processed_players || 0);
@@ -1839,13 +1858,8 @@ async function processDraftPoolPlayerChunk(supabase: ReturnType<typeof createCli
 
   const aggregates = new Map<string, { player_id: string; position: string; total: number; weeks: number }>();
   if (candidatePlayerIds.length) {
-    const { data: weeks, error: weeksError } = await supabase
-      .from("player_week_stats")
-      .select("player_id,raw_stats")
-      .eq("season_year", sourceSeasonYear)
-      .in("player_id", candidatePlayerIds);
-    if (weeksError) throw weeksError;
-    for (const week of weeks || []) {
+    const weeks = await loadDraftPoolSourceWeeks(supabase, sourceSeasonYear, candidatePlayerIds);
+    for (const week of weeks) {
       const player = playerById.get(String(week.player_id));
       if (!player) continue;
       const rawStats = ((week.raw_stats || {}) as Json);
