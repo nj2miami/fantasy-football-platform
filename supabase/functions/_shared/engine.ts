@@ -1624,10 +1624,15 @@ async function updateLeagueScoring(supabase: ReturnType<typeof createClient>, us
     .select("*")
     .single();
   if (error) throw error;
-  await supabase.from("league_player_scores").delete().eq("league_id", league.id);
   await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
-  await supabase.from("league_draft_pool_jobs").delete().eq("league_id", league.id);
-  await supabase.from("league_player_durability").delete().eq("league_id", league.id);
+  await supabase
+    .from("league_draft_pool_jobs")
+    .update({
+      status: "STALE",
+      summary: "Scoring changed after this draft pool was prepared.",
+      updated_date: now,
+    })
+    .eq("league_id", league.id);
   return {
     league: data,
     effective_scoring_rules: await effectiveLeagueScoringRules(supabase, data),
@@ -2271,20 +2276,25 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
   if (!sourceWeekCount) {
     throw new Error(`No imported player week stats were found for source season ${sourceSeasonYear}. Choose a season with imported data or import that season before preparing the draft pool.`);
   }
+  const syncLeagueScoringSource = async () => {
+    if (league.scoring_rules_locked_at || !sourceUpdatedAt) return;
+    const now = new Date().toISOString();
+    const update: Json = {
+      scoring_rules_source_updated_at: sourceUpdatedAt,
+      scoring_rules_synced_at: now,
+      updated_date: now,
+    };
+    if (league.scoring_overrides_enabled !== true) update.scoring_rules = {};
+    await supabase
+      .from("leagues")
+      .update(update)
+      .eq("id", league.id)
+      .is("scoring_rules_locked_at", null);
+  };
+
   if (!forceRebuild && await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
     await syncLeagueDurabilityRows(supabase, league);
-    if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
-      const now = new Date().toISOString();
-      await supabase
-        .from("leagues")
-        .update({
-          scoring_rules_source_updated_at: sourceUpdatedAt,
-          scoring_rules_synced_at: now,
-          updated_date: now,
-        })
-        .eq("id", league.id)
-        .is("scoring_rules_locked_at", null);
-    }
+    await syncLeagueScoringSource();
     const { data: rows, count, error } = await supabase
       .from("league_player_scores")
       .select("id,position", { count: "exact" })
@@ -2298,6 +2308,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
       progress: 100,
       scoring_rules_hash: scoringRulesHash,
       source_updated_at: sourceUpdatedAt || null,
+      effective_scoring_rules: scoringRules,
       eligible_count: count || 0,
       buckets: draftBucketCounts(rows || []),
     };
@@ -2309,18 +2320,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
     const processedJob = await processDraftPoolPlayerChunk(supabase, league, job, scoringRules, scoringRulesHash, config);
     if (Number(processedJob.processed_players || 0) >= Number(processedJob.total_players || 0)) {
       const finalized = await finalizeLeagueDraftPoolJob(supabase, league, processedJob, scoringRulesHash);
-      if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
-        const now = new Date().toISOString();
-        await supabase
-          .from("leagues")
-          .update({
-            scoring_rules_source_updated_at: sourceUpdatedAt,
-            scoring_rules_synced_at: now,
-            updated_date: now,
-          })
-          .eq("id", league.id)
-          .is("scoring_rules_locked_at", null);
-      }
+      await syncLeagueScoringSource();
       return {
         league_id: league.id,
         status: "COMPLETED",
@@ -2328,6 +2328,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
         progress: 100,
         scoring_rules_hash: scoringRulesHash,
         source_updated_at: sourceUpdatedAt || null,
+        effective_scoring_rules: scoringRules,
         ...finalized,
       };
     }
@@ -2337,6 +2338,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
       complete: false,
       scoring_rules_hash: scoringRulesHash,
       source_updated_at: sourceUpdatedAt || null,
+      effective_scoring_rules: scoringRules,
       progress: Number(processedJob.progress || 1),
       processed_players: Number(processedJob.processed_players || 0),
       total_players: Number(processedJob.total_players || 0),

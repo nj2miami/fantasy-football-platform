@@ -86,27 +86,6 @@ const errorText = (error, fallback) => {
   return fallback;
 };
 
-const flattenRuleDifferences = (adminRules, leagueRules) => {
-  const admin = mergeRules(adminRules, {});
-  const leagueSnapshot = mergeRules(DEFAULT_SCORING_RULES, leagueRules);
-  const differences = [];
-  for (const [category, rules] of Object.entries(admin)) {
-    for (const key of Object.keys(rules || {})) {
-      const adminValue = Number(rules[key]);
-      const leagueValue = Number(leagueSnapshot?.[category]?.[key]);
-      if (Number.isFinite(adminValue) && Number.isFinite(leagueValue) && adminValue !== leagueValue) {
-        differences.push({
-          category,
-          key,
-          adminValue,
-          leagueValue,
-        });
-      }
-    }
-  }
-  return differences;
-};
-
 export default function LeagueScoring({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [scoringRules, setScoringRules] = useState(null);
@@ -154,18 +133,32 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     queryFn: () => league.commissioner_email ? appClient.entities.UserProfile.filter({ user_email: league.commissioner_email }) : [],
     enabled: !!league.commissioner_email,
   });
+
+  const { data: draftPoolPresence = { hasPool: false } } = useQuery({
+    queryKey: ["league-draft-pool-presence", league.id],
+    queryFn: async () => {
+      const [jobs, tiers] = await Promise.all([
+        appClient.entities.LeagueDraftPoolJob.filter({ league_id: league.id }, "-updated_date", 1),
+        appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id }, "position_rank", 1),
+      ]);
+      return { hasPool: Boolean(jobs.length || tiers.length) };
+    },
+    enabled: !!league.id && !isLocked,
+  });
+
   const commissionerRole = String(commissionerProfiles[0]?.role || "").toLowerCase();
   const overrideEligible = String(league.league_tier || "").toUpperCase() === "PAID" || commissionerRole === "premium" || commissionerRole === "admin";
+  const hasDraftPool = Boolean(draftPoolPresence.hasPool);
   const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
   const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
   const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
-  const adminDefaultsOutOfSync = !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
+  const adminDefaultsOutOfSync = hasDraftPool && !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
     !syncedAt ||
     (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
   );
   const storedRules = useMemo(() => mergeRules(DEFAULT_SCORING_RULES, league.scoring_rules), [league.scoring_rules]);
   const activeDefaultRules = useMemo(() => mergeRules(defaultRules, {}), [defaultRules]);
-  const shouldDisplayStoredRules = isLocked || (overridesEnabled && overrideEligible) || adminDefaultsOutOfSync;
+  const shouldDisplayStoredRules = isLocked || (overridesEnabled && overrideEligible);
 
   useEffect(() => {
     setScoringRules(shouldDisplayStoredRules ? storedRules : activeDefaultRules);
@@ -189,10 +182,13 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     }),
     onSuccess: (result) => {
       setPoolRefreshNotice(Boolean(result?.draft_pool_invalidated));
-      if (result?.draft_pool_invalidated) setPoolSyncConfirmation(null);
+      if (result?.draft_pool_invalidated) {
+        setPoolSyncConfirmation(null);
+      }
       toast.success("League scoring overrides saved!");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-draft-pool-presence", league.id] });
     },
     onError: (error) => {
       toast.error(errorText(error, "Failed to save scoring rules."));
@@ -203,14 +199,17 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     mutationFn: (enabled) => appClient.functions.invoke("update_league_scoring", {
       league_id: league.id,
       scoring_overrides_enabled: enabled,
-      scoring_rules: enabled ? mergeRules(defaultRules, league.scoring_rules) : {},
+      scoring_rules: enabled ? activeDefaultRules : {},
     }),
     onSuccess: (result) => {
       setPoolRefreshNotice(Boolean(result?.draft_pool_invalidated));
-      if (result?.draft_pool_invalidated) setPoolSyncConfirmation(null);
+      if (result?.draft_pool_invalidated) {
+        setPoolSyncConfirmation(null);
+      }
       toast.success("Scoring override mode updated.");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-draft-pool-presence", league.id] });
     },
     onError: (error) => {
       toast.error(errorText(error, "Failed to update scoring override mode."));
@@ -248,6 +247,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
       toast.success(completed ? "Draft pool refreshed." : "Draft pool refresh started.");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-draft-pool-presence", league.id] });
       queryClient.invalidateQueries({ queryKey: ["draft-eligible-players", league.id] });
       queryClient.removeQueries({ queryKey: ["draft-eligible-players", league.id] });
     },
@@ -261,10 +261,9 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   }
 
   const canEditOverrides = overrideEligible && overridesEnabled && !isLocked && !setupLocked;
-  const leagueOverrideOutOfSync = !isLocked && overridesEnabled && !leagueSyncedAt;
+  const leagueOverrideOutOfSync = hasDraftPool && !isLocked && overridesEnabled && !leagueSyncedAt;
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
-  const adminLeagueDifferences = flattenRuleDifferences(defaultRules, league.scoring_rules);
   const disabledReason = setupLocked
     ? "League setup is locked after the draft starts."
     : isLocked
@@ -283,7 +282,9 @@ export default function LeagueScoring({ league, setupLocked = false }) {
         {adminUpdatedAt && !isLocked && !overridesEnabled && (
           <p className="mt-2 text-xs font-black uppercase text-gray-500">
             Admin defaults updated {new Date(adminUpdatedAt).toLocaleString()}
-            {syncedAt ? ` | League pool synced ${new Date(syncedAt).toLocaleString()}` : " | League pool has not synced yet"}
+            {hasDraftPool
+              ? syncedAt ? ` | League pool synced ${new Date(syncedAt).toLocaleString()}` : " | League pool has not synced yet"
+              : " | No draft pool prepared yet"}
           </p>
         )}
       </div>
@@ -334,35 +335,6 @@ export default function LeagueScoring({ league, setupLocked = false }) {
           className="data-[state=checked]:bg-black"
         />
       </div>
-
-      {adminLeagueDifferences.length > 0 && draftPoolRefreshNeeded && !isLocked && (
-        <div className="neo-border bg-white p-4">
-          <p className="text-sm font-black uppercase">Admin vs League Stored Values</p>
-          <p className="mt-1 text-xs font-bold text-gray-600">
-            These stored league values differ from the current admin scoring source for this league season.
-          </p>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[520px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b-4 border-black text-left text-xs font-black uppercase">
-                  <th className="py-2 pr-3">Rule</th>
-                  <th className="py-2 pr-3">Admin</th>
-                  <th className="py-2 pr-3">League Stored</th>
-                </tr>
-              </thead>
-              <tbody>
-                {adminLeagueDifferences.map((difference) => (
-                  <tr key={`${difference.category}.${difference.key}`} className="border-b-2 border-gray-200 font-bold">
-                    <td className="py-2 pr-3 uppercase">{difference.category} / {difference.key.replace(/_/g, " ")}</td>
-                    <td className="py-2 pr-3">{difference.adminValue}</td>
-                    <td className="py-2 pr-3">{difference.leagueValue}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {!overrideEligible && !isLocked && (
         <div className="neo-border bg-[#FFF1E8] p-4 flex items-center gap-3">
