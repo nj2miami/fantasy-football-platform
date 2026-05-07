@@ -103,6 +103,13 @@ const flattenRuleDifferences = (currentRules, preparedRules) => {
   return differences;
 };
 
+const listValue = (value) => (Array.isArray(value) ? value : []);
+const timestampMs = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 export default function LeagueScoring({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [scoringRules, setScoringRules] = useState(null);
@@ -155,10 +162,12 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     queryKey: ["league-draft-pool-presence", league.id],
     queryFn: async () => {
       const [jobs, tiers] = await Promise.all([
-        appClient.entities.LeagueDraftPoolJob.filter({ league_id: league.id }, "-updated_date", 1),
+        appClient.entities.LeagueDraftPoolJob.filter({ league_id: league.id }, "-updated_date", 5),
         appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id }, "position_rank", 1),
       ]);
-      return { hasPool: Boolean(jobs.length || tiers.length), job: jobs[0] || null };
+      const jobRows = listValue(jobs);
+      const completedJob = jobRows.find((job) => String(job.status || "").toUpperCase() === "COMPLETED");
+      return { hasPool: Boolean(jobRows.length || listValue(tiers).length), job: completedJob || jobRows[0] || null };
     },
     enabled: !!league.id && !isLocked,
   });
@@ -167,12 +176,19 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const overrideEligible = String(league.league_tier || "").toUpperCase() === "PAID" || commissionerRole === "premium" || commissionerRole === "admin";
   const hasDraftPool = Boolean(draftPoolPresence.hasPool);
   const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
-  const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
-  const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
-  const leagueSourceUpdatedAt = league.scoring_rules_source_updated_at || null;
-  const adminDefaultsOutOfSync = hasDraftPool && !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
+  const draftPoolJob = draftPoolPresence.job || null;
+  const draftPoolSourceUpdatedAt = draftPoolJob?.scoring_rules_source_updated_at || null;
+  const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || draftPoolSourceUpdatedAt || null;
+  const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || draftPoolJob?.updated_date || null;
+  const leagueSourceUpdatedAt = league.scoring_rules_source_updated_at || draftPoolSourceUpdatedAt || null;
+  const pendingScoringDifferences = flattenRuleDifferences(scoringRules, draftPoolJob?.scoring_rules_snapshot);
+  const adminUpdatedMs = timestampMs(adminUpdatedAt);
+  const syncedMs = timestampMs(syncedAt);
+  const leagueSourceUpdatedMs = timestampMs(leagueSourceUpdatedAt);
+  const leagueSyncedMs = timestampMs(leagueSyncedAt);
+  const adminDefaultsOutOfSync = hasDraftPool && !isLocked && !overridesEnabled && pendingScoringDifferences.length > 0 && (
     !syncedAt ||
-    (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
+    (adminUpdatedMs && syncedMs && adminUpdatedMs > syncedMs)
   );
   const storedRules = useMemo(() => mergeRules(DEFAULT_SCORING_RULES, league.scoring_rules), [league.scoring_rules]);
   const activeDefaultRules = useMemo(() => mergeRules(defaultRules, {}), [defaultRules]);
@@ -301,11 +317,10 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const canEditOverrides = overrideEligible && overridesEnabled && !isLocked && !setupLocked;
   const leagueOverrideOutOfSync = hasDraftPool && !isLocked && overridesEnabled && Boolean(leagueSourceUpdatedAt) && (
     !leagueSyncedAt ||
-    new Date(leagueSourceUpdatedAt).getTime() > new Date(leagueSyncedAt).getTime()
+    (leagueSourceUpdatedMs && leagueSyncedMs && leagueSourceUpdatedMs > leagueSyncedMs)
   );
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
-  const pendingScoringDifferences = flattenRuleDifferences(scoringRules, draftPoolPresence.job?.scoring_rules_snapshot);
   const disabledReason = setupLocked
     ? "League setup is locked after the draft starts."
     : isLocked
