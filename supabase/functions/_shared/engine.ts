@@ -1902,13 +1902,24 @@ async function processDraftPoolPlayerChunk(supabase: ReturnType<typeof createCli
   return updatedJob;
 }
 
+async function loadDraftPoolCandidates(supabase: ReturnType<typeof createClient>, leagueId: unknown, scoringRulesHash: string) {
+  const rows: Json[] = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("league_draft_pool_candidates")
+      .select("player_id,position,total_points,expected_avg_points,weeks_played")
+      .eq("league_id", leagueId)
+      .eq("scoring_rules_hash", scoringRulesHash)
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
+
 async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, job: Json, scoringRulesHash: string) {
-  const { data: candidates, error } = await supabase
-    .from("league_draft_pool_candidates")
-    .select("player_id,position,total_points,expected_avg_points,weeks_played")
-    .eq("league_id", league.id)
-    .eq("scoring_rules_hash", scoringRulesHash);
-  if (error) throw error;
+  const candidates = await loadDraftPoolCandidates(supabase, league.id, scoringRulesHash);
 
   const byPosition = new Map<string, Json[]>();
   for (const candidate of candidates || []) {
