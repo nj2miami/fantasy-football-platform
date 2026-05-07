@@ -12,6 +12,8 @@ function formatJoinFee(league) {
   return `$${amount.toFixed(amount % 1 === 0 ? 0 : 2)} to join`;
 }
 
+const listValue = (value) => (Array.isArray(value) ? value : []);
+
 export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], joinLeagueMutation, canJoinLeague = true }) {
   const navigate = useNavigate();
   const rotation = index % 3 === 0 ? 'rotate-[0.5deg]' : index % 3 === 1 ? 'rotate-[-0.5deg]' : 'rotate-[0.2deg]';
@@ -46,7 +48,10 @@ export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], 
     }
   });
 
-  const activeMembers = members.filter((member) => member.is_active !== false);
+  const memberRows = listValue(members);
+  const seasonRows = listValue(seasons);
+  const joinedLeagueIds = listValue(myLeagueIds);
+  const activeMembers = memberRows.filter((member) => member.is_active !== false);
   const commissionerName = commissionerProfile?.display_name || commissionerProfile?.profile_name || "Commissioner";
   const commissionerProfileUrl = commissionerProfile?.profile_name
     ? createPageUrl(`Profile?name=${encodeURIComponent(commissionerProfile.profile_name)}`)
@@ -54,7 +59,7 @@ export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], 
   const openSpots = league.max_members - activeMembers.length;
   const isFull = openSpots <= 0;
   const isCommissioner = user?.email === league.commissioner_email || user?.id === league.commissioner_id;
-  const isJoined = myLeagueIds.includes(league.id) || isCommissioner;
+  const isJoined = joinedLeagueIds.includes(league.id) || isCommissioner;
   
   // Determine league type
   const isAILeague = activeMembers.every(m => m.is_ai || m.user_email === league.commissioner_email);
@@ -65,13 +70,13 @@ export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], 
   let statusText = `Recruiting (${openSpots} spots)`;
   let statusColor = 'bg-green-500';
   
-  if (isFull && (!seasons.length || seasons[0]?.status === 'DRAFTING')) {
+  if (isFull && (!seasonRows.length || seasonRows[0]?.status === 'DRAFTING')) {
     status = 'coming_soon';
     statusText = 'Coming Soon';
     statusColor = 'bg-yellow-500';
-  } else if (seasons.length > 0 && seasons[0].status !== 'DRAFTING') {
+  } else if (seasonRows.length > 0 && seasonRows[0].status !== 'DRAFTING') {
     status = 'underway';
-    statusText = `Week ${seasons[0].current_week || 1} Underway`;
+    statusText = `Week ${seasonRows[0].current_week || 1} Underway`;
     statusColor = 'bg-blue-500';
   }
 
