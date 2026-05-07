@@ -1621,17 +1621,13 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_scores")
-    .select("id,position,weeks_played,scoring_rules_hash,players!inner(team)")
+    .select("id,position,weeks_played,scoring_rules_hash")
     .eq("league_id", leagueId)
     .lte("position_rank", 30);
   if (existingError) throw existingError;
   const existingHashMatches = Boolean(existing?.length) && existing.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
   const existingWeeksEligible = Boolean(existing?.length) && existing.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
-  const existingTeamsEligible = Boolean(existing?.length) && existing.every((row: Json) => {
-    const player = Array.isArray(row.players) ? row.players[0] : row.players;
-    return Boolean(normalizeTeam(player?.team));
-  });
-  if (existingHashMatches && existingWeeksEligible && existingTeamsEligible && hasCompleteDraftBuckets(existing || [])) return;
+  if (existingHashMatches && existingWeeksEligible && hasCompleteDraftBuckets(existing || [])) return;
   if (existing?.length) {
     const { error: deleteError } = await supabase.from("league_player_scores").delete().eq("league_id", leagueId);
     if (deleteError) throw deleteError;
@@ -1650,7 +1646,6 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
     if (!playerId) continue;
     const rawStats = ((week.raw_stats || {}) as Json);
     const playerPosition = String(player?.position || "");
-    if (!normalizeTeam(player?.team)) continue;
     const bucket = rosterLimitBucket(playerPosition, config);
     if (bucket === "UNUSED") continue;
     if (!hasActualStatWeek(rawStats, playerPosition, config)) continue;
@@ -1709,7 +1704,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 async function existingLeaguePlayerScoresComplete(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string) {
   const { data: existing, error } = await supabase
     .from("league_player_scores")
-    .select("id,position,weeks_played,scoring_rules_hash,players!inner(team)")
+    .select("id,position,weeks_played,scoring_rules_hash")
     .eq("league_id", league.id)
     .lte("position_rank", 30);
   if (error) throw error;
@@ -1717,11 +1712,7 @@ async function existingLeaguePlayerScoresComplete(supabase: ReturnType<typeof cr
   if (!rows.length) return false;
   const hashMatches = rows.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
   const weeksEligible = rows.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
-  const teamsEligible = rows.every((row: Json) => {
-    const player = Array.isArray(row.players) ? row.players[0] : row.players;
-    return Boolean(normalizeTeam(player?.team));
-  });
-  return hashMatches && weeksEligible && teamsEligible && hasCompleteDraftBuckets(rows);
+  return hashMatches && weeksEligible && hasCompleteDraftBuckets(rows);
 }
 
 async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient>, league: Json) {
@@ -1773,8 +1764,6 @@ async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient
 }
 
 async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, totalPlayers: number) {
-  await supabase.from("league_player_scores").delete().eq("league_id", league.id);
-  await supabase.from("league_player_durability").delete().eq("league_id", league.id);
   await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
   const { data, error } = await supabase
     .from("league_draft_pool_jobs")
@@ -1840,7 +1829,6 @@ async function processDraftPoolPlayerChunk(supabase: ReturnType<typeof createCli
   const playerRows = players || [];
   const playerById = new Map(playerRows.map((player: Json) => [String(player.id), player]));
   const candidatePlayerIds = playerRows
-    .filter((player: Json) => normalizeTeam(player.team))
     .filter((player: Json) => rosterLimitBucket(String(player.position || ""), config) !== "UNUSED")
     .map((player: Json) => player.id);
 
@@ -1892,7 +1880,9 @@ async function processDraftPoolPlayerChunk(supabase: ReturnType<typeof createCli
     if (upsertError) throw upsertError;
   }
 
-  const processedPlayers = Math.min(Number(job.total_players || 0), start + playerRows.length);
+  const processedPlayers = playerRows.length
+    ? Math.min(Number(job.total_players || 0), start + playerRows.length)
+    : Number(job.total_players || 0);
   const progress = Number(job.total_players || 0)
     ? Math.min(95, Math.max(1, Math.round((processedPlayers / Number(job.total_players || 1)) * 90)))
     : 95;

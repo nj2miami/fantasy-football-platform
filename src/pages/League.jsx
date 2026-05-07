@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
-import { useAvailablePlayers, useLeagueWeek, useLineup, useReleasedPlayers } from "@/api/hooks";
+import { useLeagueWeek, useLineup, useReleasedPlayers } from "@/api/hooks";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 
@@ -435,19 +435,44 @@ function RulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
   );
 }
 
-function FreeAgentBoard({ league, currentWeek, currentMember }) {
-  const { data: players = [] } = useAvailablePlayers(league.id, currentWeek, currentMember?.id);
-  const { data: tiers = [] } = useQuery({
-    queryKey: ["free-agent-draft-tiers", league.id],
-    queryFn: () => appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id }),
+function FreeAgentBoard({ league, currentMember }) {
+  const { data: board = { tiers: [], playersById: new Map() } } = useQuery({
+    queryKey: ["free-agent-draft-tiers", league.id, currentMember?.id],
+    queryFn: async () => {
+      const tiers = await appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id });
+      const tierPlayerIds = [...new Set(tiers.map((tier) => tier.player_id).filter(Boolean))];
+      const [members, rosters, usage, picks] = await Promise.all([
+        appClient.entities.LeagueMember.filter({ league_id: league.id }),
+        appClient.entities.Roster.list(),
+        currentMember?.id ? appClient.entities.ManagerPlayerUsage.filter({ league_id: league.id, league_member_id: currentMember.id }) : [],
+        appClient.entities.DraftPick.filter({ league_id: league.id }),
+      ]);
+      const leagueMemberIds = new Set((members || []).map((member) => member.id));
+      const unavailableIds = new Set([
+        ...(rosters || []).filter((slot) => leagueMemberIds.has(slot.league_member_id)).map((slot) => slot.player_id),
+        ...(picks || []).map((pick) => pick.player_id),
+        ...(league.draft_mode === "weekly_redraft" || league.mode === "weekly_redraft" ? (usage || []).map((item) => item.player_id) : []),
+      ]);
+      const availableTierIds = tierPlayerIds.filter((playerId) => !unavailableIds.has(playerId));
+      const playerChunks = [];
+      for (let index = 0; index < availableTierIds.length; index += 100) {
+        playerChunks.push(availableTierIds.slice(index, index + 100));
+      }
+      const playerRows = playerChunks.length
+        ? (await Promise.all(playerChunks.map((ids) => appClient.entities.Player.filter({ id: ids })))).flat()
+        : [];
+      return {
+        tiers: tiers.filter((tier) => availableTierIds.includes(tier.player_id)),
+        playersById: new Map(playerRows.map((player) => [player.id, player])),
+      };
+    },
     enabled: Boolean(league.id),
   });
-  const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
-  const availableIds = useMemo(() => new Set(players.map((player) => player.id)), [players]);
+  const tiers = useMemo(() => board.tiers || [], [board.tiers]);
+  const playerById = useMemo(() => board.playersById || new Map(), [board.playersById]);
   const rowsByPosition = useMemo(() => {
     const grouped = Object.fromEntries(FREE_AGENT_POSITIONS.map((position) => [position, []]));
     tiers
-      .filter((tier) => availableIds.has(tier.player_id))
       .forEach((tier) => {
         const bucket = draftBucket(tier.position);
         if (!grouped[bucket]) return;
@@ -461,7 +486,8 @@ function FreeAgentBoard({ league, currentWeek, currentMember }) {
         .slice(0, 30);
     }
     return grouped;
-  }, [availableIds, playerById, tiers]);
+  }, [playerById, tiers]);
+  const visibleCount = FREE_AGENT_POSITIONS.reduce((sum, position) => sum + rowsByPosition[position].length, 0);
   return (
     <Panel title="Free Agent Board" icon={Shuffle}>
       <div className="grid gap-4 xl:grid-cols-4">
@@ -496,7 +522,7 @@ function FreeAgentBoard({ league, currentWeek, currentMember }) {
           </div>
         ))}
       </div>
-      {!players.length && <EmptyState title="No free agents visible" detail="A draft or roster lock may still be in progress." />}
+      {!visibleCount && <EmptyState title="No free agents visible" detail="Prepare the league draft pool or check whether all tiered players are already rostered." />}
     </Panel>
   );
 }
@@ -604,7 +630,7 @@ function LeagueHubPage(props) {
         </div>
       )}
       {activeTab === "news" && <NewsPanel newsItems={newsItems} auditEvents={auditEvents} season={season} leagueWeekData={leagueWeekData} leagueId={league.id} />}
-      {activeTab === "free-agents" && <FreeAgentBoard league={league} currentWeek={currentWeek} currentMember={currentMember} />}
+      {activeTab === "free-agents" && <FreeAgentBoard league={league} currentMember={currentMember} />}
       {activeTab === "rules" && (
         <RulesPanel
           league={league}

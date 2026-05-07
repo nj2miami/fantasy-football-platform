@@ -81,6 +81,7 @@ function draftPoolHashStatus(tiers, league, job) {
 }
 
 function shouldPrepareDraftPool(tiers, selectedPosition, league, job) {
+  if (String(job?.status || "").toUpperCase() === "FAILED") return true;
   if (!tiers.length) return true;
   if (draftPoolHashStatus(tiers, league, job).stale) return true;
   if (tiers.some((tier) => Number(tier.weeks_played || 0) < 8)) return true;
@@ -112,7 +113,9 @@ function draftPoolStatus(tiers, selectedPosition, league, job) {
     scoringHashKnown: hashStatus.known,
     expectedScoringHash: hashStatus.expectedHash,
     actualScoringHash: hashStatus.actualHash,
-    reason: !tiers.length
+    reason: String(job?.status || "").toUpperCase() === "FAILED"
+      ? job.error_details || "Draft pool preparation failed. The commissioner can rerun the pool."
+      : !tiers.length
       ? "No draft pool has been prepared for this league."
       : hashStatus.stale
         ? "League scoring rules changed since the last draft pool was prepared."
@@ -353,6 +356,7 @@ export const draftDay = {
       result = await functions.prepareDraftPool({ league_id: leagueId });
       if (onProgress) onProgress(result);
       if (result?.complete || String(result?.status || result?.job?.status || "").toUpperCase() === "COMPLETED") return result;
+      if (String(result?.status || result?.job?.status || "").toUpperCase() === "FAILED") return result;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     return result;
