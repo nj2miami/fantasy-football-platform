@@ -2002,8 +2002,12 @@ async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient
   }
 }
 
-async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, totalPlayers: number) {
+async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, totalPlayers: number, clearExistingScores = false) {
   await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
+  if (clearExistingScores) {
+    await supabase.from("league_player_scores").delete().eq("league_id", league.id);
+    await supabase.from("league_player_durability").delete().eq("league_id", league.id);
+  }
   const { data, error } = await supabase
     .from("league_draft_pool_jobs")
     .upsert({
@@ -2022,7 +2026,7 @@ async function resetLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>
   return data;
 }
 
-async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string) {
+async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string, forceRebuild = false) {
   const { count, error: countError } = await supabase
     .from("players")
     .select("id", { count: "exact", head: true });
@@ -2036,11 +2040,12 @@ async function loadOrCreateDraftPoolJob(supabase: ReturnType<typeof createClient
     .maybeSingle();
   if (error) throw error;
   if (
+    forceRebuild ||
     !job ||
     job.scoring_rules_hash !== scoringRulesHash ||
     !["PENDING", "RUNNING"].includes(String(job.status || "").toUpperCase())
   ) {
-    return resetLeagueDraftPoolJob(supabase, league, scoringRulesHash, totalPlayers);
+    return resetLeagueDraftPoolJob(supabase, league, scoringRulesHash, totalPlayers, forceRebuild);
   }
   if (Number(job.total_players || 0) !== totalPlayers) {
     const { data: updatedJob, error: updateError } = await supabase
@@ -2245,7 +2250,7 @@ async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClie
   return { job: completedJob, buckets: counts, eligible_count: rows.length };
 }
 
-async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json) {
+async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, forceRebuild = false) {
   const { scoringRules, scoringRulesHash, sourceUpdatedAt } = await scoringRulesHashForLeague(supabase, league);
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const { count: sourceWeekCount, error: sourceWeekError } = await supabase
@@ -2256,7 +2261,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
   if (!sourceWeekCount) {
     throw new Error(`No imported player week stats were found for source season ${sourceSeasonYear}. Choose a season with imported data or import that season before preparing the draft pool.`);
   }
-  if (await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
+  if (!forceRebuild && await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
     await syncLeagueDurabilityRows(supabase, league);
     if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
       const now = new Date().toISOString();
@@ -2287,7 +2292,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
   }
 
   const config = await positionConfig(supabase);
-  const job = await loadOrCreateDraftPoolJob(supabase, league, scoringRulesHash);
+  const job = await loadOrCreateDraftPoolJob(supabase, league, scoringRulesHash, forceRebuild);
   try {
     const processedJob = await processDraftPoolPlayerChunk(supabase, league, job, scoringRules, scoringRulesHash, config);
     if (Number(processedJob.processed_players || 0) >= Number(processedJob.total_players || 0)) {
@@ -2495,7 +2500,7 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
 async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
   const league = normalizeLeaguePlaySettings(rawLeague);
-  return processLeagueDraftPoolJob(supabase, league);
+  return processLeagueDraftPoolJob(supabase, league, payload.force_rebuild === true);
 }
 
 async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, league: Json, draftId: string, memberId?: string) {

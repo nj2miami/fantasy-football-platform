@@ -426,10 +426,10 @@ async function listDraftEligiblePlayers({ leagueId, draftId, searchTerm = "", po
 export const draftDay = {
   getState: getLeagueDraftState,
   listEligiblePlayers: listDraftEligiblePlayers,
-  async preparePool({ leagueId, onProgress } = {}) {
+  async preparePool({ leagueId, force = false, onProgress } = {}) {
     let result = null;
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      result = await functions.prepareDraftPool({ league_id: leagueId });
+      result = await functions.prepareDraftPool({ league_id: leagueId, force_rebuild: force && attempt === 0 });
       if (onProgress) onProgress(result);
       if (result?.complete || String(result?.status || result?.job?.status || "").toUpperCase() === "COMPLETED") return result;
       if (String(result?.status || result?.job?.status || "").toUpperCase() === "FAILED") return result;

@@ -374,6 +374,7 @@ export default function LeagueDraft() {
   const prepareDraftPoolMutation = useMutation({
     mutationFn: () => appClient.draftDay.preparePool({
       leagueId,
+      force: !draftPoolNeedsPreparation,
       onProgress: (progress) => setDraftPoolProgress(progress),
     }),
     onSuccess: (result) => {
@@ -516,7 +517,7 @@ export default function LeagueDraft() {
         <Link to={createPageUrl(`League?id=${leagueId}`)}>
           <Button className="neo-btn bg-black text-white"><ArrowLeft className="mr-2 h-5 w-5" />Back to League</Button>
         </Link>
-        {isCommissioner && (
+        {isCommissioner && (draftPoolNeedsPreparation || draftPoolIsRunning || prepareDraftPoolMutation.isPending) && (
           <div className="flex flex-wrap gap-2">
             <Button
               onClick={() => prepareDraftPoolMutation.mutate()}
@@ -527,8 +528,12 @@ export default function LeagueDraft() {
                 ? "Preparing Pool"
                 : draftPoolNeedsPreparation || draftPoolIsRunning
                   ? "Prepare Draft Pool"
-                  : "Rebuild Draft Pool"}
+                  : "Refresh Draft Pool"}
             </Button>
+          </div>
+        )}
+        {isCommissioner && (
+          <div className="flex flex-wrap gap-2">
             <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending || draftPoolNeedsPreparation || prepareDraftPoolMutation.isPending} className="neo-btn bg-[#F7B801] text-black">
               <Play className="mr-2 h-5 w-5" />Start Draft
             </Button>

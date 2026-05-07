@@ -9,7 +9,7 @@ import { createPageUrl } from "@/utils";
 const APP_BUILD_ID = typeof __APP_BUILD_ID__ === "string" ? __APP_BUILD_ID__ : "dev";
 
 function isChunkLoadError(error) {
-    return /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError|dynamically imported module/i.test(String(error?.message || error));
+    return /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError|dynamically imported module/i.test(String(error?.message || error));
 }
 
 function clearLazyRetryState() {
@@ -91,6 +91,16 @@ class RouteErrorBoundary extends Component {
         return { error };
     }
 
+    componentDidCatch(error) {
+        if (!isChunkLoadError(error)) return;
+        const storageKey = `route-boundary-retry:${APP_BUILD_ID}:${this.props.resetKey}`;
+        const hasRetried = window.sessionStorage.getItem(storageKey) === "true";
+        if (!hasRetried) {
+            window.sessionStorage.setItem(storageKey, "true");
+            reloadForFreshBundle();
+        }
+    }
+
     componentDidUpdate(previousProps) {
         if (previousProps.resetKey !== this.props.resetKey && this.state.error) {
             this.setState({ error: null });
@@ -99,12 +109,17 @@ class RouteErrorBoundary extends Component {
 
     render() {
         if (!this.state.error) return this.props.children;
+        const chunkLoadFailed = isChunkLoadError(this.state.error);
         return (
             <div className="max-w-4xl mx-auto px-4">
                 <div className="neo-card bg-white p-8 text-center">
-                    <h1 className="text-2xl font-black uppercase text-orange-600">Page Load Failed</h1>
+                    <h1 className="text-2xl font-black uppercase text-orange-600">
+                        {chunkLoadFailed ? "Page Update Needed" : "Page Load Failed"}
+                    </h1>
                     <p className="mt-2 font-bold text-gray-600">
-                        The app hit a client-side loading error. Refreshing should recover the latest production bundle.
+                        {chunkLoadFailed
+                            ? "The app is loading a newer production bundle. Refresh to pull the latest page files."
+                            : "The app hit a client-side loading error. Refreshing may recover the page."}
                     </p>
                     <button
                         type="button"

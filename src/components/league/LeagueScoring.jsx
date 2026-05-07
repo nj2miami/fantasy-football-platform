@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Lock, Save } from "lucide-react";
+import { Lock, RefreshCw, Save } from "lucide-react";
 
 const isCategorizedRules = (rules) =>
   rules &&
@@ -90,6 +90,9 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [scoringRules, setScoringRules] = useState(null);
   const [poolRefreshNotice, setPoolRefreshNotice] = useState(false);
+  const [poolSyncConfirmation, setPoolSyncConfirmation] = useState(null);
+  const [draftPoolProgress, setDraftPoolProgress] = useState(null);
+  const [localScoringSyncedAt, setLocalScoringSyncedAt] = useState(null);
   const isLocked = Boolean(league.scoring_rules_locked_at);
   const overridesEnabled = league.scoring_overrides_enabled === true;
 
@@ -160,6 +163,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     }),
     onSuccess: (result) => {
       setPoolRefreshNotice(Boolean(result?.draft_pool_invalidated));
+      if (result?.draft_pool_invalidated) setPoolSyncConfirmation(null);
       toast.success("League scoring overrides saved!");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
@@ -178,6 +182,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     }),
     onSuccess: (result) => {
       setPoolRefreshNotice(Boolean(result?.draft_pool_invalidated));
+      if (result?.draft_pool_invalidated) setPoolSyncConfirmation(null);
       toast.success("Scoring override mode updated.");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
@@ -200,19 +205,47 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     },
   });
 
+  const prepareDraftPoolMutation = useMutation({
+    mutationFn: () => appClient.draftDay.preparePool({
+      leagueId: league.id,
+      force: true,
+      onProgress: (progress) => setDraftPoolProgress(progress),
+    }),
+    onSuccess: (result) => {
+      const completed = result?.complete || String(result?.status || result?.job?.status || "").toUpperCase() === "COMPLETED";
+      if (completed) {
+        setPoolRefreshNotice(false);
+        setLocalScoringSyncedAt(defaultRulesContext.sourceUpdatedAt || new Date().toISOString());
+        setPoolSyncConfirmation(overridesEnabled
+          ? "League draft pool data now matches the current league scoring overrides."
+          : "League draft pool data now matches the default admin scoring data.");
+      }
+      setDraftPoolProgress(result);
+      toast.success(completed ? "Draft pool refreshed." : "Draft pool refresh started.");
+      queryClient.invalidateQueries({ queryKey: ["league", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["league-scoring-draft-pool-rows", league.id] });
+    },
+    onError: (error) => {
+      toast.error(errorText(error, "Failed to refresh draft pool."));
+    },
+  });
+
   if (isLoading || !scoringRules) {
     return <div className="h-96 neo-border bg-gray-100 animate-pulse" />;
   }
 
   const canEditOverrides = overrideEligible && overridesEnabled && !isLocked && !setupLocked;
   const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
-  const syncedAt = league.scoring_rules_source_updated_at || null;
+  const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
+  const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
   const adminDefaultsOutOfSync = !isLocked && !overridesEnabled && hasPreparedDraftPool && (
     !syncedAt ||
     (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
   );
-  const leagueOverrideOutOfSync = !isLocked && overridesEnabled && hasPreparedDraftPool && !league.scoring_rules_synced_at;
+  const leagueOverrideOutOfSync = !isLocked && overridesEnabled && hasPreparedDraftPool && !leagueSyncedAt;
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
+  const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
   const disabledReason = setupLocked
     ? "League setup is locked after the draft starts."
     : isLocked
@@ -236,14 +269,37 @@ export default function LeagueScoring({ league, setupLocked = false }) {
         )}
       </div>
 
-      {draftPoolRefreshNeeded && (
-        <div className="neo-border bg-[#FFF1E8] p-4">
-          <p className="text-sm font-black uppercase">Draft pool refresh needed</p>
-          <p className="mt-1 text-xs font-bold text-gray-700">
-            {overridesEnabled
-              ? "League scoring overrides changed after the draft pool was prepared. Re-run Prepare Draft Pool before starting the draft."
-              : "Admin season scoring changed after this league last synced its draft pool. Re-run Prepare Draft Pool before starting the draft."}
-          </p>
+      {(draftPoolRefreshNeeded || showPoolSyncConfirmation) && (
+        <div className={`neo-border flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between ${draftPoolRefreshNeeded ? "bg-[#FFF1E8]" : "bg-[#E7FFD9]"}`}>
+          <div>
+            <p className="text-sm font-black uppercase">
+              {draftPoolRefreshNeeded ? "Draft pool refresh needed" : "Draft pool scoring synced"}
+            </p>
+            <p className="mt-1 text-xs font-bold text-gray-700">
+              {draftPoolRefreshNeeded
+                ? overridesEnabled
+                  ? "League scoring overrides changed after the draft pool was prepared. Refresh the draft pool before starting the draft."
+                  : "Admin season scoring changed after this league last synced its draft pool. Refresh the draft pool before starting the draft."
+                : poolSyncConfirmation}
+            </p>
+            {(prepareDraftPoolMutation.isPending || draftPoolProgress?.progress) && (
+              <p className="mt-2 text-xs font-black uppercase text-gray-500">
+                {prepareDraftPoolMutation.isPending ? "Refreshing" : String(draftPoolProgress?.status || "Updated").toUpperCase()}
+                {draftPoolProgress?.progress ? ` | ${Number(draftPoolProgress.progress)}%` : ""}
+                {draftPoolProgress?.total_players ? ` | ${draftPoolProgress.processed_players || 0}/${draftPoolProgress.total_players} players checked` : ""}
+              </p>
+            )}
+          </div>
+          {draftPoolRefreshNeeded && (
+            <Button
+              onClick={() => prepareDraftPoolMutation.mutate()}
+              disabled={prepareDraftPoolMutation.isPending || setupLocked}
+              className="neo-btn bg-[#00D9FF] text-black"
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${prepareDraftPoolMutation.isPending ? "animate-spin" : ""}`} />
+              {prepareDraftPoolMutation.isPending ? "Refreshing Pool" : "Refresh Draft Pool"}
+            </Button>
+          )}
         </div>
       )}
 
