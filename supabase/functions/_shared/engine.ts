@@ -141,7 +141,7 @@ const DRAFT_BUCKET_TARGETS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30,
 const DRAFT_BUCKET_MINIMUMS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30, K: 1 };
 const MIN_DRAFT_STAT_WEEKS = 8;
 const PLAYER_TWO_WEEK_ASSIGNMENT = "per_lineup_player_two_week_average_v1";
-const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v4";
+const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v5";
 const DRAFT_POOL_ENGINE_VERSION = "draft-pool-finalizer-pagination-v2";
 const DRAFT_POOL_CHUNK_SIZE = 200;
 
@@ -1931,6 +1931,7 @@ async function loadDraftPoolCandidates(supabase: ReturnType<typeof createClient>
       .eq("league_id", leagueId)
       .eq("scoring_rules_hash", scoringRulesHash)
       .order("position", { ascending: true })
+      .order("expected_avg_points", { ascending: false })
       .order("total_points", { ascending: false })
       .order("player_id", { ascending: true })
       .range(offset, offset + pageSize - 1);

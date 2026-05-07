@@ -218,8 +218,10 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
               {playerName(player)}
             </button>
           )}
-          <DurabilityBadge player={player} />
           {isInBoard && <span className="neo-border bg-[#D7F8E8] px-2 py-0.5 text-[10px] font-black uppercase text-black">On Board</span>}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <DurabilityBadge player={player} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
           <button
