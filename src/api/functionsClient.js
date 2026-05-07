@@ -37,7 +37,7 @@ export async function invokeFunction(name, payload = {}) {
   });
   const data = await parseFunctionResponse(response);
   if (!response.ok) throw new Error(functionErrorMessage(data, response.status));
-  if (data?.error) throw new Error(data.error);
+  if (data?.error) throw new Error(functionErrorMessage(data, response.status));
   return data;
 }
 

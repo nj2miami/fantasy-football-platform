@@ -29,6 +29,19 @@ function dollarsToCents(value) {
   return Math.round(numericValue * 100);
 }
 
+const listValue = (value) => (Array.isArray(value) ? value : []);
+
+function errorText(error, fallback) {
+  if (typeof error?.message === "string" && error.message !== "[object Object]") return error.message;
+  if (error?.message && typeof error.message === "object") {
+    return error.message.message || error.message.details || JSON.stringify(error.message);
+  }
+  if (error && typeof error === "object") {
+    return error.error || error.details || error.hint || JSON.stringify(error);
+  }
+  return fallback;
+}
+
 export default function CreateLeague() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -114,13 +127,13 @@ export default function CreateLeague() {
     }));
   }, [formData.source_season_year, latestSourceSeasonYear]);
 
-  const activeLeagues = allLeagues.filter((league) => !league.archived_at);
+  const activeLeagues = listValue(allLeagues).filter((league) => !league.archived_at);
   const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
-  const activeMemberships = myMemberships.filter((membership) =>
+  const activeMemberships = listValue(myMemberships).filter((membership) =>
     membership.is_active !== false && activeLeagueIds.has(membership.league_id)
   );
   const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
-  const userProfile = profiles[0];
+  const userProfile = listValue(profiles)[0];
   const defaultTeamName = `${userProfile?.profile_name || userProfile?.display_name || user?.full_name || "Manager"}'s Team`;
   const canCreateLeagues = entitlements.canCreateFreeLeague || entitlements.canCreatePaidLeague;
   const selectedTierCanCreate = formData.league_tier === "PAID"
@@ -180,7 +193,7 @@ export default function CreateLeague() {
       navigate(createPageUrl(`LeagueManage?id=${league.id}`));
     },
     onError: (error) => {
-      toast.error(error.message || "Failed to create league");
+      toast.error(errorText(error, "Failed to create league"));
       console.error(error);
     },
   });
