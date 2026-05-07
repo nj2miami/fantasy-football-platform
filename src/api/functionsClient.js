@@ -13,7 +13,12 @@ async function parseFunctionResponse(response) {
 
 function functionErrorMessage(body, status) {
   if (body && typeof body === "object") {
-    return body.error || body.message || `Edge Function failed with status ${status}`;
+    const message = body.error || body.message || body.details || body.hint;
+    if (typeof message === "string") return message;
+    if (message && typeof message === "object") {
+      return message.message || message.details || JSON.stringify(message);
+    }
+    return JSON.stringify(body) || `Edge Function failed with status ${status}`;
   }
   return body || `Edge Function failed with status ${status}`;
 }

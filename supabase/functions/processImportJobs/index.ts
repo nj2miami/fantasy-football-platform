@@ -778,61 +778,89 @@ async function scoringRecalculationWeeks(supabase: Supabase, seasonYear?: number
   return [...weeks].sort((a, b) => a - b);
 }
 
-async function refreshComputedFantasyPoints(supabase: Supabase, job: Json, seasonYear?: number | null) {
-  const weeks = await scoringRecalculationWeeks(supabase, seasonYear);
-  const chunks = weeks.length ? weeks : [null];
+async function refreshComputedFantasyPointsChunk(supabase: Supabase, job: Json, seasonYear?: number | null) {
+  const parameters = ((job.parameters || {}) as Json);
+  const storedChunks = Array.isArray(parameters.scoring_update_weeks)
+    ? parameters.scoring_update_weeks.map((week) => week === null ? null : Number(week)).filter((week) => week === null || Number.isFinite(week))
+    : null;
+  const discoveredWeeks = storedChunks ? [] : await scoringRecalculationWeeks(supabase, seasonYear);
+  const chunks = storedChunks || (discoveredWeeks.length ? discoveredWeeks : [null]);
+  const index = Math.max(0, Number(parameters.scoring_update_index || 0));
+
+  if (!storedChunks) {
+    await updateJob(supabase, String(job.id), {
+      parameters: {
+        ...parameters,
+        scoring_update_weeks: chunks,
+        scoring_update_index: index,
+      },
+    });
+  }
+
+  if (index >= chunks.length) {
+    await appendJobLog(supabase, job, "Refreshing player aggregates after scoring recalculation.", {
+      progress: 92,
+    });
+    await refreshPlayerAggregates(supabase);
+    return { complete: true, processed_chunks: chunks.length, total_chunks: chunks.length };
+  }
+
   const positionConfig = await defaultPositionConfig(supabase);
   const scoringRulesBySeason = new Map<number, Json>();
+  const week = chunks[index];
+  await appendJobLog(supabase, job, week === null
+    ? "Recalculating fantasy points in one chunk."
+    : `Recalculating fantasy points for week ${week}.`, {
+    progress: Math.min(90, 10 + Math.round((index / Math.max(1, chunks.length)) * 80)),
+  });
 
-  for (let index = 0; index < chunks.length; index += 1) {
-    const week = chunks[index];
-    await appendJobLog(supabase, job, week === null
-      ? "Recalculating fantasy points in one chunk."
-      : `Recalculating fantasy points for week ${week}.`, {
-      progress: Math.min(90, 10 + Math.round((index / Math.max(1, chunks.length)) * 75)),
-    });
+  let query = supabase
+    .from("player_week_stats")
+    .select("id,season_year,raw_stats,players!inner(position)");
+  if (seasonYear) query = query.eq("season_year", seasonYear);
+  if (week !== null) query = query.eq("week", week);
+  const { data, error } = await query;
+  if (error) throw error;
 
-    let query = supabase
-      .from("player_week_stats")
-      .select("id,season_year,raw_stats,players!inner(position)");
-    if (seasonYear) query = query.eq("season_year", seasonYear);
-    if (week !== null) query = query.eq("week", week);
-    const { data, error } = await query;
-    if (error) throw error;
-
-    for (const row of data || []) {
-      const rowSeason = Number(row.season_year || seasonYear || 0);
-      if (rowSeason && !scoringRulesBySeason.has(rowSeason)) {
-        scoringRulesBySeason.set(rowSeason, await ensureSeasonScoringRules(supabase, rowSeason));
-      }
-    }
-
-    const updates = (data || []).map((row: Json) => {
-      const player = Array.isArray(row.players) ? row.players[0] : row.players;
-      const rowSeason = Number(row.season_year || seasonYear || 0);
-      const rules = scoringRulesBySeason.get(rowSeason) || DEFAULT_SCORING_RULES;
-      return {
-        id: row.id,
-        fantasy_points: calculateFantasyPoints((row.raw_stats || {}) as Json, rules, positionConfig, String(player?.position || "")),
-      };
-    });
-
-    for (let offset = 0; offset < updates.length; offset += BATCH_SIZE) {
-      const batch = updates.slice(offset, offset + BATCH_SIZE);
-      for (const item of batch) {
-        const { error: updateError } = await supabase
-          .from("player_week_stats")
-          .update({ fantasy_points: item.fantasy_points })
-          .eq("id", item.id);
-        if (updateError) throw updateError;
-      }
+  for (const row of data || []) {
+    const rowSeason = Number(row.season_year || seasonYear || 0);
+    if (rowSeason && !scoringRulesBySeason.has(rowSeason)) {
+      scoringRulesBySeason.set(rowSeason, await ensureSeasonScoringRules(supabase, rowSeason));
     }
   }
 
-  await appendJobLog(supabase, job, "Refreshing player aggregates after scoring recalculation.", {
-    progress: 92,
+  const updates = (data || []).map((row: Json) => {
+    const player = Array.isArray(row.players) ? row.players[0] : row.players;
+    const rowSeason = Number(row.season_year || seasonYear || 0);
+    const rules = scoringRulesBySeason.get(rowSeason) || DEFAULT_SCORING_RULES;
+    return {
+      id: row.id,
+      fantasy_points: calculateFantasyPoints((row.raw_stats || {}) as Json, rules, positionConfig, String(player?.position || "")),
+    };
   });
-  await refreshPlayerAggregates(supabase);
+
+  for (let offset = 0; offset < updates.length; offset += BATCH_SIZE) {
+    const batch = updates.slice(offset, offset + BATCH_SIZE);
+    for (const item of batch) {
+      const { error: updateError } = await supabase
+        .from("player_week_stats")
+        .update({ fantasy_points: item.fantasy_points })
+        .eq("id", item.id);
+      if (updateError) throw updateError;
+    }
+  }
+
+  const nextIndex = index + 1;
+  await updateJob(supabase, String(job.id), {
+    parameters: {
+      ...parameters,
+      scoring_update_weeks: chunks,
+      scoring_update_index: nextIndex,
+    },
+    progress: Math.min(90, 10 + Math.round((nextIndex / Math.max(1, chunks.length)) * 80)),
+    summary: `Recalculated ${nextIndex} of ${chunks.length} scoring chunks.`,
+  });
+  return { complete: false, processed_chunks: nextIndex, total_chunks: chunks.length };
 }
 
 async function completeJob(supabase: Supabase, job: Json, summary: string) {
@@ -864,12 +892,14 @@ Deno.serve(async (request) => {
     const requestedJobType = payload.job_id && payload.job_type ? payload.job_type : null;
     const jobType = String(requestedJobType || job.job_type || parameters.job_type || "HISTORICAL_STATS").toUpperCase();
 
-    await appendJobLog(supabase, job, jobType === "HISTORICAL_STATS"
-      ? `Starting nflverse player import for ${startYear}-${endYear}.`
-      : `Starting ${jobType}.`, {
-      status: "RUNNING",
-      progress: 5,
-    });
+    if (!(jobType === "SCORING_UPDATE" && parameters.scoring_update_started_at)) {
+      await appendJobLog(supabase, job, jobType === "HISTORICAL_STATS"
+        ? `Starting nflverse player import for ${startYear}-${endYear}.`
+        : `Starting ${jobType}.`, {
+        status: "RUNNING",
+        progress: 5,
+      });
+    }
 
     if (jobType === "RECOUNT_PLAYERS") {
       await refreshGlobalCounts(supabase);
@@ -885,14 +915,20 @@ Deno.serve(async (request) => {
 
     if (jobType === "SCORING_UPDATE") {
       const seasonYear = parameters.season_year ? Number(parameters.season_year) : null;
-      await appendJobLog(supabase, job, seasonYear
-        ? `Recalculating fantasy points for ${seasonYear}.`
-        : "Recalculating fantasy points for every stored season.");
-      await refreshComputedFantasyPoints(supabase, job, seasonYear);
-      await completeJob(supabase, job, seasonYear
-        ? `Updated computed fantasy points and player aggregates for ${seasonYear}.`
-        : "Updated computed fantasy points and player aggregates for every stored season.");
-      return json({ processed: 1, job_type: jobType, season_year: seasonYear });
+      if (!parameters.scoring_update_started_at) {
+        await appendJobLog(supabase, job, seasonYear
+          ? `Recalculating fantasy points for ${seasonYear}.`
+          : "Recalculating fantasy points for every stored season.");
+        parameters.scoring_update_started_at = new Date().toISOString();
+        await updateJob(supabase, String(job.id), { parameters });
+      }
+      const result = await refreshComputedFantasyPointsChunk(supabase, job, seasonYear);
+      if (result.complete) {
+        await completeJob(supabase, job, seasonYear
+          ? `Updated computed fantasy points and player aggregates for ${seasonYear}.`
+          : "Updated computed fantasy points and player aggregates for every stored season.");
+      }
+      return json({ processed: 1, job_type: jobType, season_year: seasonYear, ...result });
     }
 
     if (parameters.fresh_start) {

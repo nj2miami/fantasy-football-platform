@@ -69,6 +69,8 @@ const ScoringRuleInput = ({ label, value, onChange }) => (
   </div>
 );
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default function ScoringSettings() {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState("default");
@@ -193,7 +195,12 @@ export default function ScoringSettings() {
         ],
       });
       showFreshJobInPanel(queryClient, job);
-      await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: "SCORING_UPDATE" });
+      let result = { complete: false };
+      while (!result.complete) {
+        result = await appClient.functions.invoke("processImportJobs", { job_id: job.id, job_type: "SCORING_UPDATE" });
+        refreshJobPanel(queryClient);
+        if (!result.complete) await wait(500);
+      }
       return job;
     },
     onSuccess: () => {

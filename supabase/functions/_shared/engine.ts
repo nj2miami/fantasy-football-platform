@@ -199,6 +199,22 @@ export function json(body: unknown, status = 200) {
   });
 }
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const payload = error as Json;
+    const message = payload.message || payload.error || payload.details || payload.hint;
+    if (typeof message === "string") return message;
+    if (message && typeof message === "object") return errorMessage(message);
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return "Unknown error";
+    }
+  }
+  return String(error);
+}
+
 function adminClient() {
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -1578,12 +1594,18 @@ async function updateLeagueScoring(supabase: ReturnType<typeof createClient>, us
   if (overridesEnabled && !(await commissionerScoringOverrideEligible(supabase, league))) {
     throw new Error("This league is not eligible for scoring overrides.");
   }
+  const { count: existingPoolCount, error: existingPoolError } = await supabase
+    .from("league_player_scores")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id);
+  if (existingPoolError) throw existingPoolError;
+  const now = new Date().toISOString();
   const update = {
     scoring_overrides_enabled: overridesEnabled,
     scoring_rules: overridesEnabled ? mergeScoringRules(payload.scoring_rules as Json | undefined) : {},
-    scoring_rules_source_updated_at: null,
+    scoring_rules_source_updated_at: overridesEnabled ? now : null,
     scoring_rules_synced_at: null,
-    updated_date: new Date().toISOString(),
+    updated_date: now,
   };
   const { data, error } = await supabase
     .from("leagues")
@@ -1595,9 +1617,11 @@ async function updateLeagueScoring(supabase: ReturnType<typeof createClient>, us
   await supabase.from("league_player_scores").delete().eq("league_id", league.id);
   await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
   await supabase.from("league_draft_pool_jobs").delete().eq("league_id", league.id);
+  await supabase.from("league_player_durability").delete().eq("league_id", league.id);
   return {
     league: data,
     effective_scoring_rules: await effectiveLeagueScoringRules(supabase, data),
+    draft_pool_invalidated: Number(existingPoolCount || 0) > 0,
   };
 }
 
@@ -2298,7 +2322,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
       summary: processedJob.summary || "Preparing league draft pool.",
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     await supabase
       .from("league_draft_pool_jobs")
       .update({
@@ -3275,6 +3299,6 @@ export async function handleAction(action: string, request: Request) {
     if (!result) return json({ error: `Unknown action: ${action}` }, 404);
     return json(result);
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    return json({ error: errorMessage(error) }, 400);
   }
 }
