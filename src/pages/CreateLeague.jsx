@@ -33,6 +33,9 @@ const listValue = (value) => (Array.isArray(value) ? value : []);
 
 function errorText(error, fallback) {
   if (typeof error?.message === "string" && error.message !== "[object Object]") return error.message;
+  if (error?.functionName || error?.status) {
+    return `${error.functionName || "create_league"} failed${error.status ? ` with status ${error.status}` : ""} but returned no error details. Check Supabase Edge Function logs.`;
+  }
   if (error?.message && typeof error.message === "object") {
     const nested = error.message.message || error.message.details || error.message.hint || error.message.code;
     if (typeof nested === "string") return nested;
@@ -199,7 +202,7 @@ export default function CreateLeague() {
       navigate(createPageUrl(`LeagueManage?id=${league.id}`));
     },
     onError: (error) => {
-      toast.error(errorText(error, "Failed to create league"));
+      toast.error(errorText(error, "create_league failed without details. Check Supabase Edge Function logs."));
       console.error(error);
     },
   });

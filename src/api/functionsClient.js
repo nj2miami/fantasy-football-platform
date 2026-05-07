@@ -11,7 +11,7 @@ async function parseFunctionResponse(response) {
   return response.text();
 }
 
-function functionErrorMessage(body, status) {
+function functionErrorMessage(body, status, name = "Edge Function") {
   if (body && typeof body === "object") {
     const message = body.error || body.message || body.details || body.hint || body.code;
     if (typeof message === "string") return message;
@@ -23,9 +23,17 @@ function functionErrorMessage(body, status) {
     }
     const serializedBody = JSON.stringify(body);
     if (serializedBody && serializedBody !== "{}") return serializedBody;
-    return `Edge Function failed with status ${status}`;
+    return `${name} failed with status ${status} but returned no error details. Check the Supabase Edge Function logs.`;
   }
-  return body || `Edge Function failed with status ${status}`;
+  return body || `${name} failed with status ${status} but returned no error details. Check the Supabase Edge Function logs.`;
+}
+
+function makeFunctionError(name, body, status) {
+  const error = new Error(functionErrorMessage(body, status, name));
+  error.functionName = name;
+  error.status = status;
+  error.body = body;
+  return error;
 }
 
 export async function invokeFunction(name, payload = {}) {
@@ -41,8 +49,8 @@ export async function invokeFunction(name, payload = {}) {
     body: JSON.stringify(payload),
   });
   const data = await parseFunctionResponse(response);
-  if (!response.ok) throw new Error(functionErrorMessage(data, response.status));
-  if (data?.error) throw new Error(functionErrorMessage(data, response.status));
+  if (!response.ok) throw makeFunctionError(name, data, response.status);
+  if (data?.error) throw makeFunctionError(name, data, response.status);
   return data;
 }
 
