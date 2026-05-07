@@ -111,6 +111,9 @@ export default function ScoringSettings() {
     () => seasonRules.find((row) => Number(row.season_year) === Number(selectedSeason)) || null,
     [seasonRules, selectedSeason]
   );
+  const activeRulesUpdatedAt = mode === "season"
+    ? selectedSeasonRule?.updated_date || selectedSeasonRule?.created_date || null
+    : defaultSetting?.updated_date || defaultSetting?.created_date || null;
 
   useEffect(() => {
     if (!selectedSeason && seasonOptions.length > 0) {
@@ -222,6 +225,12 @@ export default function ScoringSettings() {
       <p className="text-sm font-bold text-gray-600 mb-6">
         Default rules seed new leagues and newly imported seasons. Existing imported stats use season scoring rules and must be recalculated after an override changes.
       </p>
+      <div className="neo-border mb-6 bg-[#EFFBFF] p-4">
+        <p className="text-xs font-black uppercase text-gray-500">Admin Scoring Timestamp</p>
+        <p className="mt-1 text-lg font-black">
+          {activeRulesUpdatedAt ? new Date(activeRulesUpdatedAt).toLocaleString() : "No saved timestamp yet"}
+        </p>
+      </div>
 
       <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2">
         <button

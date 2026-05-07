@@ -46,7 +46,9 @@ export default function CreateLeague() {
     join_fee_currency: "usd",
     source_season_year: new Date().getFullYear() - 1,
     roster_rules: DEFAULT_ROSTER_RULES,
-    scoring_rules: DEFAULT_SCORING_RULES,
+    scoring_rules: {},
+    scoring_overrides_enabled: false,
+    lock_scoring_rules: false,
     draft_config: DEFAULT_DRAFT_CONFIG,
   });
 
@@ -364,6 +366,20 @@ export default function CreateLeague() {
             onChange={setFormData}
             showDescriptions
             fields={["ranking_system"]}
+          />
+        </div>
+
+        <div className="neo-border flex items-center justify-between gap-4 bg-[#FFF1E8] p-4">
+          <div>
+            <Label className="text-sm font-black uppercase block mb-1">Lock Scoring Rules Now</Label>
+            <p className="text-xs font-bold text-black/70">
+              Freeze the current admin season defaults for this league immediately instead of waiting for draft start.
+            </p>
+          </div>
+          <Switch
+            checked={formData.lock_scoring_rules}
+            onCheckedChange={(checked) => setFormData({ ...formData, lock_scoring_rules: checked })}
+            className="data-[state=checked]:bg-black"
           />
         </div>
 

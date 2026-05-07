@@ -1,6 +1,6 @@
 
 import React from "react";
-import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_ROSTER_RULES, DEFAULT_SCORING_RULES } from "@/api/appClient";
+import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_ROSTER_RULES } from "@/api/appClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -45,7 +45,8 @@ export default function Dashboard() {
         join_fee_cents: 0,
         join_fee_currency: "usd",
         source_season_year: latestSourceSeasonYear || new Date().getFullYear() - 1,
-        scoring_rules: DEFAULT_SCORING_RULES,
+        scoring_rules: {},
+        scoring_overrides_enabled: false,
         roster_rules: DEFAULT_ROSTER_RULES,
         draft_config: DEFAULT_DRAFT_CONFIG,
       });

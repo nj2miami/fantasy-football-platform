@@ -308,6 +308,24 @@ async function requireLeagueAccess(supabase: ReturnType<typeof createClient>, us
   throw new Error("League access required");
 }
 
+async function leagueDraftHasStarted(supabase: ReturnType<typeof createClient>, leagueId: unknown) {
+  const { data, error } = await supabase
+    .from("drafts")
+    .select("id,status,started_at,completed_at")
+    .eq("league_id", leagueId);
+  if (error) throw error;
+  return Boolean((data || []).some((draft: Json) => {
+    const status = String(draft.status || "").toUpperCase();
+    return Boolean(draft.started_at || draft.completed_at || ["OPEN", "COMPLETED"].includes(status));
+  }));
+}
+
+async function assertLeagueSetupEditable(supabase: ReturnType<typeof createClient>, leagueId: unknown) {
+  if (await leagueDraftHasStarted(supabase, leagueId)) {
+    throw new Error("League setup is locked after the draft starts.");
+  }
+}
+
 function makeInviteCode() {
   return Array.from(crypto.getRandomValues(new Uint8Array(6)))
     .map((byte) => byte.toString(36).padStart(2, "0"))
@@ -403,6 +421,122 @@ function mergeScoringRules(rules: Json | null | undefined) {
       },
     ])
   ) as Json;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Json).sort().map((key) => `${JSON.stringify(key)}:${stableStringify((value as Json)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function stableContentHash(value: unknown) {
+  const input = stableStringify(value);
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function scoringRulesHash(scoringRules: Json, sourceUpdatedAt?: string | null) {
+  return `${LEAGUE_PLAYER_SCORE_METHOD}:${stableContentHash({ scoringRules, sourceUpdatedAt: sourceUpdatedAt || null })}`;
+}
+
+async function adminSeasonScoringRules(supabase: ReturnType<typeof createClient>, sourceSeasonYear: number) {
+  const { data: seasonRules, error: seasonError } = await supabase
+    .from("season_scoring_rules")
+    .select("rules,updated_date,created_date")
+    .eq("season_year", sourceSeasonYear)
+    .maybeSingle();
+  if (seasonError) throw seasonError;
+  if (seasonRules?.rules) {
+    return {
+      rules: mergeScoringRules(seasonRules.rules as Json),
+      sourceUpdatedAt: String(seasonRules.updated_date || seasonRules.created_date || ""),
+    };
+  }
+
+  const { data: globalRules, error: globalError } = await supabase
+    .from("global_settings")
+    .select("value,updated_date,created_date")
+    .eq("key", "SCORING_RULES")
+    .maybeSingle();
+  if (globalError) throw globalError;
+  return {
+    rules: mergeScoringRules((globalRules?.value as Json | undefined) || DEFAULT_SCORING_RULES),
+    sourceUpdatedAt: String(globalRules?.updated_date || globalRules?.created_date || ""),
+  };
+}
+
+async function commissionerScoringOverrideEligible(supabase: ReturnType<typeof createClient>, league: Json) {
+  if (String(league.league_tier || "").toUpperCase() === "PAID") return true;
+  const commissionerId = String(league.commissioner_id || "");
+  const commissionerEmail = String(league.commissioner_email || "");
+  let query = supabase.from("profiles").select("role").limit(1);
+  if (commissionerId) {
+    query = query.eq("id", commissionerId);
+  } else if (commissionerEmail) {
+    query = query.eq("user_email", commissionerEmail);
+  } else {
+    return false;
+  }
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  const role = String(data?.role || "").toLowerCase();
+  return role === "premium" || role === "admin";
+}
+
+async function effectiveLeagueScoringRules(supabase: ReturnType<typeof createClient>, league: Json) {
+  if (league.scoring_rules_locked_at) return mergeScoringRules(league.scoring_rules as Json | undefined);
+  if (league.scoring_overrides_enabled === true && await commissionerScoringOverrideEligible(supabase, league)) {
+    return mergeScoringRules(league.scoring_rules as Json | undefined);
+  }
+  const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
+  return (await adminSeasonScoringRules(supabase, sourceSeasonYear)).rules;
+}
+
+async function scoringRulesHashForLeague(supabase: ReturnType<typeof createClient>, league: Json) {
+  const scoringRules = await effectiveLeagueScoringRules(supabase, league);
+  const usesAdminDefaults = !league.scoring_rules_locked_at &&
+    !(league.scoring_overrides_enabled === true && await commissionerScoringOverrideEligible(supabase, league));
+  const sourceUpdatedAt = usesAdminDefaults
+    ? (await adminSeasonScoringRules(supabase, Number(league.source_season_year || new Date().getFullYear() - 1))).sourceUpdatedAt
+    : String(league.scoring_rules_source_updated_at || league.scoring_rules_locked_at || league.updated_date || "");
+  return {
+    scoringRules,
+    scoringRulesHash: scoringRulesHash(scoringRules, sourceUpdatedAt),
+    sourceUpdatedAt,
+  };
+}
+
+async function lockLeagueScoringRules(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  source: "commissioner" | "draft_start",
+) {
+  if (league.scoring_rules_locked_at) return normalizeLeaguePlaySettings(league);
+  const scoringRules = await effectiveLeagueScoringRules(supabase, league);
+  const { sourceUpdatedAt } = await scoringRulesHashForLeague(supabase, league);
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("leagues")
+    .update({
+      scoring_rules: scoringRules,
+      scoring_rules_locked_at: now,
+      scoring_rules_lock_source: source,
+      scoring_rules_source_updated_at: sourceUpdatedAt || now,
+      scoring_rules_synced_at: now,
+      rules_locked_at: league.rules_locked_at || now,
+      updated_date: now,
+    })
+    .eq("id", league.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return normalizeLeaguePlaySettings(data);
 }
 
 function statNumber(stats: Json, key: string) {
@@ -905,6 +1039,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
   const leagueTier = String(payload.league_tier || "FREE").toUpperCase();
   const maxMembers = Number(payload.max_members || 8);
   const isPaidLeague = leagueTier === "PAID";
+  const scoringOverridesEnabled = payload.scoring_overrides_enabled === true && (isPaidLeague || role === "premium" || role === "admin");
   const minMembers = 4;
   const maxAllowedMembers = isPaidLeague ? 16 : 8;
 
@@ -966,7 +1101,12 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
       join_fee_cents: joinFeeCents,
       join_fee_currency: joinFeeCurrency,
       source_season_year: payload.source_season_year || new Date().getFullYear() - 1,
-      scoring_rules: payload.scoring_rules || DEFAULT_SCORING_RULES,
+      scoring_overrides_enabled: scoringOverridesEnabled,
+      scoring_rules: scoringOverridesEnabled ? (payload.scoring_rules || DEFAULT_SCORING_RULES) : {},
+      scoring_rules_locked_at: null,
+      scoring_rules_lock_source: null,
+      scoring_rules_source_updated_at: null,
+      scoring_rules_synced_at: null,
       roster_rules: payload.roster_rules || DEFAULT_ROSTER_RULES,
       draft_config: payload.draft_config || DEFAULT_DRAFT_CONFIG,
       team_tier_cap: Number(payload.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
@@ -983,11 +1123,14 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
     .select("*")
     .single();
   if (leagueError) throw leagueError;
+  const activeLeague = payload.lock_scoring_rules === true
+    ? await lockLeagueScoringRules(supabase, league, "commissioner")
+    : league;
 
   const { data: member, error: memberError } = await supabase
     .from("league_members")
     .insert({
-      league_id: league.id,
+      league_id: activeLeague.id,
       profile_id: user.id,
       user_email: user.email,
       team_name: payload.team_name || `${profile.display_name || user.email?.split("@")[0]}'s Team`,
@@ -1009,7 +1152,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
       .eq("id", user.id);
   }
 
-  return { league, member };
+  return { league: activeLeague, member };
 }
 
 async function joinLeague(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null; user_metadata?: Json }, payload: Json) {
@@ -1049,6 +1192,7 @@ async function joinLeagueByInvite(supabase: ReturnType<typeof createClient>, use
 
 async function createLeagueInvite(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   await requireLeagueControl(supabase, user, payload.league_id);
+  await assertLeagueSetupEditable(supabase, payload.league_id);
   const code = String(payload.code || makeInviteCode()).trim().toUpperCase();
   const { data: invite, error } = await supabase
     .from("league_invites")
@@ -1070,6 +1214,7 @@ async function disableLeagueInvite(supabase: ReturnType<typeof createClient>, us
   const { data: invite, error: inviteError } = await supabase.from("league_invites").select("*").eq("id", payload.invite_id).single();
   if (inviteError) throw inviteError;
   await requireLeagueControl(supabase, user, invite.league_id);
+  await assertLeagueSetupEditable(supabase, invite.league_id);
   const { data, error } = await supabase
     .from("league_invites")
     .update({ is_active: false, updated_date: new Date().toISOString() })
@@ -1084,6 +1229,7 @@ async function renameLeagueMemberTeam(supabase: ReturnType<typeof createClient>,
   const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
   if (memberError) throw memberError;
   await requireLeagueControl(supabase, user, member.league_id);
+  await assertLeagueSetupEditable(supabase, member.league_id);
   const { data, error } = await supabase
     .from("league_members")
     .update({ team_name: payload.team_name, updated_date: new Date().toISOString() })
@@ -1098,6 +1244,7 @@ async function removeLeagueMember(supabase: ReturnType<typeof createClient>, use
   const { data: member, error: memberError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
   if (memberError) throw memberError;
   const { league } = await requireLeagueControl(supabase, user, member.league_id);
+  await assertLeagueSetupEditable(supabase, league.id);
   if (member.user_email === league.commissioner_email || member.role_in_league === "COMMISSIONER") {
     throw new Error("Transfer commissioner before removing this member.");
   }
@@ -1115,6 +1262,7 @@ async function transferCommissioner(supabase: ReturnType<typeof createClient>, u
   const { data: target, error: targetError } = await supabase.from("league_members").select("*").eq("id", payload.member_id).single();
   if (targetError) throw targetError;
   const { league } = await requireLeagueControl(supabase, user, target.league_id);
+  await assertLeagueSetupEditable(supabase, league.id);
   if (!target.is_active || target.is_ai) throw new Error("Commissioner must be an active human member.");
   await supabase.from("league_members").update({ role_in_league: "MANAGER" }).eq("league_id", league.id).eq("role_in_league", "COMMISSIONER");
   const { data: member, error: memberError } = await supabase
@@ -1136,6 +1284,7 @@ async function transferCommissioner(supabase: ReturnType<typeof createClient>, u
 
 async function addAiTeam(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  await assertLeagueSetupEditable(supabase, league.id);
   const { count, error: countError } = await supabase.from("league_members").select("id", { count: "exact", head: true }).eq("league_id", league.id).eq("is_active", true);
   if (countError) throw countError;
   if ((count || 0) >= Number(league.max_members || 0)) throw new Error("League is full.");
@@ -1183,6 +1332,7 @@ async function updateAiTeam(supabase: ReturnType<typeof createClient>, user: { i
   if (memberError) throw memberError;
   if (!member.is_ai) throw new Error("Only AI teams can be edited here.");
   await requireLeagueControl(supabase, user, member.league_id);
+  await assertLeagueSetupEditable(supabase, member.league_id);
   const update: Json = {};
   if (payload.team_name) update.team_name = payload.team_name;
   if (AI_PERSONAS.has(String(payload.ai_persona))) update.ai_persona = payload.ai_persona;
@@ -1196,6 +1346,7 @@ async function removeAiTeam(supabase: ReturnType<typeof createClient>, user: { i
   if (memberError) throw memberError;
   if (!member.is_ai) throw new Error("Only AI teams can be removed here.");
   await requireLeagueControl(supabase, user, member.league_id);
+  await assertLeagueSetupEditable(supabase, member.league_id);
   const { data, error } = await supabase.from("league_members").update({ is_active: false, updated_date: new Date().toISOString() }).eq("id", member.id).select("*").single();
   if (error) throw error;
   return { member: data };
@@ -1390,6 +1541,7 @@ function standardLeagueSettingsPayload(payload: Json) {
 
 async function updateLeagueSettings(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league, profile } = await requireLeagueControl(supabase, user, payload.league_id);
+  await assertLeagueSetupEditable(supabase, league.id);
   const update = standardLeagueSettingsPayload(payload);
   if (update.manager_points_enabled && Number(update.manager_points_starting || 0) <= 0) {
     throw new Error("Manager Points starting value is required when Manager Points are enabled.");
@@ -1416,6 +1568,47 @@ async function updateLeagueSettings(supabase: ReturnType<typeof createClient>, u
 
   if (changedKeys.includes("durability_mode")) await ensureLeagueDurability(supabase, normalizeLeaguePlaySettings(data));
   return { league: data, changed_keys: changedKeys };
+}
+
+async function updateLeagueScoring(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  await assertLeagueSetupEditable(supabase, league.id);
+  if (league.scoring_rules_locked_at) throw new Error("Scoring rules are locked for this league.");
+  const overridesEnabled = payload.scoring_overrides_enabled === true;
+  if (overridesEnabled && !(await commissionerScoringOverrideEligible(supabase, league))) {
+    throw new Error("This league is not eligible for scoring overrides.");
+  }
+  const update = {
+    scoring_overrides_enabled: overridesEnabled,
+    scoring_rules: overridesEnabled ? mergeScoringRules(payload.scoring_rules as Json | undefined) : {},
+    scoring_rules_source_updated_at: null,
+    scoring_rules_synced_at: null,
+    updated_date: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("leagues")
+    .update(update)
+    .eq("id", league.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  await supabase.from("league_player_scores").delete().eq("league_id", league.id);
+  await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
+  await supabase.from("league_draft_pool_jobs").delete().eq("league_id", league.id);
+  return {
+    league: data,
+    effective_scoring_rules: await effectiveLeagueScoringRules(supabase, data),
+  };
+}
+
+async function lockLeagueScoringForCommissioner(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  await assertLeagueSetupEditable(supabase, league.id);
+  const lockedLeague = await lockLeagueScoringRules(supabase, league, "commissioner");
+  return {
+    league: lockedLeague,
+    effective_scoring_rules: await effectiveLeagueScoringRules(supabase, lockedLeague),
+  };
 }
 
 async function voteLeagueAudit(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
@@ -1535,6 +1728,7 @@ async function openWeekDraft(supabase: ReturnType<typeof createClient>, payload:
 async function scheduleDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
   const league = normalizeLeaguePlaySettings(rawLeague);
+  await assertLeagueSetupEditable(supabase, league.id);
   const start = new Date(String(payload.start || ""));
   if (Number.isNaN(start.getTime())) throw new Error("Draft start date/time is required");
 
@@ -1625,8 +1819,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   const leagueId = String(league.id || "");
   if (!leagueId) throw new Error("League is required to calculate player scores.");
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
-  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
-  const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
+  const { scoringRules, scoringRulesHash, sourceUpdatedAt } = await scoringRulesHashForLeague(supabase, league);
   const config = await positionConfig(supabase);
 
   const { data: existing, error: existingError } = await supabase
@@ -1708,6 +1901,18 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   if (rows.length) {
     const { error } = await supabase.from("league_player_scores").upsert(rows, { onConflict: "league_id,player_id" });
     if (error) throw error;
+  }
+  if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
+    const now = new Date().toISOString();
+    await supabase
+      .from("leagues")
+      .update({
+        scoring_rules_source_updated_at: sourceUpdatedAt,
+        scoring_rules_synced_at: now,
+        updated_date: now,
+      })
+      .eq("id", league.id)
+      .is("scoring_rules_locked_at", null);
   }
 }
 
@@ -2017,8 +2222,7 @@ async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClie
 }
 
 async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json) {
-  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
-  const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
+  const { scoringRules, scoringRulesHash, sourceUpdatedAt } = await scoringRulesHashForLeague(supabase, league);
   const sourceSeasonYear = Number(league.source_season_year || new Date().getFullYear() - 1);
   const { count: sourceWeekCount, error: sourceWeekError } = await supabase
     .from("player_week_stats")
@@ -2030,6 +2234,18 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
   }
   if (await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash)) {
     await syncLeagueDurabilityRows(supabase, league);
+    if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
+      const now = new Date().toISOString();
+      await supabase
+        .from("leagues")
+        .update({
+          scoring_rules_source_updated_at: sourceUpdatedAt,
+          scoring_rules_synced_at: now,
+          updated_date: now,
+        })
+        .eq("id", league.id)
+        .is("scoring_rules_locked_at", null);
+    }
     const { data: rows, count, error } = await supabase
       .from("league_player_scores")
       .select("id,position", { count: "exact" })
@@ -2052,6 +2268,18 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
     const processedJob = await processDraftPoolPlayerChunk(supabase, league, job, scoringRules, scoringRulesHash, config);
     if (Number(processedJob.processed_players || 0) >= Number(processedJob.total_players || 0)) {
       const finalized = await finalizeLeagueDraftPoolJob(supabase, league, processedJob, scoringRulesHash);
+      if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
+        const now = new Date().toISOString();
+        await supabase
+          .from("leagues")
+          .update({
+            scoring_rules_source_updated_at: sourceUpdatedAt,
+            scoring_rules_synced_at: now,
+            updated_date: now,
+          })
+          .eq("id", league.id)
+          .is("scoring_rules_locked_at", null);
+      }
       return {
         league_id: league.id,
         status: "COMPLETED",
@@ -2177,12 +2405,12 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
   if (draft.status === "OPEN") return { draft };
   const start = draft.start ? new Date(draft.start) : null;
   if (!start || Date.now() < start.getTime()) throw new Error("Draft cannot start before its scheduled time");
-  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
-  const scoringRulesHash = `${LEAGUE_PLAYER_SCORE_METHOD}:${JSON.stringify(scoringRules).length}`;
-  if (!(await existingLeaguePlayerScoresComplete(supabase, league, scoringRulesHash))) {
+  const lockedLeague = await lockLeagueScoringRules(supabase, league, "draft_start");
+  const { scoringRulesHash } = await scoringRulesHashForLeague(supabase, lockedLeague);
+  if (!(await existingLeaguePlayerScoresComplete(supabase, lockedLeague, scoringRulesHash))) {
     throw new Error("Draft pool is still preparing. Wait for the Eligible Players panel to finish before starting the draft.");
   }
-  await syncLeagueDurabilityRows(supabase, league);
+  await syncLeagueDurabilityRows(supabase, lockedLeague);
 
   const { data: members, error: memberError } = await supabase
     .from("league_members")
@@ -2201,8 +2429,8 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
 
   if (!existingTurns) {
     const order = shuffleRows(members);
-    const rounds = Math.max(1, Number((league.draft_config as Json | undefined)?.rounds || DEFAULT_DRAFT_CONFIG.rounds));
-    const isSnake = String(draft.type || (league.draft_config as Json | undefined)?.type || "snake") === "snake";
+    const rounds = Math.max(1, Number((lockedLeague.draft_config as Json | undefined)?.rounds || DEFAULT_DRAFT_CONFIG.rounds));
+    const isSnake = String(draft.type || (lockedLeague.draft_config as Json | undefined)?.type || "snake") === "snake";
     const turns = [];
     for (let round = 1; round <= rounds; round += 1) {
       const roundOrder = isSnake && round % 2 === 0 ? [...order].reverse() : order;
@@ -2223,7 +2451,7 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     {
       draft_id: draft.id,
       current_pick: 1,
-      timer_seconds: Number((league.draft_config as Json | undefined)?.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds),
+      timer_seconds: Number((lockedLeague.draft_config as Json | undefined)?.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds),
       state: { pick_started_at: new Date().toISOString() },
     },
     { onConflict: "draft_id" },
@@ -2237,11 +2465,6 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .select("*")
     .single();
   if (updateError) throw updateError;
-  await supabase
-    .from("leagues")
-    .update({ rules_locked_at: league.rules_locked_at || new Date().toISOString(), updated_date: new Date().toISOString() })
-    .eq("id", league.id)
-    .is("rules_locked_at", null);
   return { draft: updatedDraft };
 }
 
@@ -2532,7 +2755,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
 
   const assignments = { ...((randomization?.assignments || {}) as Record<string, Json>) };
   const sourceSeasonYear = Number(randomization?.source_season_year || league.source_season_year || new Date().getFullYear() - 1);
-  const scoringRules = mergeScoringRules(league.scoring_rules as Json | undefined);
+  const scoringRules = await effectiveLeagueScoringRules(supabase, league);
   const lockSegment = sourceWeekLockSegment(league, weekNumber);
   const lineupEntries = (lineups || []).flatMap((lineup: Json) =>
     Array.isArray(lineup.slots)
@@ -3011,8 +3234,12 @@ export async function handleAction(action: string, request: Request) {
                                   ? await createOfficialLeague(supabase, user, payload)
                                   : action === "update_league_settings"
                                     ? await updateLeagueSettings(supabase, user, payload)
-                                    : action === "vote_league_audit"
-                                      ? await voteLeagueAudit(supabase, user, payload)
+                                    : action === "update_league_scoring"
+                                      ? await updateLeagueScoring(supabase, user, payload)
+                                      : action === "lock_scoring_rules"
+                                        ? await lockLeagueScoringForCommissioner(supabase, user, payload)
+                                        : action === "vote_league_audit"
+                                          ? await voteLeagueAudit(supabase, user, payload)
                                   : action === "pause_league"
                                     ? await setLeagueStatus(supabase, user, payload, "PAUSED")
                                     : action === "resume_league"

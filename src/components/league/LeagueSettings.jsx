@@ -69,7 +69,7 @@ const RULE_NOTE_FIELDS = [
   },
 ];
 
-export default function LeagueSettings({ league }) {
+export default function LeagueSettings({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const visibility = { ...DEFAULT_LEAGUE_VISIBILITY_CONFIG, ...league };
   const [formData, setFormData] = useState({
@@ -138,6 +138,10 @@ export default function LeagueSettings({ league }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (setupLocked) {
+      toast.error("League setup is locked after the draft starts.");
+      return;
+    }
 
     if (formData.max_members < currentMemberCount) {
       toast.error(`Cannot set max teams below current team count (${currentMemberCount})`);
@@ -166,6 +170,10 @@ export default function LeagueSettings({ league }) {
   };
 
   const handleImageUpload = async (e) => {
+    if (setupLocked) {
+      toast.error("League setup is locked after the draft starts.");
+      return;
+    }
     const file = e.target.files[0];
     if (!file) return;
 
@@ -217,6 +225,12 @@ export default function LeagueSettings({ league }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <h3 className="mb-4 text-2xl font-black uppercase">League Settings</h3>
+      {setupLocked && (
+        <div className="neo-border bg-[#FFF1E8] p-4">
+          <p className="text-sm font-black uppercase">Read-only after draft start</p>
+          <p className="mt-1 text-xs font-bold text-gray-700">Settings can no longer be edited from the commissioner UI.</p>
+        </div>
+      )}
 
       <div className="neo-border bg-[#FFF7D6] p-6">
         <h4 className="mb-4 text-xl font-black uppercase">Commissioner Notes</h4>
@@ -225,6 +239,7 @@ export default function LeagueSettings({ league }) {
           <Textarea
             value={formData.commissioner_message_of_day}
             onChange={(event) => setFormData({ ...formData, commissioner_message_of_day: event.target.value })}
+            disabled={setupLocked}
             className="neo-border min-h-32 font-bold"
             placeholder="Add the current commissioner message shown on the league hub."
           />
@@ -237,6 +252,7 @@ export default function LeagueSettings({ league }) {
               <Textarea
                 value={formData.league_rule_notes?.[rule.key] || ""}
                 onChange={(event) => updateRuleNote(rule.key, event.target.value)}
+                disabled={setupLocked}
                 className="neo-border min-h-24 font-bold"
                 placeholder={`Commissioner note for ${rule.label.toLowerCase()}`}
               />
@@ -281,7 +297,7 @@ export default function LeagueSettings({ league }) {
           </div>
           <div>
             <Label className="mb-2 block text-sm font-black uppercase">Player Name at Draft</Label>
-            <Select value={formData.draft_player_name_visibility} onValueChange={(value) => setFormData({ ...formData, draft_player_name_visibility: value })}>
+            <Select value={formData.draft_player_name_visibility} onValueChange={(value) => setFormData({ ...formData, draft_player_name_visibility: value })} disabled={setupLocked}>
               <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="shown">Show</SelectItem>
@@ -291,7 +307,7 @@ export default function LeagueSettings({ league }) {
           </div>
           <div>
             <Label className="mb-2 block text-sm font-black uppercase">Durability</Label>
-            <Select value={formData.durability_mode} onValueChange={(value) => setFormData({ ...formData, durability_mode: value })}>
+            <Select value={formData.durability_mode} onValueChange={(value) => setFormData({ ...formData, durability_mode: value })} disabled={setupLocked}>
               <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="hidden_until_drafted">On - Hidden Until Drafted</SelectItem>
@@ -314,6 +330,7 @@ export default function LeagueSettings({ league }) {
           <Switch
             checked={formData.manager_points_enabled}
             onCheckedChange={(checked) => setFormData({ ...formData, manager_points_enabled: checked, manager_points_starting: checked ? Math.max(1, Number(formData.manager_points_starting || 1)) : 0 })}
+            disabled={setupLocked}
             className="data-[state=checked]:bg-black"
           />
         </div>
@@ -326,6 +343,7 @@ export default function LeagueSettings({ league }) {
                 min="1"
                 value={formData.manager_points_starting}
                 onChange={(event) => setFormData({ ...formData, manager_points_starting: Number(event.target.value || 0) })}
+                disabled={setupLocked}
                 className="neo-border font-bold"
               />
             </div>
@@ -337,6 +355,7 @@ export default function LeagueSettings({ league }) {
                     <Switch
                       checked={action.active === true}
                       onCheckedChange={(checked) => updateManagerAction(key, { active: checked })}
+                      disabled={setupLocked}
                       className="data-[state=checked]:bg-black"
                     />
                   </div>
@@ -347,6 +366,7 @@ export default function LeagueSettings({ league }) {
                       min="0"
                       value={Number(action.cost || 0)}
                       onChange={(event) => updateManagerAction(key, { cost: Number(event.target.value || 0) })}
+                      disabled={setupLocked}
                       className="neo-border mt-1 font-bold"
                     />
                   </div>
@@ -404,7 +424,7 @@ export default function LeagueSettings({ league }) {
           </div>
         )}
         <div className="flex gap-3">
-          <Input type="file" accept="image/*" onChange={handleImageUpload} disabled={uploadingImage} className="neo-border font-bold" />
+          <Input type="file" accept="image/*" onChange={handleImageUpload} disabled={uploadingImage || setupLocked} className="neo-border font-bold" />
           {uploadingImage && <p className="text-sm font-bold text-gray-500">Uploading...</p>}
         </div>
         <p className="mt-2 text-xs font-bold text-gray-500">
@@ -414,11 +434,11 @@ export default function LeagueSettings({ league }) {
 
       <div>
         <Label className="mb-2 block text-sm font-black uppercase">League Name</Label>
-        <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="neo-border text-lg font-bold" />
+        <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} disabled={setupLocked} className="neo-border text-lg font-bold" />
       </div>
       <div>
         <Label className="mb-2 block text-sm font-black uppercase">Description</Label>
-        <Textarea value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} className="neo-border h-24 font-bold" />
+        <Textarea value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} disabled={setupLocked} className="neo-border h-24 font-bold" />
       </div>
       <div>
         <Label className="mb-2 block text-sm font-black uppercase">Max Teams</Label>
@@ -429,7 +449,7 @@ export default function LeagueSettings({ league }) {
           step="2"
           value={formData.max_members}
           onChange={(e) => setFormData({ ...formData, max_members: parseInt(e.target.value, 10) })}
-          disabled={leagueStarted}
+          disabled={leagueStarted || setupLocked}
           className="neo-border text-lg font-bold"
         />
         <p className="mt-1 text-xs font-bold text-gray-500">
@@ -438,10 +458,10 @@ export default function LeagueSettings({ league }) {
       </div>
       <div className="neo-border flex items-center justify-between bg-gray-50 p-4">
         <Label className="block text-sm font-black uppercase">Public League</Label>
-        <Switch checked={formData.is_public} onCheckedChange={(checked) => setFormData({ ...formData, is_public: checked })} className="data-[state=checked]:bg-black" />
+        <Switch checked={formData.is_public} onCheckedChange={(checked) => setFormData({ ...formData, is_public: checked })} disabled={setupLocked} className="data-[state=checked]:bg-black" />
       </div>
-      <Button type="submit" disabled={updateLeagueMutation.isPending} className="neo-btn w-full bg-[#FF6B35] py-4 text-white">
-        {updateLeagueMutation.isPending ? "Saving..." : "Save Settings"}
+      <Button type="submit" disabled={updateLeagueMutation.isPending || setupLocked} className="neo-btn w-full bg-[#FF6B35] py-4 text-white">
+        {setupLocked ? "Locked After Draft Start" : updateLeagueMutation.isPending ? "Saving..." : "Save Settings"}
       </Button>
     </form>
   );

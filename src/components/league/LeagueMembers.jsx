@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export default function LeagueMembers({ league }) {
+export default function LeagueMembers({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [editingMemberId, setEditingMemberId] = useState(null);
   const [teamName, setTeamName] = useState("");
@@ -33,7 +33,10 @@ export default function LeagueMembers({ league }) {
   };
 
   const actionMutation = useMutation({
-    mutationFn: ({ action, payload }) => appClient.functions.invoke(action, payload),
+    mutationFn: ({ action, payload }) => {
+      if (setupLocked) throw new Error("League setup is locked after the draft starts.");
+      return appClient.functions.invoke(action, payload);
+    },
     onSuccess: (_, variables) => {
       const labels = {
         rename_league_member_team: "Team renamed.",
@@ -66,7 +69,7 @@ export default function LeagueMembers({ league }) {
         </h3>
         <Button
           onClick={() => actionMutation.mutate({ action: "create_league_invite", payload: { league_id: league.id } })}
-          disabled={actionMutation.isPending}
+          disabled={actionMutation.isPending || setupLocked}
           className="neo-btn bg-[#F7B801] text-black"
         >
           <KeyRound className="w-5 h-5 mr-2" />
@@ -103,6 +106,7 @@ export default function LeagueMembers({ league }) {
                   <Button
                     type="button"
                     onClick={() => actionMutation.mutate({ action: "disable_league_invite", payload: { invite_id: invite.id } })}
+                    disabled={setupLocked}
                     className="neo-btn bg-gray-200 text-black"
                   >
                     Disable
@@ -133,7 +137,7 @@ export default function LeagueMembers({ league }) {
                   {member.is_ai ? <Bot className="w-6 h-6 text-blue-500" /> : <UserCircle className="w-6 h-6 text-green-600" />}
                   <div>
                     {editingMemberId === member.id ? (
-                      <Input value={teamName} onChange={(event) => setTeamName(event.target.value)} className="neo-border font-bold" />
+                      <Input value={teamName} onChange={(event) => setTeamName(event.target.value)} disabled={setupLocked} className="neo-border font-bold" />
                     ) : (
                       <p className="font-black text-lg">{member.team_name}</p>
                     )}
@@ -155,12 +159,13 @@ export default function LeagueMembers({ league }) {
                   {editingMemberId === member.id ? (
                     <Button
                       onClick={() => actionMutation.mutate({ action: "rename_league_member_team", payload: { member_id: member.id, team_name: teamName } })}
+                      disabled={setupLocked}
                       className="neo-btn bg-[#00D9FF] text-black"
                     >
                       Save
                     </Button>
                   ) : (
-                    <Button onClick={() => startEdit(member)} disabled={inactive} className="neo-btn bg-white text-black">
+                    <Button onClick={() => startEdit(member)} disabled={inactive || setupLocked} className="neo-btn bg-white text-black">
                       Rename
                     </Button>
                   )}
@@ -168,7 +173,7 @@ export default function LeagueMembers({ league }) {
                   {!member.is_ai && !isCommissioner && (
                     <Button
                       onClick={() => actionMutation.mutate({ action: "transfer_commissioner", payload: { member_id: member.id } })}
-                      disabled={inactive}
+                      disabled={inactive || setupLocked}
                       className="neo-btn bg-[#6A4C93] text-white"
                     >
                       <Crown className="w-4 h-4 mr-2" />
@@ -179,7 +184,7 @@ export default function LeagueMembers({ league }) {
                   {!isCommissioner && (
                     <Button
                       onClick={() => actionMutation.mutate({ action: "remove_league_member", payload: { member_id: member.id } })}
-                      disabled={inactive}
+                      disabled={inactive || setupLocked}
                       className="neo-btn bg-red-500 text-white"
                     >
                       <Trash2 className="w-4 h-4 mr-2" />

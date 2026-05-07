@@ -67,6 +67,12 @@ export default function LeagueManage() {
     enabled: !!leagueId && !!user,
   });
 
+  const { data: drafts = [] } = useQuery({
+    queryKey: ["league-manage-drafts", leagueId],
+    queryFn: () => appClient.entities.Draft.filter({ league_id: leagueId }),
+    enabled: !!leagueId && !!user,
+  });
+
   const { data: commissionerProfile } = useQuery({
     queryKey: ["league-manage-commissioner-profile", league?.commissioner_email],
     queryFn: async () => {
@@ -95,6 +101,10 @@ export default function LeagueManage() {
     member.user_email !== league?.commissioner_email
   );
   const leagueHasBegun = seasons.length > 0;
+  const setupLocked = drafts.some((draft) => {
+    const status = String(draft.status || "").toUpperCase();
+    return draft.started_at || draft.completed_at || ["OPEN", "COMPLETED"].includes(status);
+  });
   const paidMembersJoined = league?.league_tier === "PAID" && activePaidJoinedMembers.length > 0;
   const commissionerDeleteDisabled = !isAdmin && (leagueHasBegun || paidMembersJoined);
   const deleteDisabledReason = leagueHasBegun
@@ -157,6 +167,14 @@ export default function LeagueManage() {
               <p className="font-black uppercase">You are viewing as a Site Administrator.</p>
           </div>
       )}
+      {setupLocked && (
+        <div className="neo-card mb-6 bg-[#FFF1E8] p-4">
+          <p className="font-black uppercase">League setup locked</p>
+          <p className="mt-1 text-sm font-bold text-gray-700">
+            The draft has started, so commissioner setup fields are read-only from the UI.
+          </p>
+        </div>
+      )}
       <div className="flex justify-between items-center mb-6">
         <Button onClick={() => navigate(createPageUrl("Dashboard"))} className="neo-btn bg-black text-white">
           <ArrowLeft className="w-5 h-5 mr-2" />
@@ -209,12 +227,12 @@ export default function LeagueManage() {
       </div>
 
       <div className="neo-card bg-white p-8">
-        {activeTab === 'settings' && <LeagueSettings league={league} />}
-        {activeTab === 'scoring' && <LeagueScoring league={league} />}
+        {activeTab === 'settings' && <LeagueSettings league={league} setupLocked={setupLocked} />}
+        {activeTab === 'scoring' && <LeagueScoring league={league} setupLocked={setupLocked} />}
         {activeTab === 'roster' && <LeagueRosterSettings league={league} />}
-        {activeTab === 'members' && <LeagueMembers league={league} />}
-        {activeTab === 'draft' && <LeagueDraftSettings league={league} />}
-        {activeTab === 'ai_teams' && <LeagueAITeams league={league} />}
+        {activeTab === 'members' && <LeagueMembers league={league} setupLocked={setupLocked} />}
+        {activeTab === 'draft' && <LeagueDraftSettings league={league} setupLocked={setupLocked} />}
+        {activeTab === 'ai_teams' && <LeagueAITeams league={league} setupLocked={setupLocked} />}
       </div>
     </div>
   );

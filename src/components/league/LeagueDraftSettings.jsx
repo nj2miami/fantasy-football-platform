@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function LeagueDraftSettings({ league }) {
+export default function LeagueDraftSettings({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [draftConfig, setDraftConfig] = useState({ ...DEFAULT_DRAFT_CONFIG, ...(league.draft_config || {}) });
   const [playSettings, setPlaySettings] = useState({
@@ -41,6 +41,7 @@ export default function LeagueDraftSettings({ league }) {
   const currentWeekNumber = activeSeason?.current_week || 1;
   const currentWeek = weeks.find((week) => Number(week.week_number) === Number(currentWeekNumber));
   const leagueStarted = seasons.length > 0;
+  const setupFieldsLocked = setupLocked;
   const isPaused = league.league_status === "PAUSED";
   const scheduledDraft = drafts.find((draft) => ["SCHEDULED", "OPEN"].includes(String(draft.status || "").toUpperCase())) || drafts[0];
 
@@ -58,7 +59,9 @@ export default function LeagueDraftSettings({ league }) {
   }, [scheduledDraft?.start]);
 
   const saveDraftMutation = useMutation({
-    mutationFn: () => appClient.entities.League.update(league.id, {
+    mutationFn: () => {
+      if (setupFieldsLocked) throw new Error("League setup is locked after the draft starts.");
+      return appClient.entities.League.update(league.id, {
       draft_config: draftConfig,
       source_season_year: sourceSeasonYear,
       mode: playSettings.draft_mode === "weekly_redraft" ? "weekly_redraft" : "traditional",
@@ -72,7 +75,8 @@ export default function LeagueDraftSettings({ league }) {
       playoff_team_count: Number(playSettings.playoff_team_count) || 4,
       schedule_config: playSettings.schedule_config,
       team_tier_cap: Number(teamTierCap) || 0,
-    }),
+      });
+    },
     onSuccess: () => {
       toast.success("Draft settings saved.");
       invalidate();
@@ -119,11 +123,14 @@ export default function LeagueDraftSettings({ league }) {
   });
 
   const scheduleDraftMutation = useMutation({
-    mutationFn: () => appClient.functions.invoke("schedule_draft", {
-      league_id: league.id,
-      start: new Date(draftStart).toISOString(),
-      type: draftConfig.type,
-    }),
+    mutationFn: () => {
+      if (setupFieldsLocked) throw new Error("League setup is locked after the draft starts.");
+      return appClient.functions.invoke("schedule_draft", {
+        league_id: league.id,
+        start: new Date(draftStart).toISOString(),
+        type: draftConfig.type,
+      });
+    },
     onSuccess: () => {
       toast.success("Draft scheduled.");
       invalidate();
@@ -167,7 +174,7 @@ export default function LeagueDraftSettings({ league }) {
           <LeaguePlayFields
             value={playSettings}
             onChange={setPlaySettings}
-            disabled={leagueStarted}
+            disabled={setupFieldsLocked}
             compactLabels
             showDescriptions
             fields={["schedule_type", "ranking_system"]}
@@ -177,7 +184,7 @@ export default function LeagueDraftSettings({ league }) {
           <LeaguePlayFields
             value={playSettings}
             onChange={setPlaySettings}
-            disabled={leagueStarted}
+            disabled={setupFieldsLocked}
             compactLabels
             showDescriptions
             showPlayoffDetails
@@ -188,7 +195,7 @@ export default function LeagueDraftSettings({ league }) {
           <ScheduleConfigFields
             value={playSettings.schedule_config}
             onChange={(scheduleConfig) => setPlaySettings({ ...playSettings, schedule_config: scheduleConfig })}
-            disabled={leagueStarted}
+            disabled={setupFieldsLocked}
           />
         </div>
       </div>
@@ -199,7 +206,7 @@ export default function LeagueDraftSettings({ league }) {
           <LeaguePlayFields
             value={playSettings}
             onChange={setPlaySettings}
-            disabled={leagueStarted}
+            disabled={setupFieldsLocked}
             compactLabels
             showDescriptions
             fields={["draft_mode", "player_retention_mode"]}
@@ -211,7 +218,7 @@ export default function LeagueDraftSettings({ league }) {
             onSourceSeasonYearChange={setSourceSeasonYear}
             teamTierCap={teamTierCap}
             onTeamTierCapChange={setTeamTierCap}
-            disabled={leagueStarted}
+            disabled={setupFieldsLocked}
           />
         </div>
 
@@ -222,14 +229,14 @@ export default function LeagueDraftSettings({ league }) {
               type="datetime-local"
               value={draftStart}
               onChange={(event) => setDraftStart(event.target.value)}
-              disabled={scheduledDraft?.status === "OPEN"}
+              disabled={scheduledDraft?.status === "OPEN" || setupFieldsLocked}
               className="neo-border font-bold"
             />
             <p className="text-xs font-bold text-gray-600 mt-2">
               Sets the scheduled start time for the draft room.
             </p>
           </div>
-          <Button onClick={() => scheduleDraftMutation.mutate()} disabled={!draftStart || scheduleDraftMutation.isPending || scheduledDraft?.status === "OPEN"} className="neo-btn bg-[#00D9FF] text-black">
+          <Button onClick={() => scheduleDraftMutation.mutate()} disabled={!draftStart || scheduleDraftMutation.isPending || scheduledDraft?.status === "OPEN" || setupFieldsLocked} className="neo-btn bg-[#00D9FF] text-black">
             <CalendarClock className="w-5 h-5 mr-2" />
             Schedule Draft
           </Button>
@@ -241,9 +248,9 @@ export default function LeagueDraftSettings({ league }) {
           Current draft: {scheduledDraft?.start ? new Date(scheduledDraft.start).toLocaleString() : "Unscheduled"} {scheduledDraft?.status ? `(${scheduledDraft.status})` : ""}
         </p>
 
-        <Button onClick={() => saveDraftMutation.mutate()} disabled={saveDraftMutation.isPending || leagueStarted} className="neo-btn bg-[#00D9FF] text-black w-full mt-6">
+        <Button onClick={() => saveDraftMutation.mutate()} disabled={saveDraftMutation.isPending || setupFieldsLocked} className="neo-btn bg-[#00D9FF] text-black w-full mt-6">
           <Save className="w-5 h-5 mr-2" />
-          {leagueStarted ? "Locked After Start" : "Save Configuration"}
+          {setupFieldsLocked ? "Locked After Draft Start" : "Save Configuration"}
         </Button>
       </div>
 

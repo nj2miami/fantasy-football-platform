@@ -9,13 +9,14 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Plus, Bot, Trash2, Edit } from "lucide-react";
 
-const AddAIDialog = ({ league, membersCount }) => {
+const AddAIDialog = ({ league, membersCount, setupLocked = false }) => {
   const queryClient = useQueryClient();
   const [persona, setPersona] = useState("BALANCED");
   const [isOpen, setIsOpen] = useState(false);
 
   const addAIMutation = useMutation({
     mutationFn: async () => {
+      if (setupLocked) throw new Error("League setup is locked after the draft starts.");
       return appClient.functions.invoke("add_ai_team", {
         league_id: league.id,
         ai_persona: persona,
@@ -34,7 +35,7 @@ const AddAIDialog = ({ league, membersCount }) => {
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button className="neo-btn bg-[#00D9FF] text-black w-auto px-4" disabled={membersCount >= league.max_members}>
+        <Button className="neo-btn bg-[#00D9FF] text-black w-auto px-4" disabled={membersCount >= league.max_members || setupLocked}>
           <Plus className="w-5 h-5 mr-2" />
           Add AI
         </Button>
@@ -67,14 +68,17 @@ const AddAIDialog = ({ league, membersCount }) => {
   );
 };
 
-const EditAIDialog = ({ member, league }) => {
+const EditAIDialog = ({ member, league, setupLocked = false }) => {
     const queryClient = useQueryClient();
     const [teamName, setTeamName] = useState(member.team_name);
     const [persona, setPersona] = useState(member.ai_persona);
     const [isOpen, setIsOpen] = useState(false);
 
     const updateAIMutation = useMutation({
-        mutationFn: (data) => appClient.functions.invoke("update_ai_team", { member_id: member.id, ...data }),
+        mutationFn: (data) => {
+          if (setupLocked) throw new Error("League setup is locked after the draft starts.");
+          return appClient.functions.invoke("update_ai_team", { member_id: member.id, ...data });
+        },
         onSuccess: () => {
             toast.success("AI Team updated!");
             queryClient.invalidateQueries({ queryKey: ['league-ai-teams', league.id] });
@@ -86,7 +90,7 @@ const EditAIDialog = ({ member, league }) => {
     return (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
             <DialogTrigger asChild>
-                <Button variant="ghost" size="icon"><Edit className="w-4 h-4 text-gray-500" /></Button>
+                <Button variant="ghost" size="icon" disabled={setupLocked}><Edit className="w-4 h-4 text-gray-500" /></Button>
             </DialogTrigger>
             <DialogContent className="neo-card">
                 <DialogHeader><DialogTitle className="font-black uppercase text-2xl">Edit AI Team</DialogTitle></DialogHeader>
@@ -115,12 +119,15 @@ const EditAIDialog = ({ member, league }) => {
     );
 }
 
-const DeleteAIDialog = ({ member, league }) => {
+const DeleteAIDialog = ({ member, league, setupLocked = false }) => {
     const queryClient = useQueryClient();
     const [isOpen, setIsOpen] = useState(false);
     
     const deleteAIMutation = useMutation({
-        mutationFn: () => appClient.functions.invoke("remove_ai_team", { member_id: member.id }),
+        mutationFn: () => {
+          if (setupLocked) throw new Error("League setup is locked after the draft starts.");
+          return appClient.functions.invoke("remove_ai_team", { member_id: member.id });
+        },
         onSuccess: () => {
             toast.success("AI Team removed.");
             queryClient.invalidateQueries({ queryKey: ['league-ai-teams', league.id] });
@@ -131,7 +138,7 @@ const DeleteAIDialog = ({ member, league }) => {
 
     return (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
-            <DialogTrigger asChild><Button variant="ghost" size="icon"><Trash2 className="w-4 h-4 text-red-500" /></Button></DialogTrigger>
+            <DialogTrigger asChild><Button variant="ghost" size="icon" disabled={setupLocked}><Trash2 className="w-4 h-4 text-red-500" /></Button></DialogTrigger>
             <DialogContent className="neo-card">
                 <DialogHeader><DialogTitle className="font-black uppercase text-2xl">Remove AI Team?</DialogTitle></DialogHeader>
                 <DialogDescription className="font-bold">Are you sure you want to remove {member.team_name}? This cannot be undone.</DialogDescription>
@@ -145,7 +152,7 @@ const DeleteAIDialog = ({ member, league }) => {
 };
 
 
-export default function LeagueAITeams({ league }) {
+export default function LeagueAITeams({ league, setupLocked = false }) {
   const { data: members, isLoading } = useQuery({
     queryKey: ['league-ai-teams', league.id],
     queryFn: () => appClient.entities.LeagueMember.filter({ league_id: league.id }),
@@ -160,7 +167,7 @@ export default function LeagueAITeams({ league }) {
         <h3 className="text-2xl font-black uppercase">
           AI Teams ({aiMembers.length})
         </h3>
-        <AddAIDialog league={league} membersCount={totalMembers} />
+        <AddAIDialog league={league} membersCount={totalMembers} setupLocked={setupLocked} />
       </div>
       {isLoading ? (
         <p>Loading members...</p>
@@ -177,8 +184,8 @@ export default function LeagueAITeams({ league }) {
               </div>
               <div className="flex items-center gap-1">
                 <div className="bg-blue-100 text-blue-800 px-2 py-1 neo-border text-xs font-black uppercase">{member.ai_persona}</div>
-                <EditAIDialog member={member} league={league} />
-                <DeleteAIDialog member={member} league={league} />
+                <EditAIDialog member={member} league={league} setupLocked={setupLocked} />
+                <DeleteAIDialog member={member} league={league} setupLocked={setupLocked} />
               </div>
             </div>
           ))}
