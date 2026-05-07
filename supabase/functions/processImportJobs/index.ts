@@ -805,50 +805,19 @@ async function refreshComputedFantasyPointsChunk(supabase: Supabase, job: Json, 
     return { complete: true, processed_chunks: chunks.length, total_chunks: chunks.length };
   }
 
-  const positionConfig = await defaultPositionConfig(supabase);
-  const scoringRulesBySeason = new Map<number, Json>();
   const week = chunks[index];
   await appendJobLog(supabase, job, week === null
-    ? "Recalculating fantasy points in one chunk."
-    : `Recalculating fantasy points for week ${week}.`, {
+    ? "Recalculating fantasy points in the database."
+    : `Recalculating fantasy points for week ${week} in the database.`, {
     progress: Math.min(90, 10 + Math.round((index / Math.max(1, chunks.length)) * 80)),
   });
 
-  let query = supabase
-    .from("player_week_stats")
-    .select("id,season_year,raw_stats,players!inner(position)");
-  if (seasonYear) query = query.eq("season_year", seasonYear);
-  if (week !== null) query = query.eq("week", week);
-  const { data, error } = await query;
-  if (error) throw error;
-
-  for (const row of data || []) {
-    const rowSeason = Number(row.season_year || seasonYear || 0);
-    if (rowSeason && !scoringRulesBySeason.has(rowSeason)) {
-      scoringRulesBySeason.set(rowSeason, await ensureSeasonScoringRules(supabase, rowSeason));
-    }
-  }
-
-  const updates = (data || []).map((row: Json) => {
-    const player = Array.isArray(row.players) ? row.players[0] : row.players;
-    const rowSeason = Number(row.season_year || seasonYear || 0);
-    const rules = scoringRulesBySeason.get(rowSeason) || DEFAULT_SCORING_RULES;
-    return {
-      id: row.id,
-      fantasy_points: calculateFantasyPoints((row.raw_stats || {}) as Json, rules, positionConfig, String(player?.position || "")),
-    };
+  const { error } = await supabase.rpc("recompute_player_week_fantasy_points_chunk", {
+    p_season_year: seasonYear || null,
+    p_week: week,
+    p_refresh_aggregates: false,
   });
-
-  for (let offset = 0; offset < updates.length; offset += BATCH_SIZE) {
-    const batch = updates.slice(offset, offset + BATCH_SIZE);
-    for (const item of batch) {
-      const { error: updateError } = await supabase
-        .from("player_week_stats")
-        .update({ fantasy_points: item.fantasy_points })
-        .eq("id", item.id);
-      if (updateError) throw updateError;
-    }
-  }
+  if (error) throw error;
 
   const nextIndex = index + 1;
   await updateJob(supabase, String(job.id), {
