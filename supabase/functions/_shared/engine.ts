@@ -462,6 +462,20 @@ function scoringRulesHash(scoringRules: Json, sourceUpdatedAt?: string | null) {
 }
 
 async function adminSeasonScoringRules(supabase: ReturnType<typeof createClient>, sourceSeasonYear: number) {
+  const { data: globalRules, error: globalError } = await supabase
+    .from("global_settings")
+    .select("value,updated_date,created_date")
+    .eq("key", "SCORING_RULES")
+    .maybeSingle();
+  if (globalError) throw globalError;
+  if (globalRules?.value) {
+    return {
+      rules: mergeScoringRules(globalRules.value as Json),
+      sourceUpdatedAt: String(globalRules.updated_date || globalRules.created_date || ""),
+      source: "global_default",
+    };
+  }
+
   const { data: seasonRules, error: seasonError } = await supabase
     .from("season_scoring_rules")
     .select("rules,updated_date,created_date")
@@ -472,18 +486,14 @@ async function adminSeasonScoringRules(supabase: ReturnType<typeof createClient>
     return {
       rules: mergeScoringRules(seasonRules.rules as Json),
       sourceUpdatedAt: String(seasonRules.updated_date || seasonRules.created_date || ""),
+      source: "season_fallback",
     };
   }
 
-  const { data: globalRules, error: globalError } = await supabase
-    .from("global_settings")
-    .select("value,updated_date,created_date")
-    .eq("key", "SCORING_RULES")
-    .maybeSingle();
-  if (globalError) throw globalError;
   return {
-    rules: mergeScoringRules((globalRules?.value as Json | undefined) || DEFAULT_SCORING_RULES),
-    sourceUpdatedAt: String(globalRules?.updated_date || globalRules?.created_date || ""),
+    rules: mergeScoringRules(DEFAULT_SCORING_RULES),
+    sourceUpdatedAt: "",
+    source: "code_default",
   };
 }
 

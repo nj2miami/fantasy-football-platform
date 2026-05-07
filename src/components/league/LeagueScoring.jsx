@@ -88,7 +88,7 @@ const errorText = (error, fallback) => {
 
 const flattenRuleDifferences = (adminRules, leagueRules) => {
   const admin = mergeRules(adminRules, {});
-  const leagueSnapshot = mergeRules(adminRules, leagueRules);
+  const leagueSnapshot = mergeRules(DEFAULT_SCORING_RULES, leagueRules);
   const differences = [];
   for (const [category, rules] of Object.entries(admin)) {
     for (const key of Object.keys(rules || {})) {
@@ -120,18 +120,20 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const { data: defaultRulesContext = { rules: DEFAULT_SCORING_RULES, sourceUpdatedAt: null }, isLoading } = useQuery({
     queryKey: ["league-scoring-defaults", league.source_season_year],
     queryFn: async () => {
-      const seasonRules = await appClient.entities.SeasonScoringRule.filter({ season_year: Number(league.source_season_year || new Date().getFullYear() - 1) });
-      if (isCategorizedRules(seasonRules[0]?.rules)) {
-        return {
-          rules: seasonRules[0].rules,
-          sourceUpdatedAt: seasonRules[0].updated_date || seasonRules[0].created_date || null,
-        };
-      }
       const globalSettings = await appClient.entities.Global.filter({ key: "SCORING_RULES" });
       if (isCategorizedRules(globalSettings[0]?.value)) {
         return {
           rules: globalSettings[0].value,
           sourceUpdatedAt: globalSettings[0].updated_date || globalSettings[0].created_date || null,
+          source: "global_default",
+        };
+      }
+      const seasonRules = await appClient.entities.SeasonScoringRule.filter({ season_year: Number(league.source_season_year || new Date().getFullYear() - 1) });
+      if (isCategorizedRules(seasonRules[0]?.rules)) {
+        return {
+          rules: seasonRules[0].rules,
+          sourceUpdatedAt: seasonRules[0].updated_date || seasonRules[0].created_date || null,
+          source: "season_fallback",
         };
       }
       const siteSettings = await appClient.entities.SiteSetting.filter({ key: "SCORING_RULES" });
@@ -139,9 +141,10 @@ export default function LeagueScoring({ league, setupLocked = false }) {
         return {
           rules: siteSettings[0].value,
           sourceUpdatedAt: siteSettings[0].updated_date || siteSettings[0].created_date || null,
+          source: "site_fallback",
         };
       }
-      return { rules: DEFAULT_SCORING_RULES, sourceUpdatedAt: null };
+      return { rules: DEFAULT_SCORING_RULES, sourceUpdatedAt: null, source: "code_default" };
     },
   });
   const defaultRules = defaultRulesContext.rules || DEFAULT_SCORING_RULES;
@@ -277,7 +280,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
         </p>
         {adminUpdatedAt && !isLocked && !overridesEnabled && (
           <p className="mt-2 text-xs font-black uppercase text-gray-500">
-            Admin season defaults updated {new Date(adminUpdatedAt).toLocaleString()}
+            Admin defaults updated {new Date(adminUpdatedAt).toLocaleString()}
             {syncedAt ? ` | League pool synced ${new Date(syncedAt).toLocaleString()}` : " | League pool has not synced yet"}
           </p>
         )}
