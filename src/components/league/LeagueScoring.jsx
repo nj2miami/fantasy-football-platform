@@ -133,13 +133,6 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const commissionerRole = String(commissionerProfiles[0]?.role || "").toLowerCase();
   const overrideEligible = String(league.league_tier || "").toUpperCase() === "PAID" || commissionerRole === "premium" || commissionerRole === "admin";
 
-  const { data: existingDraftPoolRows = [] } = useQuery({
-    queryKey: ["league-scoring-draft-pool-rows", league.id],
-    queryFn: () => appClient.entities.LeaguePlayerDraftTier.filter({ league_id: league.id }),
-    enabled: !!league.id,
-  });
-  const hasPreparedDraftPool = existingDraftPoolRows.length > 0;
-
   useEffect(() => {
     const useLeagueRules = isLocked || (overridesEnabled && overrideEligible);
     setScoringRules(useLeagueRules ? mergeRules(defaultRules, league.scoring_rules) : mergeRules(defaultRules, {}));
@@ -167,7 +160,6 @@ export default function LeagueScoring({ league, setupLocked = false }) {
       toast.success("League scoring overrides saved!");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
-      queryClient.invalidateQueries({ queryKey: ["league-scoring-draft-pool-rows", league.id] });
     },
     onError: (error) => {
       toast.error(errorText(error, "Failed to save scoring rules."));
@@ -186,7 +178,6 @@ export default function LeagueScoring({ league, setupLocked = false }) {
       toast.success("Scoring override mode updated.");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
-      queryClient.invalidateQueries({ queryKey: ["league-scoring-draft-pool-rows", league.id] });
     },
     onError: (error) => {
       toast.error(errorText(error, "Failed to update scoring override mode."));
@@ -224,7 +215,6 @@ export default function LeagueScoring({ league, setupLocked = false }) {
       toast.success(completed ? "Draft pool refreshed." : "Draft pool refresh started.");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
-      queryClient.invalidateQueries({ queryKey: ["league-scoring-draft-pool-rows", league.id] });
     },
     onError: (error) => {
       toast.error(errorText(error, "Failed to refresh draft pool."));
@@ -239,11 +229,11 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
   const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
   const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
-  const adminDefaultsOutOfSync = !isLocked && !overridesEnabled && hasPreparedDraftPool && (
+  const adminDefaultsOutOfSync = !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
     !syncedAt ||
     (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
   );
-  const leagueOverrideOutOfSync = !isLocked && overridesEnabled && hasPreparedDraftPool && !leagueSyncedAt;
+  const leagueOverrideOutOfSync = !isLocked && overridesEnabled && !leagueSyncedAt;
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
   const disabledReason = setupLocked
