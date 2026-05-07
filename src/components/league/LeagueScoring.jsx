@@ -215,6 +215,8 @@ export default function LeagueScoring({ league, setupLocked = false }) {
       toast.success(completed ? "Draft pool refreshed." : "Draft pool refresh started.");
       queryClient.invalidateQueries({ queryKey: ["league", league.id] });
       queryClient.invalidateQueries({ queryKey: ["league-draft-state", league.id] });
+      queryClient.invalidateQueries({ queryKey: ["draft-eligible-players", league.id] });
+      queryClient.removeQueries({ queryKey: ["draft-eligible-players", league.id] });
     },
     onError: (error) => {
       toast.error(errorText(error, "Failed to refresh draft pool."));

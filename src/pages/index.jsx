@@ -91,7 +91,8 @@ class RouteErrorBoundary extends Component {
         return { error };
     }
 
-    componentDidCatch(error) {
+    componentDidCatch(error, errorInfo) {
+        console.error("Route render failed", error, errorInfo);
         if (!isChunkLoadError(error)) return;
         const storageKey = `route-boundary-retry:${APP_BUILD_ID}:${this.props.resetKey}`;
         const hasRetried = window.sessionStorage.getItem(storageKey) === "true";
@@ -121,6 +122,11 @@ class RouteErrorBoundary extends Component {
                             ? "The app is loading a newer production bundle. Refresh to pull the latest page files."
                             : "The app hit a client-side loading error. Refreshing may recover the page."}
                     </p>
+                    {!chunkLoadFailed && (
+                        <p className="mt-3 break-words text-xs font-bold text-gray-500">
+                            {String(this.state.error?.message || this.state.error || "Unknown page error")}
+                        </p>
+                    )}
                     <button
                         type="button"
                         onClick={() => {

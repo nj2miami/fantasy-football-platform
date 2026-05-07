@@ -11,6 +11,8 @@ import LeagueCard from "../components/league/LeagueCard";
 import { getLeagueEntitlements } from "@/lib/entitlements";
 
 const EMPTY_PROFILE_SRC = "/assets/Empty_Profile.jpg";
+const textValue = (value) => (typeof value === "string" ? value.trim() : "");
+const listValue = (value) => (Array.isArray(value) ? value : []);
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -79,9 +81,12 @@ export default function Dashboard() {
     enabled: !!user,
   });
 
-  const activeLeagues = allLeagues.filter((league) => !league.archived_at);
+  const membershipRows = listValue(myMemberships);
+  const leagueRows = listValue(allLeagues);
+  const profileRows = listValue(profiles);
+  const activeLeagues = leagueRows.filter((league) => !league.archived_at);
   const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
-  const activeMemberships = myMemberships.filter((membership) =>
+  const activeMemberships = membershipRows.filter((membership) =>
     membership.is_active !== false && activeLeagueIds.has(membership.league_id)
   );
   const myLeagueIds = activeMemberships.map((m) => m.league_id);
@@ -92,15 +97,15 @@ export default function Dashboard() {
     queryFn: () => user ? appClient.entities.UserProfile.filter({ user_email: user.email }) : [],
     enabled: !!user,
   });
-  const userProfile = profiles[0];
+  const userProfile = profileRows[0];
   const welcomeName =
-    userProfile?.display_name?.trim() ||
-    userProfile?.profile_name?.trim() ||
-    userProfile?.first_name?.trim() ||
-    user?.first_name?.trim() ||
-    user?.full_name?.trim() ||
+    textValue(userProfile?.display_name) ||
+    textValue(userProfile?.profile_name) ||
+    textValue(userProfile?.first_name) ||
+    textValue(user?.first_name) ||
+    textValue(user?.full_name) ||
     "Manager";
-  const profileName = userProfile?.profile_name?.trim() || welcomeName;
+  const profileName = textValue(userProfile?.profile_name) || welcomeName;
   const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
   const canCreateLeagues = entitlements.canCreateFreeLeague || entitlements.canCreatePaidLeague;
   const userButtonStyle = userProfile ? {

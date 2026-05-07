@@ -323,6 +323,13 @@ export default function LeagueDraft() {
   const countdown = isOpen ? "Live" : isCompleted ? "Complete" : formatCountdown(state?.draft?.start, nowMs);
   const pickRemaining = getPickRemaining(state?.room, nowMs);
   const tierCap = Number(state?.league?.team_tier_cap || 0);
+  const draftPoolCacheKey = [
+    state?.draftPoolJob?.id || "",
+    state?.draftPoolJob?.updated_date || "",
+    state?.draftPoolJob?.scoring_rules_hash || "",
+    state?.league?.scoring_rules_source_updated_at || "",
+    state?.league?.scoring_rules_synced_at || "",
+  ].join(":");
 
   const invalidate = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["league-draft-state", leagueId] });
@@ -335,7 +342,7 @@ export default function LeagueDraft() {
     isError: isEligibleError,
     isFetching: isEligibleFetching,
   } = useQuery({
-    queryKey: ["draft-eligible-players", leagueId, draftId, searchTerm, positionFilter, page],
+    queryKey: ["draft-eligible-players", leagueId, draftId, draftPoolCacheKey, searchTerm, positionFilter, page],
     queryFn: () => appClient.draftDay.listEligiblePlayers({
       leagueId,
       draftId,
