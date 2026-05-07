@@ -142,6 +142,7 @@ const DRAFT_BUCKET_MINIMUMS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30
 const MIN_DRAFT_STAT_WEEKS = 8;
 const PLAYER_TWO_WEEK_ASSIGNMENT = "per_lineup_player_two_week_average_v1";
 const LEAGUE_PLAYER_SCORE_METHOD = "league-raw-actual-stat-weeks-v4";
+const DRAFT_POOL_ENGINE_VERSION = "draft-pool-finalizer-pagination-v2";
 const DRAFT_POOL_CHUNK_SIZE = 200;
 
 const DEFAULT_SCHEDULE_CONFIG = {
@@ -484,12 +485,16 @@ function draftBucketCounts(rows: Json[] = []) {
   }, {} as Record<string, number>);
 }
 
-function assertCompleteDraftPool(rows: Json[] = []) {
+function assertCompleteDraftPool(rows: Json[] = [], context: Json = {}) {
   const counts = draftBucketCounts(rows);
   const missing = REQUIRED_DRAFT_BUCKETS.filter((bucket) => Number(counts[bucket] || 0) < draftBucketMinimum(bucket));
   if (missing.length) {
+    const details = Object.entries(context)
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
+      .join(" | ");
     throw new Error(
-      `Draft pool generation is incomplete for ${missing.map((bucket) => `${bucket} (${counts[bucket] || 0}/${draftBucketMinimum(bucket)})`).join(", ")}. Check Admin Position Configuration and imported player stat data; draft-eligible players need at least ${MIN_DRAFT_STAT_WEEKS} actual stat weeks.`
+      `Draft pool generation is incomplete for ${missing.map((bucket) => `${bucket} (${counts[bucket] || 0}/${draftBucketMinimum(bucket)})`).join(", ")}. Check Admin Position Configuration and imported player stat data; draft-eligible players need at least ${MIN_DRAFT_STAT_WEEKS} actual stat weeks.${details ? ` Diagnostics: ${details}.` : ""}`
     );
   }
   return counts;
@@ -1911,6 +1916,9 @@ async function loadDraftPoolCandidates(supabase: ReturnType<typeof createClient>
       .select("player_id,position,total_points,expected_avg_points,weeks_played")
       .eq("league_id", leagueId)
       .eq("scoring_rules_hash", scoringRulesHash)
+      .order("position", { ascending: true })
+      .order("total_points", { ascending: false })
+      .order("player_id", { ascending: true })
       .range(offset, offset + pageSize - 1);
     if (error) throw error;
     rows.push(...(data || []));
@@ -1920,6 +1928,7 @@ async function loadDraftPoolCandidates(supabase: ReturnType<typeof createClient>
 
 async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, job: Json, scoringRulesHash: string) {
   const candidates = await loadDraftPoolCandidates(supabase, league.id, scoringRulesHash);
+  const candidateCounts = draftBucketCounts(candidates);
 
   const byPosition = new Map<string, Json[]>();
   for (const candidate of candidates || []) {
@@ -1954,7 +1963,14 @@ async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClie
       });
   }
 
-  assertCompleteDraftPool(rows);
+  assertCompleteDraftPool(rows, {
+    engine: DRAFT_POOL_ENGINE_VERSION,
+    source_season_year: Number(league.source_season_year || new Date().getFullYear() - 1),
+    candidate_total: candidates.length,
+    candidate_counts: candidateCounts,
+    finalist_counts: draftBucketCounts(rows),
+    scoring_hash: scoringRulesHash,
+  });
   await supabase.from("league_player_scores").delete().eq("league_id", league.id);
   const { error: upsertError } = await supabase
     .from("league_player_scores")
