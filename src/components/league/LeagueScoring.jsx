@@ -152,6 +152,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
   const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
   const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
+  const leagueSourceUpdatedAt = league.scoring_rules_source_updated_at || null;
   const adminDefaultsOutOfSync = hasDraftPool && !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
     !syncedAt ||
     (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
@@ -261,7 +262,10 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   }
 
   const canEditOverrides = overrideEligible && overridesEnabled && !isLocked && !setupLocked;
-  const leagueOverrideOutOfSync = hasDraftPool && !isLocked && overridesEnabled && !leagueSyncedAt;
+  const leagueOverrideOutOfSync = hasDraftPool && !isLocked && overridesEnabled && Boolean(leagueSourceUpdatedAt) && (
+    !leagueSyncedAt ||
+    new Date(leagueSourceUpdatedAt).getTime() > new Date(leagueSyncedAt).getTime()
+  );
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
   const disabledReason = setupLocked
