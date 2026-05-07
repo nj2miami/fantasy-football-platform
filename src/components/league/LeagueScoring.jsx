@@ -123,20 +123,20 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const { data: defaultRulesContext = { rules: DEFAULT_SCORING_RULES, sourceUpdatedAt: null }, isLoading } = useQuery({
     queryKey: ["league-scoring-defaults", league.source_season_year],
     queryFn: async () => {
+      const seasonRules = await appClient.entities.SeasonScoringRule.filter({ season_year: Number(league.source_season_year || new Date().getFullYear() - 1) });
+      if (isCategorizedRules(seasonRules[0]?.rules)) {
+        return {
+          rules: seasonRules[0].rules,
+          sourceUpdatedAt: seasonRules[0].updated_date || seasonRules[0].created_date || null,
+          source: "season_default",
+        };
+      }
       const globalSettings = await appClient.entities.Global.filter({ key: "SCORING_RULES" });
       if (isCategorizedRules(globalSettings[0]?.value)) {
         return {
           rules: globalSettings[0].value,
           sourceUpdatedAt: globalSettings[0].updated_date || globalSettings[0].created_date || null,
           source: "global_default",
-        };
-      }
-      const seasonRules = await appClient.entities.SeasonScoringRule.filter({ season_year: Number(league.source_season_year || new Date().getFullYear() - 1) });
-      if (isCategorizedRules(seasonRules[0]?.rules)) {
-        return {
-          rules: seasonRules[0].rules,
-          sourceUpdatedAt: seasonRules[0].updated_date || seasonRules[0].created_date || null,
-          source: "season_fallback",
         };
       }
       const siteSettings = await appClient.entities.SiteSetting.filter({ key: "SCORING_RULES" });
