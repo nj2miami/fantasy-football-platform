@@ -1679,7 +1679,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
   const rows: Array<Json> = [];
   for (const [position, players] of byPosition.entries()) {
     players
-      .sort((a, b) => b.total - a.total || b.avg - a.avg || a.full_name.localeCompare(b.full_name))
+      .sort((a, b) => b.avg - a.avg || b.total - a.total || a.full_name.localeCompare(b.full_name))
       .slice(0, draftBucketTarget(position))
       .forEach((player, index) => {
         const positionRank = index + 1;
@@ -1956,8 +1956,8 @@ async function finalizeLeagueDraftPoolJob(supabase: ReturnType<typeof createClie
   for (const [position, players] of byPosition.entries()) {
     players
       .sort((a, b) =>
-        Number(b.total_points || 0) - Number(a.total_points || 0) ||
-        Number(b.expected_avg_points || 0) - Number(a.expected_avg_points || 0)
+        Number(b.expected_avg_points || 0) - Number(a.expected_avg_points || 0) ||
+        Number(b.total_points || 0) - Number(a.total_points || 0)
       )
       .slice(0, draftBucketTarget(position))
       .forEach((player, index) => {
