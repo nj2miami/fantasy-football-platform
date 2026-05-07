@@ -2286,6 +2286,8 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
       status: "COMPLETED",
       complete: true,
       progress: 100,
+      scoring_rules_hash: scoringRulesHash,
+      source_updated_at: sourceUpdatedAt || null,
       eligible_count: count || 0,
       buckets: draftBucketCounts(rows || []),
     };
@@ -2314,6 +2316,8 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
         status: "COMPLETED",
         complete: true,
         progress: 100,
+        scoring_rules_hash: scoringRulesHash,
+        source_updated_at: sourceUpdatedAt || null,
         ...finalized,
       };
     }
@@ -2321,6 +2325,8 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
       league_id: league.id,
       status: "RUNNING",
       complete: false,
+      scoring_rules_hash: scoringRulesHash,
+      source_updated_at: sourceUpdatedAt || null,
       progress: Number(processedJob.progress || 1),
       processed_players: Number(processedJob.processed_players || 0),
       total_players: Number(processedJob.total_players || 0),

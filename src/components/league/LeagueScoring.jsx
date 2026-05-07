@@ -86,6 +86,27 @@ const errorText = (error, fallback) => {
   return fallback;
 };
 
+const flattenRuleDifferences = (adminRules, leagueRules) => {
+  const admin = mergeRules(adminRules, {});
+  const leagueSnapshot = mergeRules(adminRules, leagueRules);
+  const differences = [];
+  for (const [category, rules] of Object.entries(admin)) {
+    for (const key of Object.keys(rules || {})) {
+      const adminValue = Number(rules[key]);
+      const leagueValue = Number(leagueSnapshot?.[category]?.[key]);
+      if (Number.isFinite(adminValue) && Number.isFinite(leagueValue) && adminValue !== leagueValue) {
+        differences.push({
+          category,
+          key,
+          adminValue,
+          leagueValue,
+        });
+      }
+    }
+  }
+  return differences;
+};
+
 export default function LeagueScoring({ league, setupLocked = false }) {
   const queryClient = useQueryClient();
   const [scoringRules, setScoringRules] = useState(null);
@@ -170,7 +191,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
     mutationFn: (enabled) => appClient.functions.invoke("update_league_scoring", {
       league_id: league.id,
       scoring_overrides_enabled: enabled,
-      scoring_rules: enabled ? scoringRules : {},
+      scoring_rules: enabled ? mergeRules(defaultRules, league.scoring_rules) : {},
     }),
     onSuccess: (result) => {
       setPoolRefreshNotice(Boolean(result?.draft_pool_invalidated));
@@ -206,7 +227,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
       const completed = result?.complete || String(result?.status || result?.job?.status || "").toUpperCase() === "COMPLETED";
       if (completed) {
         setPoolRefreshNotice(false);
-        setLocalScoringSyncedAt(defaultRulesContext.sourceUpdatedAt || new Date().toISOString());
+        setLocalScoringSyncedAt(result?.source_updated_at || defaultRulesContext.sourceUpdatedAt || new Date().toISOString());
         setPoolSyncConfirmation(overridesEnabled
           ? "League draft pool data now matches the current league scoring overrides."
           : "League draft pool data now matches the default admin scoring data.");
@@ -238,6 +259,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   const leagueOverrideOutOfSync = !isLocked && overridesEnabled && !leagueSyncedAt;
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
+  const adminLeagueDifferences = flattenRuleDifferences(defaultRules, league.scoring_rules);
   const disabledReason = setupLocked
     ? "League setup is locked after the draft starts."
     : isLocked
@@ -307,6 +329,35 @@ export default function LeagueScoring({ league, setupLocked = false }) {
           className="data-[state=checked]:bg-black"
         />
       </div>
+
+      {adminLeagueDifferences.length > 0 && !isLocked && (
+        <div className="neo-border bg-white p-4">
+          <p className="text-sm font-black uppercase">Admin vs League Stored Values</p>
+          <p className="mt-1 text-xs font-bold text-gray-600">
+            These stored league values differ from the current admin scoring source for this league season.
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[520px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b-4 border-black text-left text-xs font-black uppercase">
+                  <th className="py-2 pr-3">Rule</th>
+                  <th className="py-2 pr-3">Admin</th>
+                  <th className="py-2 pr-3">League Stored</th>
+                </tr>
+              </thead>
+              <tbody>
+                {adminLeagueDifferences.map((difference) => (
+                  <tr key={`${difference.category}.${difference.key}`} className="border-b-2 border-gray-200 font-bold">
+                    <td className="py-2 pr-3 uppercase">{difference.category} / {difference.key.replace(/_/g, " ")}</td>
+                    <td className="py-2 pr-3">{difference.adminValue}</td>
+                    <td className="py-2 pr-3">{difference.leagueValue}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {!overrideEligible && !isLocked && (
         <div className="neo-border bg-[#FFF1E8] p-4 flex items-center gap-3">

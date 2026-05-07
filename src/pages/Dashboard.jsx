@@ -27,6 +27,57 @@ export default function Dashboard() {
     enabled: !!user,
   });
 
+  const { data: myMemberships = [] } = useQuery({
+    queryKey: ['my-memberships', user?.email],
+    queryFn: () => user ? appClient.entities.LeagueMember.filter({ user_email: user.email }) : [],
+    enabled: !!user
+  });
+
+  // Removed the separate commissonedLeagues query as commissioner status is now handled within myLeagues
+
+  const { data: allLeagues = [] } = useQuery({
+    queryKey: ['all-leagues'],
+    queryFn: () => appClient.entities.League.list(),
+    enabled: !!user,
+  });
+
+  const { data: profiles = [], isLoading: isLoadingProfile } = useQuery({
+    queryKey: ["dashboard-profile", user?.email],
+    queryFn: () => user ? appClient.entities.UserProfile.filter({ user_email: user.email }) : [],
+    enabled: !!user,
+  });
+
+  const membershipRows = listValue(myMemberships);
+  const leagueRows = listValue(allLeagues);
+  const profileRows = listValue(profiles);
+  const activeLeagues = leagueRows.filter((league) => !league.archived_at);
+  const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
+  const activeMemberships = membershipRows.filter((membership) =>
+    membership.is_active !== false && activeLeagueIds.has(membership.league_id)
+  );
+  const myLeagueIds = activeMemberships.map((m) => m.league_id);
+  const myLeagues = activeLeagues.filter((l) => myLeagueIds.includes(l.id));
+  const userProfile = profileRows[0];
+  const welcomeName =
+    textValue(userProfile?.display_name) ||
+    textValue(userProfile?.profile_name) ||
+    textValue(userProfile?.first_name) ||
+    textValue(user?.first_name) ||
+    textValue(user?.full_name) ||
+    "Manager";
+  const profileName = textValue(userProfile?.profile_name) || welcomeName;
+  const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
+  const canCreateLeagues = entitlements.canCreateFreeLeague || entitlements.canCreatePaidLeague;
+  const userButtonStyle = userProfile ? {
+    backgroundColor: userProfile.theme_primary || "#00D9FF",
+    color: userProfile.theme_secondary || "#000000",
+    "--neo-shadow-color": userProfile.theme_secondary || "#000000",
+  } : {
+    backgroundColor: "#00D9FF",
+    color: "#000000",
+    "--neo-shadow-color": "#000000",
+  };
+
   const createAILeagueJob = useMutation({
     mutationFn: async () => {
       if (!entitlements.canCreateFreeLeague) {
@@ -66,57 +117,6 @@ export default function Dashboard() {
       toast.error(error.message || "Failed to create AI league.");
     }
   });
-
-  const { data: myMemberships = [] } = useQuery({
-    queryKey: ['my-memberships', user?.email],
-    queryFn: () => user ? appClient.entities.LeagueMember.filter({ user_email: user.email }) : [],
-    enabled: !!user
-  });
-
-  // Removed the separate commissonedLeagues query as commissioner status is now handled within myLeagues
-
-  const { data: allLeagues = [] } = useQuery({
-    queryKey: ['all-leagues'],
-    queryFn: () => appClient.entities.League.list(),
-    enabled: !!user,
-  });
-
-  const membershipRows = listValue(myMemberships);
-  const leagueRows = listValue(allLeagues);
-  const profileRows = listValue(profiles);
-  const activeLeagues = leagueRows.filter((league) => !league.archived_at);
-  const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
-  const activeMemberships = membershipRows.filter((membership) =>
-    membership.is_active !== false && activeLeagueIds.has(membership.league_id)
-  );
-  const myLeagueIds = activeMemberships.map((m) => m.league_id);
-  const myLeagues = activeLeagues.filter((l) => myLeagueIds.includes(l.id));
-
-  const { data: profiles = [], isLoading: isLoadingProfile } = useQuery({
-    queryKey: ["dashboard-profile", user?.email],
-    queryFn: () => user ? appClient.entities.UserProfile.filter({ user_email: user.email }) : [],
-    enabled: !!user,
-  });
-  const userProfile = profileRows[0];
-  const welcomeName =
-    textValue(userProfile?.display_name) ||
-    textValue(userProfile?.profile_name) ||
-    textValue(userProfile?.first_name) ||
-    textValue(user?.first_name) ||
-    textValue(user?.full_name) ||
-    "Manager";
-  const profileName = textValue(userProfile?.profile_name) || welcomeName;
-  const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
-  const canCreateLeagues = entitlements.canCreateFreeLeague || entitlements.canCreatePaidLeague;
-  const userButtonStyle = userProfile ? {
-    backgroundColor: userProfile.theme_primary || "#00D9FF",
-    color: userProfile.theme_secondary || "#000000",
-    "--neo-shadow-color": userProfile.theme_secondary || "#000000",
-  } : {
-    backgroundColor: "#00D9FF",
-    color: "#000000",
-    "--neo-shadow-color": "#000000",
-  };
 
   // Group leagues by role and add commissioner status
   const leaguesWithRoles = myLeagues.map(league => {
