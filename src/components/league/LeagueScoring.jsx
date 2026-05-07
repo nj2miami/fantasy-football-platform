@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { appClient, DEFAULT_SCORING_RULES } from "@/api/appClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -156,11 +156,20 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   });
   const commissionerRole = String(commissionerProfiles[0]?.role || "").toLowerCase();
   const overrideEligible = String(league.league_tier || "").toUpperCase() === "PAID" || commissionerRole === "premium" || commissionerRole === "admin";
+  const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
+  const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
+  const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
+  const adminDefaultsOutOfSync = !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
+    !syncedAt ||
+    (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
+  );
+  const storedRules = useMemo(() => mergeRules(DEFAULT_SCORING_RULES, league.scoring_rules), [league.scoring_rules]);
+  const activeDefaultRules = useMemo(() => mergeRules(defaultRules, {}), [defaultRules]);
+  const shouldDisplayStoredRules = isLocked || (overridesEnabled && overrideEligible) || adminDefaultsOutOfSync;
 
   useEffect(() => {
-    const useLeagueRules = isLocked || (overridesEnabled && overrideEligible);
-    setScoringRules(useLeagueRules ? mergeRules(defaultRules, league.scoring_rules) : mergeRules(defaultRules, {}));
-  }, [defaultRules, isLocked, league.scoring_rules, overrideEligible, overridesEnabled]);
+    setScoringRules(shouldDisplayStoredRules ? storedRules : activeDefaultRules);
+  }, [activeDefaultRules, shouldDisplayStoredRules, storedRules]);
 
   const handleRuleChange = (category, rule, value) => {
     setScoringRules((prev) => ({
@@ -252,13 +261,6 @@ export default function LeagueScoring({ league, setupLocked = false }) {
   }
 
   const canEditOverrides = overrideEligible && overridesEnabled && !isLocked && !setupLocked;
-  const adminUpdatedAt = defaultRulesContext.sourceUpdatedAt || null;
-  const syncedAt = localScoringSyncedAt || league.scoring_rules_source_updated_at || null;
-  const leagueSyncedAt = localScoringSyncedAt || league.scoring_rules_synced_at || null;
-  const adminDefaultsOutOfSync = !isLocked && !overridesEnabled && Boolean(adminUpdatedAt) && (
-    !syncedAt ||
-    (adminUpdatedAt && new Date(adminUpdatedAt).getTime() > new Date(syncedAt).getTime())
-  );
   const leagueOverrideOutOfSync = !isLocked && overridesEnabled && !leagueSyncedAt;
   const draftPoolRefreshNeeded = poolRefreshNotice || adminDefaultsOutOfSync || leagueOverrideOutOfSync;
   const showPoolSyncConfirmation = Boolean(poolSyncConfirmation) && !draftPoolRefreshNeeded;
@@ -333,7 +335,7 @@ export default function LeagueScoring({ league, setupLocked = false }) {
         />
       </div>
 
-      {adminLeagueDifferences.length > 0 && !isLocked && (
+      {adminLeagueDifferences.length > 0 && draftPoolRefreshNeeded && !isLocked && (
         <div className="neo-border bg-white p-4">
           <p className="text-sm font-black uppercase">Admin vs League Stored Values</p>
           <p className="mt-1 text-xs font-bold text-gray-600">
