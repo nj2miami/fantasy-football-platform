@@ -82,20 +82,20 @@ function stableContentHash(value) {
 
 async function adminSeasonScoringRules(sourceSeasonYear) {
   const seasonYear = Number(sourceSeasonYear || new Date().getFullYear() - 1);
+  const seasonRules = await entities.SeasonScoringRule.filter({ season_year: seasonYear });
+  if (seasonRules[0]?.rules) {
+    return {
+      rules: mergeScoringRules(seasonRules[0].rules),
+      sourceUpdatedAt: seasonRules[0].updated_date || seasonRules[0].created_date || null,
+      source: "season_default",
+    };
+  }
   const globalSettings = await entities.Global.filter({ key: "SCORING_RULES" });
   if (globalSettings[0]?.value) {
     return {
       rules: mergeScoringRules(globalSettings[0].value),
       sourceUpdatedAt: globalSettings[0].updated_date || globalSettings[0].created_date || null,
       source: "global_default",
-    };
-  }
-  const seasonRules = await entities.SeasonScoringRule.filter({ season_year: seasonYear });
-  if (seasonRules[0]?.rules) {
-    return {
-      rules: mergeScoringRules(seasonRules[0].rules),
-      sourceUpdatedAt: seasonRules[0].updated_date || seasonRules[0].created_date || null,
-      source: "season_fallback",
     };
   }
   return { rules: mergeScoringRules(DEFAULT_SCORING_RULES), sourceUpdatedAt: null, source: "code_default" };
