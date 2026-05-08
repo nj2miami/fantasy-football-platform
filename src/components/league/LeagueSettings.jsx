@@ -295,8 +295,24 @@ export default function LeagueSettings({ league, setupLocked = false }) {
             </Select>
           </div>
           <div>
-            <Label className="mb-2 block text-sm font-black uppercase">Durability</Label>
-            <Select value={formData.durability_mode} onValueChange={(value) => setFormData({ ...formData, durability_mode: value })} disabled={setupLocked}>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <Label className="block text-sm font-black uppercase">Durability System</Label>
+                <p className="mt-1 text-xs font-bold text-gray-600">
+                  Players can lose durability and receive score reductions from that durability.
+                </p>
+              </div>
+              <Switch
+                checked={formData.durability_mode !== "off"}
+                onCheckedChange={(checked) => setFormData({
+                  ...formData,
+                  durability_mode: checked ? DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode : "off",
+                })}
+                disabled={setupLocked}
+                className="data-[state=checked]:bg-black"
+              />
+            </div>
+            <Select value={formData.durability_mode} onValueChange={(value) => setFormData({ ...formData, durability_mode: value })} disabled={setupLocked || formData.durability_mode === "off"}>
               <SelectTrigger className="neo-border font-bold"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="hidden_until_drafted">On - Hidden Until Drafted</SelectItem>
@@ -311,7 +327,7 @@ export default function LeagueSettings({ league, setupLocked = false }) {
       <div className="neo-border bg-gray-50 p-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <Label className="block text-sm font-black uppercase">Manager Points</Label>
+            <Label className="block text-sm font-black uppercase">Manager Points System</Label>
             <p className="mt-1 text-xs font-bold text-gray-600">
               Configure the points bank and available manager skills. Spending actions will be implemented separately.
             </p>

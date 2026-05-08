@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Trophy } from "lucide-react";
 import { toast } from "sonner";
-import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_ROSTER_RULES } from "@/api/appClient";
+import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_LEAGUE_VISIBILITY_CONFIG, DEFAULT_ROSTER_RULES } from "@/api/appClient";
 import { LeaguePlayFields } from "@/components/league/LeagueConfigFields";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
@@ -83,6 +83,9 @@ export default function CreateLeague() {
     scoring_rules: {},
     scoring_overrides_enabled: false,
     lock_scoring_rules: false,
+    durability_mode: DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode,
+    manager_points_enabled: false,
+    manager_points_starting: 0,
     draft_config: DEFAULT_DRAFT_CONFIG,
   });
 
@@ -291,13 +294,18 @@ export default function CreateLeague() {
         Back
       </Button>
 
-      <header className="mb-8 border-b-4 border-black pb-5">
-        <p className="text-sm font-black uppercase text-orange-600">League Setup</p>
-        <h1 className="mt-1 text-4xl font-black uppercase text-black">Create League</h1>
-        <p className="mt-2 max-w-3xl text-base font-bold text-gray-700">
-          Set the required league details first, then tune draft, scoring, and schedule rules.
-        </p>
-      </header>
+      <div className="neo-card bg-black text-white p-8 mb-8 rotate-[0.5deg]">
+        <div className="rotate-[-0.5deg] flex items-center gap-4">
+          <Trophy className="h-12 w-12 flex-shrink-0 text-[#F7B801]" />
+          <div>
+            <p className="mb-1 text-sm font-black uppercase text-[#F7B801]">League Setup</p>
+            <h1 className="text-4xl font-black uppercase text-orange-600">Create League</h1>
+            <p className="mt-2 max-w-3xl text-lg font-bold text-white">
+              Set the required league details first, then tune draft, scoring, and schedule rules.
+            </p>
+          </div>
+        </div>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-10">
         <FormSection title="League Basics" description="These are the visible setup choices managers need to understand before joining.">
@@ -485,18 +493,55 @@ export default function CreateLeague() {
             />
           </div>
 
-          <div className="mt-5 flex items-center justify-between gap-4 border-l-4 border-black pl-4">
-            <div>
-              <Label className="text-sm font-black uppercase block mb-1">Lock Scoring Rules Now</Label>
-              <p className="text-xs font-bold text-black/70">
-                Freeze the current admin season defaults immediately instead of waiting for draft start.
-              </p>
+          <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">
+            <div className="flex items-center justify-between gap-4 border-l-4 border-black pl-4">
+              <div>
+                <Label className="text-sm font-black uppercase block mb-1">Durability System</Label>
+                <p className="text-xs font-bold text-black/70">
+                  Players can lose durability and take score reductions from that durability.
+                </p>
+              </div>
+              <Switch
+                checked={formData.durability_mode !== "off"}
+                onCheckedChange={(checked) => setFormData({
+                  ...formData,
+                  durability_mode: checked ? DEFAULT_LEAGUE_VISIBILITY_CONFIG.durability_mode : "off",
+                })}
+                className="data-[state=checked]:bg-black"
+              />
             </div>
-            <Switch
-              checked={formData.lock_scoring_rules}
-              onCheckedChange={(checked) => setFormData({ ...formData, lock_scoring_rules: checked })}
-              className="data-[state=checked]:bg-black"
-            />
+
+            <div className="flex items-center justify-between gap-4 border-l-4 border-black pl-4">
+              <div>
+                <Label className="text-sm font-black uppercase block mb-1">Manager Points System</Label>
+                <p className="text-xs font-bold text-black/70">
+                  Enables the manager points bank for league actions.
+                </p>
+              </div>
+              <Switch
+                checked={formData.manager_points_enabled}
+                onCheckedChange={(checked) => setFormData({
+                  ...formData,
+                  manager_points_enabled: checked,
+                  manager_points_starting: checked ? Math.max(1, Number(formData.manager_points_starting || 1)) : 0,
+                })}
+                className="data-[state=checked]:bg-black"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-l-4 border-black pl-4">
+              <div>
+                <Label className="text-sm font-black uppercase block mb-1">Lock Scoring Rules Now</Label>
+                <p className="text-xs font-bold text-black/70">
+                  Freeze admin season defaults immediately instead of waiting for draft start.
+                </p>
+              </div>
+              <Switch
+                checked={formData.lock_scoring_rules}
+                onCheckedChange={(checked) => setFormData({ ...formData, lock_scoring_rules: checked })}
+                className="data-[state=checked]:bg-black"
+              />
+            </div>
           </div>
         </FormSection>
 
