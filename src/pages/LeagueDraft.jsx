@@ -74,6 +74,9 @@ function memberName(member) {
 
 function getPickRemaining(room, nowMs) {
   if (!room) return 60;
+  if (room.state?.draft_paused === true) {
+    return Math.max(0, Number(room.state?.paused_remaining_seconds || 0));
+  }
   const timerSeconds = Number(room.timer_seconds || room.state?.timer_seconds || 60);
   const startedAt = room.state?.pick_started_at || room.pick_started_at || room.updated_date || room.created_date;
   if (!startedAt) return timerSeconds;
@@ -364,11 +367,12 @@ export default function LeagueDraft() {
   const seasonYear = Number(state?.league?.source_season_year || new Date().getFullYear() - 1);
   const draftRoomState = state?.room?.state || {};
   const draftCheckIn = draftRoomState.check_in || {};
+  const draftPaused = draftRoomState.draft_paused === true;
   const checkedInCount = (state?.members || []).filter((member) => memberIsCheckedIn(draftCheckIn, member.id)).length;
   const allManagersCheckedIn = Boolean(state?.members?.length) && checkedInCount === state.members.length;
   const canStart = isCommissioner && allManagersCheckedIn && !isOpen && !isCompleted;
   const currentTurnMember = state?.members?.find((member) => member.id === state?.currentTurn?.league_member_id);
-  const isMyTurn = isOpen && currentMember?.id && currentMember.id === state?.currentTurn?.league_member_id;
+  const isMyTurn = isOpen && !draftPaused && currentMember?.id && currentMember.id === state?.currentTurn?.league_member_id;
   const draftDayCountdown = draftCheckIn.active ? formatMinuteCountdown(draftCheckIn.ends_at, nowMs) : formatCountdown(state?.draft?.start, nowMs);
   const countdown = isOpen ? "Live" : isCompleted ? "Complete" : draftDayCountdown;
   const pickRemaining = getPickRemaining(state?.room, nowMs);
@@ -412,20 +416,20 @@ export default function LeagueDraft() {
   const draftPoolIsRunning = currentDraftPoolStatus === "RUNNING" || currentDraftPoolStatus === "PENDING";
 
   React.useEffect(() => {
-    if (!isOpen || !draftId) return undefined;
+    if (!isOpen || draftPaused || !draftId) return undefined;
     const timer = window.setInterval(() => {
       appClient.functions.invoke("process_draft_timer", { draft_id: draftId }).then(invalidate).catch(() => {});
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [draftId, invalidate, isOpen]);
+  }, [draftId, draftPaused, invalidate, isOpen]);
 
   React.useEffect(() => {
-    if (!isOpen || !draftId || pickRemaining > 0) return;
+    if (!isOpen || draftPaused || !draftId || pickRemaining > 0) return;
     const pickKey = `${draftId}:${state?.room?.current_pick || 1}`;
     if (expiredPickRef.current === pickKey) return;
     expiredPickRef.current = pickKey;
     appClient.functions.invoke("process_draft_timer", { draft_id: draftId }).then(invalidate).catch(() => {});
-  }, [draftId, invalidate, isOpen, pickRemaining, state?.room?.current_pick]);
+  }, [draftId, draftPaused, invalidate, isOpen, pickRemaining, state?.room?.current_pick]);
 
   const startMutation = useMutation({
     mutationFn: () => appClient.functions.invoke("start_draft", { league_id: leagueId, draft_id: draftId }),
@@ -607,6 +611,28 @@ export default function LeagueDraft() {
     checkInMutation.mutate({ action: "start", duration_minutes: checkInMinutes });
   };
 
+  const runPrimaryDraftAction = () => {
+    if (isOpen) {
+      checkInMutation.mutate({ action: draftPaused ? "continue" : "pause" });
+      return;
+    }
+    if (allManagersCheckedIn) {
+      startMutation.mutate();
+      return;
+    }
+    startCheckIn();
+  };
+
+  const primaryDraftLabel = isOpen
+    ? draftPaused ? "Continue Draft" : "Pause Draft"
+    : allManagersCheckedIn ? "Start Draft" : "Start Check In";
+  const primaryDraftIcon = isOpen ? draftPaused ? Play : Timer : allManagersCheckedIn ? Play : Timer;
+  const PrimaryDraftIcon = primaryDraftIcon;
+  const primaryDraftDisabled = isCompleted ||
+    checkInMutation.isPending ||
+    startMutation.isPending ||
+    (!isOpen && allManagersCheckedIn && (draftPoolNeedsPreparation || prepareDraftPoolMutation.isPending));
+
   const checkInMyTeam = () => {
     checkInMutation.mutate({ action: "check_in" });
   };
@@ -655,15 +681,12 @@ export default function LeagueDraft() {
                 onChange={(event) => setCheckInMinutes(event.target.value)}
                 className="neo-border h-11 w-24 bg-white font-black text-black"
               />
-              <Button onClick={startCheckIn} disabled={checkInMutation.isPending || isOpen || isCompleted} className="neo-btn bg-white text-black">
-                <Timer className="mr-2 h-5 w-5" />Check In
-              </Button>
             </div>
             <Button onClick={testDraftDaySound} disabled={checkInMutation.isPending} className="neo-btn bg-[#00D9FF] text-black">
               <Volume2 className="mr-2 h-5 w-5" />Test Sound
             </Button>
-            <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending || draftPoolNeedsPreparation || prepareDraftPoolMutation.isPending} className="neo-btn bg-[#F7B801] text-black">
-              <Play className="mr-2 h-5 w-5" />Start Draft
+            <Button onClick={runPrimaryDraftAction} disabled={primaryDraftDisabled || (!isOpen && allManagersCheckedIn && !canStart)} className="neo-btn bg-[#F7B801] text-black">
+              <PrimaryDraftIcon className="mr-2 h-5 w-5" />{primaryDraftLabel}
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -723,7 +746,7 @@ export default function LeagueDraft() {
             {isOpen ? (
               <>
                 <p className="text-xs font-black uppercase text-gray-500">On The Clock</p>
-                <p className="mt-1 truncate text-2xl font-black uppercase">{isMyTurn ? "DRAFT NOW" : memberName(currentTurnMember) || "Waiting"}</p>
+                <p className="mt-1 truncate text-2xl font-black uppercase">{draftPaused ? "Paused" : isMyTurn ? "DRAFT NOW" : memberName(currentTurnMember) || "Waiting"}</p>
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <div className="neo-border bg-gray-50 p-2">
                     <p className="text-xs font-black uppercase text-gray-500">Pick</p>
