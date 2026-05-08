@@ -85,7 +85,6 @@ export default function LeagueSettings({ league, setupLocked = false }) {
     manager_points_enabled: league.manager_points_enabled === true,
     manager_points_starting: Number(league.manager_points_starting || 0),
     manager_point_actions: actionConfig(league.manager_point_actions),
-    commissioner_message_of_day: league.commissioner_message_of_day || "",
     league_rule_notes: league.league_rule_notes || {},
   });
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -234,17 +233,7 @@ export default function LeagueSettings({ league, setupLocked = false }) {
 
       <div className="neo-border bg-[#FFF7D6] p-6">
         <h4 className="mb-4 text-xl font-black uppercase">Commissioner Notes</h4>
-        <div>
-          <Label className="mb-2 block text-sm font-black uppercase">League Message</Label>
-          <Textarea
-            value={formData.commissioner_message_of_day}
-            onChange={(event) => setFormData({ ...formData, commissioner_message_of_day: event.target.value })}
-            disabled={setupLocked}
-            className="neo-border min-h-32 font-bold"
-            placeholder="Add the current commissioner message shown on the league hub."
-          />
-        </div>
-        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {RULE_NOTE_FIELDS.map((rule) => (
             <div key={rule.key} className="neo-border bg-white p-4">
               <Label className="mb-2 block text-sm font-black uppercase">{rule.label}</Label>

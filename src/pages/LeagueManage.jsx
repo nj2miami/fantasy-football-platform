@@ -6,13 +6,14 @@ import { useLocation, useNavigate, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Trophy, Settings, Users, PenSquare, BarChart, Eye, Grid, Bot, ShieldAlert, Trash2 } from "lucide-react";
+import { ArrowLeft, Trophy, Settings, Users, PenSquare, BarChart, Eye, Grid, Bot, ShieldAlert, Trash2, Megaphone } from "lucide-react";
 import LeagueSettings from "../components/league/LeagueSettings";
 import LeagueScoring from "../components/league/LeagueScoring";
 import LeagueMembers from "../components/league/LeagueMembers";
 import LeagueDraftSettings from "../components/league/LeagueDraftSettings";
 import LeagueRosterSettings from "../components/league/LeagueRosterSettings";
 import LeagueAITeams from "../components/league/LeagueAITeams";
+import LeagueCommunications from "../components/league/LeagueCommunications";
 
 export default function LeagueManage() {
   const location = useLocation();
@@ -21,9 +22,10 @@ export default function LeagueManage() {
   const searchParams = new URLSearchParams(location.search);
   const leagueId = searchParams.get("id");
   const asAdmin = searchParams.get("asAdmin") === 'true';
+  const requestedTab = searchParams.get("tab");
 
   const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState("settings");
+  const [activeTab, setActiveTab] = useState(requestedTab || "settings");
   const [isLoading, setIsLoading] = useState(true); // Added isLoading state
 
   useEffect(() => {
@@ -156,6 +158,7 @@ export default function LeagueManage() {
     { id: 'roster', label: 'Roster', icon: Grid },
     { id: 'draft', label: 'Draft', icon: PenSquare },
     { id: 'members', label: 'Members', icon: Users },
+    { id: 'communications', label: 'Communications', icon: Megaphone },
     { id: 'ai_teams', label: 'AI Teams', icon: Bot },
   ];
   
@@ -233,6 +236,7 @@ export default function LeagueManage() {
         {activeTab === 'members' && <LeagueMembers league={league} setupLocked={setupLocked} />}
         {activeTab === 'draft' && <LeagueDraftSettings league={league} setupLocked={setupLocked} />}
         {activeTab === 'ai_teams' && <LeagueAITeams league={league} setupLocked={setupLocked} />}
+        {activeTab === 'communications' && <LeagueCommunications league={league} members={members} />}
       </div>
     </div>
   );
