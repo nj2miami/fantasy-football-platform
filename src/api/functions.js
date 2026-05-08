@@ -29,6 +29,7 @@ export const scheduleDraft = (payload) => appClient.functions.invoke("schedule_d
 export const startDraft = (payload) => appClient.functions.invoke("start_draft", payload);
 export const submitDraftPick = (payload) => appClient.functions.invoke("submit_draft_pick", payload);
 export const processDraftTimer = (payload) => appClient.functions.invoke("process_draft_timer", payload);
+export const generateDraftRecap = (payload) => appClient.functions.invoke("generate_draft_recap", payload);
 export const submitPick = (payload) => appClient.functions.invoke("submit_pick", payload);
 export const finalizeLineup = (payload) => appClient.functions.invoke("finalize_lineup", payload);
 export const resolveWeek = (payload) => appClient.functions.invoke("resolve_week", payload);

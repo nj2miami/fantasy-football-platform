@@ -3126,6 +3126,32 @@ async function resetDraft(supabase: ReturnType<typeof createClient>, user: { id:
   const { error: roomsDeleteError } = await supabase.from("draft_rooms").delete().eq("draft_id", draft.id);
   if (roomsDeleteError) throw roomsDeleteError;
 
+  const { data: recapItems, error: recapFetchError } = await supabase
+    .from("league_news_items")
+    .select("id,storage_bucket,storage_path")
+    .eq("source_draft_id", draft.id)
+    .eq("news_type", "AI_DRAFT_RECAP");
+  if (recapFetchError) throw recapFetchError;
+  const recapItemsByBucket = (recapItems || []).reduce((groups: Record<string, string[]>, item: Json) => {
+    const bucket = String(item.storage_bucket || "");
+    const path = String(item.storage_path || "");
+    if (!bucket || !path) return groups;
+    groups[bucket] = [...(groups[bucket] || []), path];
+    return groups;
+  }, {});
+  for (const [bucket, paths] of Object.entries(recapItemsByBucket)) {
+    const { error: storageRemoveError } = await supabase.storage.from(bucket).remove(paths);
+    if (storageRemoveError) throw storageRemoveError;
+  }
+  if ((recapItems || []).length) {
+    const { error: recapDeleteError } = await supabase
+      .from("league_news_items")
+      .delete()
+      .eq("source_draft_id", draft.id)
+      .eq("news_type", "AI_DRAFT_RECAP");
+    if (recapDeleteError) throw recapDeleteError;
+  }
+
   if (league.scoring_rules_lock_source === "draft_start") {
     const { error: leagueUpdateError } = await supabase
       .from("leagues")
@@ -3153,6 +3179,7 @@ async function resetDraft(supabase: ReturnType<typeof createClient>, user: { id:
   return {
     draft: updatedDraft,
     removed_picks: (picks || []).length,
+    removed_recaps: (recapItems || []).length,
     reset: true,
   };
 }

@@ -371,7 +371,7 @@ function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId })
           <article key={item.id} className="neo-border bg-white p-4">
             <p className="text-xs font-black uppercase text-gray-500">{formatDate(item.published_at || item.created_date)}</p>
             <h2 className="mt-1 text-xl font-black uppercase text-orange-600">{item.title}</h2>
-            <p className="mt-2 font-bold text-gray-700">{item.body}</p>
+            <p className="mt-2 whitespace-pre-wrap font-bold text-gray-700">{item.body}</p>
           </article>
         ))}
       </div>

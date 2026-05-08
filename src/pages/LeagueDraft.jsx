@@ -13,6 +13,7 @@ import {
   Trophy,
   User,
   Check,
+  Newspaper,
   UserCheck,
   Volume2,
 } from "lucide-react";
@@ -246,6 +247,11 @@ function playerTeamText(player) {
   return player?.team || "FA";
 }
 
+function draftPickLabel(player) {
+  if (!player) return "Pending";
+  return `${playerName(player)} (T${Number(player.tier_value || 1)})`;
+}
+
 function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted }) {
   const nameClass = "block max-w-full truncate text-left text-sm font-black uppercase sm:text-base";
   return (
@@ -410,6 +416,18 @@ export default function LeagueDraft() {
     refetchInterval: isOpen ? 10000 : false,
   });
 
+  const { data: draftRecapItems = [] } = useQuery({
+    queryKey: ["draft-recap-news", leagueId, draftId],
+    queryFn: () => appClient.entities.LeagueNewsItem.filter({
+      league_id: leagueId,
+      source_draft_id: draftId,
+      news_type: "AI_DRAFT_RECAP",
+      status: "PUBLISHED",
+    }, "-published_at"),
+    enabled: !!leagueId && !!draftId && isCompleted,
+  });
+  const draftRecap = draftRecapItems[0] || null;
+
   const draftPoolNeedsPreparation = Boolean(eligibleResult.draftPoolStatus?.needsPreparation || state?.draftPoolStatus?.needsPreparation);
   const currentDraftPoolPreparation = draftPoolProgress || eligibleResult.preparation || state?.draftPoolJob || null;
   const currentDraftPoolStatus = String(currentDraftPoolPreparation?.status || "").toUpperCase();
@@ -456,6 +474,17 @@ export default function LeagueDraft() {
       invalidate();
     },
     onError: (error) => toast.error(error.message || "Failed to reset draft."),
+  });
+
+  const generateDraftRecapMutation = useMutation({
+    mutationFn: () => appClient.functions.generateDraftRecap({ league_id: leagueId, draft_id: draftId }),
+    onSuccess: (result) => {
+      toast.success(result?.regenerated ? "Draft Recap regenerated." : "Draft Recap published.");
+      queryClient.invalidateQueries({ queryKey: ["draft-recap-news", leagueId, draftId] });
+      queryClient.invalidateQueries({ queryKey: ["league-news", leagueId] });
+      queryClient.invalidateQueries({ queryKey: ["league-communications-news", leagueId] });
+    },
+    onError: (error) => toast.error(error.message || "Failed to generate Draft Recap."),
   });
 
   const prepareDraftPoolMutation = useMutation({
@@ -688,6 +717,16 @@ export default function LeagueDraft() {
             <Button onClick={runPrimaryDraftAction} disabled={primaryDraftDisabled || (!isOpen && allManagersCheckedIn && !canStart)} className="neo-btn bg-[#F7B801] text-black">
               <PrimaryDraftIcon className="mr-2 h-5 w-5" />{primaryDraftLabel}
             </Button>
+            {isCompleted && (
+              <Button
+                onClick={() => generateDraftRecapMutation.mutate()}
+                disabled={generateDraftRecapMutation.isPending || !draftId}
+                className="neo-btn bg-[#D7F8E8] text-black"
+              >
+                <Newspaper className="mr-2 h-5 w-5" />
+                {generateDraftRecapMutation.isPending ? "Generating Recap" : draftRecap ? "Regenerate Draft Recap" : "Generate Draft Recap"}
+              </Button>
+            )}
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button disabled={resetDraftMutation.isPending || !draftId} className="neo-btn bg-red-600 text-white">
@@ -795,7 +834,17 @@ export default function LeagueDraft() {
               <div key={turn?.id || member?.id || index} className={`neo-border w-52 flex-none p-2 text-xs ${isCurrent ? "bg-[#F7B801]" : pick || checkInStatus === "CHECKED_IN" ? "bg-[#D7F8E8]" : checkInStatus === "FORCED" ? "bg-orange-100" : "bg-gray-50"}`}>
                 <p className="font-black uppercase">{turn ? `#${turn.overall_pick} R${turn.round}` : `Team ${index + 1}`}</p>
                 <p className="truncate font-black">{memberName(member)}</p>
-                <p className="truncate font-bold text-gray-600">{pick ? playerName(pick.player) : turn ? "Pending" : "Registered"}</p>
+                {pick?.player ? (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPlayer(pick.player)}
+                    className="block max-w-full truncate text-left font-bold text-[#00A6D6] underline decoration-2 underline-offset-2"
+                  >
+                    {draftPickLabel(pick.player)}
+                  </button>
+                ) : (
+                  <p className="truncate font-bold text-gray-600">{turn ? "Pending" : "Registered"}</p>
+                )}
                 {!turn && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {checkInStatus === "CHECKED_IN" && <span className="neo-border bg-[#D7F8E8] px-2 py-1 font-black uppercase text-black">Checked In</span>}
