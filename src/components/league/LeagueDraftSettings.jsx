@@ -36,6 +36,10 @@ export default function LeagueDraftSettings({ league, setupLocked = false }) {
     queryKey: ["league-drafts", league.id],
     queryFn: () => appClient.entities.Draft.filter({ league_id: league.id }, "-created_date"),
   });
+  const { data: availableSourceSeasonYears = [] } = useQuery({
+    queryKey: ["available-source-season-years"],
+    queryFn: () => appClient.playerStats.availableSourceSeasonYears(),
+  });
 
   const activeSeason = seasons[0];
   const currentWeekNumber = activeSeason?.current_week || 1;
@@ -67,6 +71,7 @@ export default function LeagueDraftSettings({ league, setupLocked = false }) {
       mode: playSettings.draft_mode === "weekly_redraft" ? "weekly_redraft" : "traditional",
       draft_mode: playSettings.draft_mode,
       player_retention_mode: playSettings.draft_mode === "weekly_redraft" ? "retained" : playSettings.player_retention_mode,
+      player_retention_limit: playSettings.draft_mode === "weekly_redraft" ? null : Number(playSettings.player_retention_limit || 2),
       schedule_type: playSettings.schedule_type,
       ranking_system: playSettings.ranking_system,
       advancement_mode: playSettings.advancement_mode,
@@ -216,6 +221,7 @@ export default function LeagueDraftSettings({ league, setupLocked = false }) {
             onDraftConfigChange={setDraftConfig}
             sourceSeasonYear={sourceSeasonYear}
             onSourceSeasonYearChange={setSourceSeasonYear}
+            sourceSeasonYears={availableSourceSeasonYears}
             teamTierCap={teamTierCap}
             onTeamTierCapChange={setTeamTierCap}
             disabled={setupFieldsLocked}

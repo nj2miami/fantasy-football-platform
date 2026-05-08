@@ -127,14 +127,21 @@ export default function CreateLeague() {
     enabled: !!user,
   });
 
+  const { data: availableSourceSeasonYears = [] } = useQuery({
+    queryKey: ["available-source-season-years"],
+    queryFn: () => appClient.playerStats.availableSourceSeasonYears(),
+    enabled: !!user,
+  });
+
   useEffect(() => {
     const calendarFallbackYear = new Date().getFullYear() - 1;
-    if (!latestSourceSeasonYear || formData.source_season_year !== calendarFallbackYear) return;
+    const preferredYear = availableSourceSeasonYears[0] || latestSourceSeasonYear;
+    if (!preferredYear || formData.source_season_year !== calendarFallbackYear) return;
     setFormData((current) => ({
       ...current,
-      source_season_year: latestSourceSeasonYear,
+      source_season_year: preferredYear,
     }));
-  }, [formData.source_season_year, latestSourceSeasonYear]);
+  }, [availableSourceSeasonYears, formData.source_season_year, latestSourceSeasonYear]);
 
   const activeLeagues = listValue(allLeagues).filter((league) => !league.archived_at);
   const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
@@ -372,12 +379,28 @@ export default function CreateLeague() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="neo-border p-4 bg-[#EFFBFF]">
             <Label className="text-sm font-black uppercase mb-2 block">Source Season Year</Label>
-            <Input
-              type="number"
-              value={formData.source_season_year}
-              onChange={(e) => setFormData({ ...formData, source_season_year: parseInt(e.target.value, 10) })}
-              className="neo-border font-bold bg-white"
-            />
+            {availableSourceSeasonYears.length ? (
+              <Select
+                value={String(formData.source_season_year)}
+                onValueChange={(value) => setFormData({ ...formData, source_season_year: Number(value) })}
+              >
+                <SelectTrigger className="neo-border font-bold bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableSourceSeasonYears.map((year) => (
+                    <SelectItem key={year} value={String(year)}>{year}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                type="number"
+                value={formData.source_season_year}
+                onChange={(e) => setFormData({ ...formData, source_season_year: parseInt(e.target.value, 10) })}
+                className="neo-border font-bold bg-white"
+              />
+            )}
             <p className="text-xs font-bold text-gray-600 mt-2">
               v1 uses one completed NFL season as the hidden source pool for the league.
             </p>

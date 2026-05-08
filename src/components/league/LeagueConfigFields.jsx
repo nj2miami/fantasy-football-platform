@@ -65,6 +65,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           draft_mode: draftMode,
           mode: draftMode === "weekly_redraft" ? "weekly_redraft" : "traditional",
           player_retention_mode: draftMode === "weekly_redraft" ? "retained" : value.player_retention_mode,
+          player_retention_limit: draftMode === "weekly_redraft" ? null : Number(value.player_retention_limit || 2),
         })}
         disabled={disabled}
         options={[
@@ -82,7 +83,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
         description={showDescriptions ? (
           value.draft_mode === "season_snake"
             ? "Draft once, then set weekly lineups against hidden randomized historical outcomes."
-            : "Re-draft every week, and each manager can use a player only once during the regular season."
+            : "Re-draft every week from the full player pool."
         ) : null}
         className="neo-border p-4 bg-[#FFF1E8]"
       />}
@@ -95,17 +96,33 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           {
             value: "retained",
             label: compactLabels ? "Retained" : "Retained Rosters",
-            description: "Players stay on the roster unless moved later.",
+            description: "Once drafted, players remain unless manually dropped.",
           },
           {
-            value: "two_use_release",
-            label: "Two-Use Release",
-            description: "A player returns to free agency after two resolved starts.",
+            value: "limited_use",
+            label: "Limited Use",
+            description: "Players return to free agency after a configured number of starts.",
           },
         ]}
-        description={showDescriptions ? "Two-use leagues release a player to free agency after his second resolved start." : null}
+        description={showDescriptions ? (
+          value.draft_mode === "weekly_redraft"
+            ? "Weekly redraft leagues reset the available player pool every week."
+            : "Limited-use season leagues release a player after the configured number of starts by one team."
+        ) : null}
         className="neo-border p-4 bg-white"
       />}
+      {visible.has("player_retention_mode") && value.draft_mode !== "weekly_redraft" && value.player_retention_mode === "limited_use" && (
+        <NumberField
+          label="Use Limit"
+          value={Number(value.player_retention_limit || 2)}
+          min="1"
+          step="1"
+          disabled={disabled}
+          onChange={(playerRetentionLimit) => update({ player_retention_limit: Math.max(1, Number(playerRetentionLimit || 1)) })}
+          description="Number of starts a player can make for one team before automatic release."
+          className="neo-border p-4 bg-[#FFF7D6]"
+        />
+      )}
       {visible.has("schedule_type") && <SelectField
         label="Schedule"
         value={value.schedule_type}
@@ -268,7 +285,7 @@ export function ScheduleConfigFields({ value, onChange, disabled = false, boxed 
   );
 }
 
-export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeasonYear, onSourceSeasonYearChange, teamTierCap, onTeamTierCapChange, disabled = false }) {
+export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeasonYear, onSourceSeasonYearChange, sourceSeasonYears = [], teamTierCap, onTeamTierCapChange, disabled = false }) {
   const updateDraft = (patch) => onDraftConfigChange({ ...draftConfig, ...patch });
   return (
     <>
@@ -292,7 +309,18 @@ export function DraftConfigFields({ draftConfig, onDraftConfigChange, sourceSeas
       />
       <NumberField label="Rounds" min="1" value={draftConfig.rounds} disabled={disabled} onChange={(rounds) => updateDraft({ rounds: rounds || 1 })} description="Total draft rounds before rosters are finalized." />
       <NumberField label="Timer Seconds" min="10" value={draftConfig.timer_seconds} disabled={disabled} onChange={(timerSeconds) => updateDraft({ timer_seconds: timerSeconds || 60 })} description="Seconds each manager has to make a pick." />
-      <NumberField label="Source Year" value={sourceSeasonYear} disabled={disabled} onChange={(year) => onSourceSeasonYearChange(year || sourceSeasonYear)} description="Completed NFL season used as the hidden source pool." />
+      {sourceSeasonYears.length ? (
+        <SelectField
+          label="Source Year"
+          value={String(sourceSeasonYear)}
+          onChange={(year) => onSourceSeasonYearChange(Number(year))}
+          disabled={disabled}
+          options={sourceSeasonYears.map((year) => ({ value: String(year), label: String(year) }))}
+          description="Completed NFL season used as the hidden source pool."
+        />
+      ) : (
+        <NumberField label="Source Year" value={sourceSeasonYear} disabled={disabled} onChange={(year) => onSourceSeasonYearChange(year || sourceSeasonYear)} description="Completed NFL season used as the hidden source pool." />
+      )}
       <NumberField label="Team Tier Cap" min="0" value={teamTierCap} disabled={disabled} onChange={(cap) => onTeamTierCapChange(cap || 0)} description="Maximum combined roster tier value. Use 0 for no cap." />
     </>
   );

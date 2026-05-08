@@ -159,6 +159,7 @@ const DEFAULT_SCHEDULE_CONFIG = {
 const DEFAULT_LEAGUE_PLAY_SETTINGS = {
   draft_mode: "season_snake",
   player_retention_mode: "retained",
+  player_retention_limit: null,
   schedule_type: "head_to_head",
   ranking_system: "standard",
   advancement_mode: "manual",
@@ -173,15 +174,15 @@ const PREMIUM_LEAGUE_LIMIT = 4;
 const PAID_JOIN_FEE_MIN_CENTS = 500;
 const PAID_JOIN_FEE_DEFAULT_MAX_CENTS = 5000;
 const AI_PERSONAS = new Set(["BALANCED", "OFFENSIVE", "DEFENSIVE"]);
-const AI_FIRST_NAMES = [
-  "Blitz", "Redzone", "Iron", "Gridiron", "Goal Line", "Fourth Down", "Two Minute", "Wildcat", "Pigskin", "Audible",
-  "Hail Mary", "End Zone", "Sideline", "Playbook", "Hashmark", "Sunday", "Primetime", "Turbo", "Smashmouth", "Nickel",
-  "Power", "Dynasty", "Rumble", "Rocket", "Phantom", "Thunder", "Victory", "Signal", "Turf", "Helmet",
+const AI_RANDOM_FIRST_NAMES = [
+  "Avery", "Blake", "Casey", "Dakota", "Emerson", "Finley", "Harper", "Jordan", "Kendall", "Logan",
+  "Morgan", "Parker", "Quinn", "Reese", "Riley", "Rowan", "Sawyer", "Skyler", "Taylor", "Terry",
+  "Alex", "Bailey", "Cameron", "Drew", "Elliot", "Hayden", "Jamie", "Micah", "Payton", "Shawn",
 ];
-const AI_LAST_NAMES = [
-  "Bruisers", "Blitzers", "Maulers", "Crushers", "Punishers", "Hit Squad", "Ball Hawks", "Sack Masters", "Chain Movers", "Playmakers",
-  "Road Graders", "Linebackers", "Safeties", "Generals", "Captains", "Warriors", "Gladiators", "Bombers", "Rushers", "Defenders",
-  "Marauders", "Outlaws", "Renegades", "Stampede", "Avalanche", "Cyclones", "Firebirds", "Ironclads", "Night Shift", "Endzones",
+const AI_RANDOM_LAST_NAMES = [
+  "Anderson", "Bennett", "Brooks", "Campbell", "Carter", "Collins", "Cooper", "Davis", "Foster", "Gray",
+  "Hayes", "Henderson", "Jackson", "Johnson", "Kelly", "Lewis", "Marshall", "Miller", "Morgan", "Parker",
+  "Reed", "Robinson", "Russell", "Simmons", "Stewart", "Taylor", "Thompson", "Walker", "Williams", "Young",
 ];
 
 export async function parseRequest(request: Request) {
@@ -364,6 +365,13 @@ function normalizeLeaguePlaySettings(payload: Json | null | undefined) {
   const league = payload || {};
   const managerPointsEnabled = league.manager_points_enabled === true;
   const draftMode = String(league.draft_mode || (league.mode === "weekly_redraft" ? "weekly_redraft" : "season_snake"));
+  const rawRetentionMode = String(league.player_retention_mode || DEFAULT_LEAGUE_PLAY_SETTINGS.player_retention_mode);
+  const playerRetentionMode = draftMode === "weekly_redraft"
+    ? "retained"
+    : rawRetentionMode === "two_use_release"
+      ? "limited_use"
+      : rawRetentionMode;
+  const playerRetentionLimit = playerRetentionMode === "limited_use" ? Math.max(1, Number(league.player_retention_limit || 2)) : null;
   return {
     ...DEFAULT_LEAGUE_VISIBILITY_CONFIG,
     ...DEFAULT_LEAGUE_PLAY_SETTINGS,
@@ -377,6 +385,8 @@ function normalizeLeaguePlaySettings(payload: Json | null | undefined) {
     manager_point_actions: { ...DEFAULT_MANAGER_POINT_ACTIONS, ...((league.manager_point_actions as Json | undefined) || {}) },
     mode: draftMode === "weekly_redraft" ? "weekly_redraft" : "traditional",
     draft_mode: draftMode,
+    player_retention_mode: playerRetentionMode,
+    player_retention_limit: playerRetentionLimit,
     team_tier_cap: Number(league.team_tier_cap ?? DEFAULT_TEAM_TIER_CAP),
     manager_points_starting: managerPointsEnabled ? Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING) : 0,
     schedule_config: { ...DEFAULT_SCHEDULE_CONFIG, ...((league.schedule_config as Json | undefined) || {}) },
@@ -398,6 +408,11 @@ function durabilityEnabled(league: Json) {
 
 function lineupSlotStatus(slot: Json) {
   return String(slot.status || slot.lineup_status || slot.slot_status || slot.role || "active").toLowerCase();
+}
+
+function isStartedLineupSlot(slot: Json) {
+  const status = lineupSlotStatus(slot);
+  return status !== "bench" && status !== "benched" && status !== "treating" && status !== "treatment" && status !== "treated";
 }
 
 function lineupSlotMultiplier(slot: Json) {
@@ -1015,20 +1030,24 @@ async function createMembershipAndStanding(
 
 async function nextAiTeamName(supabase: ReturnType<typeof createClient>, leagueId: unknown) {
   const { data: parts } = await supabase.from("ai_team_name_parts").select("part_type,value");
-  const firsts = (parts || []).filter((part) => part.part_type === "FIRST").map((part) => part.value);
-  const lasts = (parts || []).filter((part) => part.part_type === "LAST").map((part) => part.value);
-  const safeFirsts = firsts.length ? firsts : AI_FIRST_NAMES;
-  const safeLasts = lasts.length ? lasts : AI_LAST_NAMES;
+  const partTypeKey = (value: unknown) => String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  const firsts = (parts || [])
+    .filter((part) => partTypeKey(part.part_type) === "RANDOM_FIRSTNAME" || partTypeKey(part.part_type) === "RANDOM_FIRST_NAME")
+    .map((part) => part.value);
+  const lasts = (parts || [])
+    .filter((part) => partTypeKey(part.part_type) === "RANDOM_LASTNAME" || partTypeKey(part.part_type) === "RANDOM_LAST_NAME")
+    .map((part) => part.value);
+  const safeFirsts = firsts.length ? firsts : AI_RANDOM_FIRST_NAMES;
+  const safeLasts = lasts.length ? lasts : AI_RANDOM_LAST_NAMES;
   const { data: used } = await supabase.from("used_ai_team_names").select("name").eq("league_id", leagueId);
   const usedNames = new Set((used || []).map((row) => row.name));
+  const candidates = safeFirsts.flatMap((first) => safeLasts.map((last) => `${first} ${last}`))
+    .sort(() => Math.random() - 0.5);
 
-  for (const first of safeFirsts) {
-    for (const last of safeLasts) {
-      const name = `${first} ${last}`;
-      if (usedNames.has(name)) continue;
-      const { error } = await supabase.from("used_ai_team_names").insert({ league_id: leagueId, name });
-      if (!error) return name;
-    }
+  for (const name of candidates) {
+    if (usedNames.has(name)) continue;
+    const { error } = await supabase.from("used_ai_team_names").insert({ league_id: leagueId, name });
+    if (!error) return name;
   }
   throw new Error("No unused AI team names remain.");
 }
@@ -1125,6 +1144,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
       mode: playSettings.mode,
       draft_mode: playSettings.draft_mode,
       player_retention_mode: playSettings.player_retention_mode,
+      player_retention_limit: playSettings.player_retention_limit,
       schedule_type: playSettings.schedule_type,
       ranking_system: playSettings.ranking_system,
       advancement_mode: playSettings.advancement_mode,
@@ -1372,7 +1392,11 @@ async function updateAiTeam(supabase: ReturnType<typeof createClient>, user: { i
   await requireLeagueControl(supabase, user, member.league_id);
   await assertLeagueSetupEditable(supabase, member.league_id);
   const update: Json = {};
-  if (payload.team_name) update.team_name = payload.team_name;
+  if (payload.generate_new_name === true) {
+    update.team_name = await nextAiTeamName(supabase, member.league_id);
+  } else if (payload.team_name) {
+    update.team_name = payload.team_name;
+  }
   if (AI_PERSONAS.has(String(payload.ai_persona))) update.ai_persona = payload.ai_persona;
   const { data, error } = await supabase.from("league_members").update({ ...update, updated_date: new Date().toISOString() }).eq("id", member.id).select("*").single();
   if (error) throw error;
@@ -1385,7 +1409,9 @@ async function removeAiTeam(supabase: ReturnType<typeof createClient>, user: { i
   if (!member.is_ai) throw new Error("Only AI teams can be removed here.");
   await requireLeagueControl(supabase, user, member.league_id);
   await assertLeagueSetupEditable(supabase, member.league_id);
-  const { data, error } = await supabase.from("league_members").update({ is_active: false, updated_date: new Date().toISOString() }).eq("id", member.id).select("*").single();
+  const { error: standingError } = await supabase.from("standings").delete().eq("league_member_id", member.id);
+  if (standingError) throw standingError;
+  const { data, error } = await supabase.from("league_members").delete().eq("id", member.id).select("*").single();
   if (error) throw error;
   return { member: data };
 }
@@ -1506,6 +1532,7 @@ async function createOfficialLeague(supabase: ReturnType<typeof createClient>, u
     mode: payload.mode || "traditional",
     draft_mode: payload.draft_mode || "season_snake",
     player_retention_mode: payload.player_retention_mode || "retained",
+    player_retention_limit: payload.player_retention_limit ?? null,
     schedule_type: payload.schedule_type || "head_to_head",
     ranking_system: payload.ranking_system || "standard",
     advancement_mode: payload.advancement_mode || "manual",
@@ -2779,17 +2806,6 @@ async function submitPick(supabase: ReturnType<typeof createClient>, payload: Js
     ? await supabase.from("leagues").select("*").eq("id", leagueId).maybeSingle()
     : { data: null };
   const league = normalizeLeaguePlaySettings(rawLeague);
-  if (leagueId && league.draft_mode === "weekly_redraft") {
-    const { data: used, error: usedError } = await supabase
-      .from("manager_player_usage")
-      .select("id")
-      .eq("league_id", leagueId)
-      .eq("league_member_id", payload.league_member_id)
-      .eq("player_id", payload.player_id)
-      .maybeSingle();
-    if (usedError) throw usedError;
-    if (used) throw new Error("This manager has already used that player this season.");
-  }
   if (leagueId && payload.league_member_id && payload.player_id) {
     const { data: player, error: playerError } = await supabase
       .from("players")
@@ -3043,6 +3059,8 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
               : Math.max(-3, currentDurability - 1);
           durabilityUpdates.set(playerId, nextDurability);
         }
+        const isStarted = isStartedLineupSlot(slot);
+        if (!isStarted) continue;
         const { data: existing, error: existingError } = await supabase
           .from("manager_player_usage")
           .select("*")
@@ -3052,6 +3070,11 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
           .maybeSingle();
         if (existingError) throw existingError;
         const usageCount = Number(existing?.usage_count || 0) + 1;
+        const limitedUseThreshold = league.draft_mode === "season_snake" && league.player_retention_mode === "limited_use"
+          ? Math.max(1, Number(league.player_retention_limit || 2))
+          : 0;
+        const shouldRelease = limitedUseThreshold > 0 && usageCount >= limitedUseThreshold && !existing?.released_at;
+        const releasedAt = shouldRelease ? new Date().toISOString() : existing?.released_at || null;
         const usagePayload = {
           league_id: leagueId,
           league_member_id: lineup.league_member_id,
@@ -3061,6 +3084,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
           first_used_week: existing?.first_used_week || weekNumber,
           last_used_week: weekNumber,
           use_context: isPlayoff ? "playoff" : "regular",
+          released_at: releasedAt,
         };
         if (existing) {
           const { error } = await supabase.from("manager_player_usage").update(usagePayload).eq("id", existing.id);
@@ -3069,13 +3093,12 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
           const { error } = await supabase.from("manager_player_usage").insert(usagePayload);
           if (error) throw error;
         }
-        if (league.player_retention_mode === "two_use_release" && usageCount >= 2 && !existing?.released_at) {
+        if (shouldRelease) {
           await supabase
             .from("roster_slots")
             .delete()
             .eq("league_member_id", lineup.league_member_id)
             .eq("player_id", playerId);
-          if (existing) await supabase.from("manager_player_usage").update({ released_at: new Date().toISOString() }).eq("id", existing.id);
           const { data: release, error: releaseError } = await supabase
             .from("player_release_events")
             .insert({
@@ -3083,8 +3106,8 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
               league_member_id: lineup.league_member_id,
               player_id: playerId,
               week_number: weekNumber,
-              release_reason: "two_use_limit",
-              available_at: new Date().toISOString(),
+              release_reason: "limited_use_limit",
+              available_at: releasedAt,
             })
             .select("*")
             .single();
@@ -3100,6 +3123,36 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
         .eq("league_id", leagueId)
         .eq("player_id", playerId);
       if (error) throw error;
+    }
+    if (releases.length) {
+      const releasePlayerIds = [...new Set(releases.map((release) => String(release.player_id || "")).filter(Boolean))];
+      const { data: releasedPlayers, error: releasedPlayersError } = releasePlayerIds.length
+        ? await supabase
+          .from("players")
+          .select("id,player_display_name,full_name")
+          .in("id", releasePlayerIds)
+        : { data: [], error: null };
+      if (releasedPlayersError) throw releasedPlayersError;
+      const playerById = new Map((releasedPlayers || []).map((player: Json) => [
+        String(player.id),
+        String(player.player_display_name || player.full_name || player.id),
+      ]));
+      const releasesByMember = new Map<string, string[]>();
+      for (const release of releases) {
+        const memberId = String(release.league_member_id || "");
+        const names = releasesByMember.get(memberId) || [];
+        names.push(playerById.get(String(release.player_id || "")) || String(release.player_id || "Player"));
+        releasesByMember.set(memberId, names);
+      }
+      for (const [memberId, playerNames] of releasesByMember.entries()) {
+        const { error: messageError } = await supabase.from("manager_messages").insert({
+          league_id: leagueId,
+          recipient_member_id: memberId,
+          subject: "Players released to free agency",
+          body: `${playerNames.join(", ")} ${playerNames.length === 1 ? "has" : "have"} reached the ${Number(league.player_retention_limit || 2)}-start limited-use threshold and returned to the free agent pool after Week ${weekNumber}.`,
+        });
+        if (messageError) throw messageError;
+      }
     }
   }
 

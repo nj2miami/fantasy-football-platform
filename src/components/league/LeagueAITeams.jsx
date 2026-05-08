@@ -74,17 +74,44 @@ const EditAIDialog = ({ member, league, setupLocked = false }) => {
     const [persona, setPersona] = useState(member.ai_persona);
     const [isOpen, setIsOpen] = useState(false);
 
+    const invalidateAIQueries = () => {
+        queryClient.invalidateQueries({ queryKey: ['league-ai-teams', league.id] });
+        queryClient.invalidateQueries({ queryKey: ['league-manage-members', league.id] });
+        queryClient.invalidateQueries({ queryKey: ['league-members', league.id] });
+    };
+
     const updateAIMutation = useMutation({
         mutationFn: (data) => {
           if (setupLocked) throw new Error("League setup is locked after the draft starts.");
           return appClient.functions.invoke("update_ai_team", { member_id: member.id, ...data });
         },
-        onSuccess: () => {
+        onSuccess: (result) => {
+            if (result?.member?.team_name) setTeamName(result.member.team_name);
+            if (result?.member?.ai_persona) setPersona(result.member.ai_persona);
             toast.success("AI Team updated!");
-            queryClient.invalidateQueries({ queryKey: ['league-ai-teams', league.id] });
+            invalidateAIQueries();
             setIsOpen(false);
         },
-        onError: () => toast.error("Failed to update AI team.")
+        onError: (error) => toast.error(error.message || "Failed to update AI team.")
+    });
+
+    const generateNameMutation = useMutation({
+        mutationFn: () => {
+          if (setupLocked) throw new Error("League setup is locked after the draft starts.");
+          return appClient.functions.invoke("update_ai_team", {
+            member_id: member.id,
+            ai_persona: persona,
+            generate_new_name: true,
+          });
+        },
+        onSuccess: (result) => {
+            const newName = result?.member?.team_name || "";
+            setTeamName(newName);
+            if (result?.member?.ai_persona) setPersona(result.member.ai_persona);
+            toast.success(`Generated ${newName || "a new AI name"}.`);
+            invalidateAIQueries();
+        },
+        onError: (error) => toast.error(error.message || "Failed to generate AI team name.")
     });
 
     return (
@@ -98,6 +125,14 @@ const EditAIDialog = ({ member, league, setupLocked = false }) => {
                     <div>
                         <Label className="font-black uppercase text-sm">Team Name</Label>
                         <Input value={teamName} onChange={(e) => setTeamName(e.target.value)} className="neo-border mt-1" />
+                        <Button
+                            type="button"
+                            onClick={() => generateNameMutation.mutate()}
+                            disabled={generateNameMutation.isPending || updateAIMutation.isPending || setupLocked}
+                            className="neo-btn mt-3 w-full bg-[#00D9FF] text-black"
+                        >
+                            {generateNameMutation.isPending ? "Generating..." : "Generate New Name"}
+                        </Button>
                     </div>
                     <div>
                         <Label className="font-black uppercase text-sm">AI Persona</Label>
@@ -122,6 +157,12 @@ const EditAIDialog = ({ member, league, setupLocked = false }) => {
 const DeleteAIDialog = ({ member, league, setupLocked = false }) => {
     const queryClient = useQueryClient();
     const [isOpen, setIsOpen] = useState(false);
+
+    const invalidateAIQueries = () => {
+        queryClient.invalidateQueries({ queryKey: ['league-ai-teams', league.id] });
+        queryClient.invalidateQueries({ queryKey: ['league-manage-members', league.id] });
+        queryClient.invalidateQueries({ queryKey: ['league-members', league.id] });
+    };
     
     const deleteAIMutation = useMutation({
         mutationFn: () => {
@@ -130,10 +171,10 @@ const DeleteAIDialog = ({ member, league, setupLocked = false }) => {
         },
         onSuccess: () => {
             toast.success("AI Team removed.");
-            queryClient.invalidateQueries({ queryKey: ['league-ai-teams', league.id] });
+            invalidateAIQueries();
             setIsOpen(false);
         },
-        onError: () => toast.error("Failed to remove AI team.")
+        onError: (error) => toast.error(error.message || "Failed to remove AI team.")
     });
 
     return (
@@ -144,7 +185,9 @@ const DeleteAIDialog = ({ member, league, setupLocked = false }) => {
                 <DialogDescription className="font-bold">Are you sure you want to remove {member.team_name}? This cannot be undone.</DialogDescription>
                 <DialogFooter>
                     <DialogClose asChild><Button className="neo-btn bg-gray-200 text-black">Cancel</Button></DialogClose>
-                    <Button onClick={() => deleteAIMutation.mutate()} className="neo-btn bg-red-500 text-white">Confirm</Button>
+                    <Button onClick={() => deleteAIMutation.mutate()} disabled={deleteAIMutation.isPending} className="neo-btn bg-red-500 text-white">
+                        {deleteAIMutation.isPending ? "Removing..." : "Confirm"}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

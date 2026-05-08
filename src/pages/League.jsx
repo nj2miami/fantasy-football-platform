@@ -59,7 +59,7 @@ const RULE_DEFINITIONS = [
   {
     key: "retention",
     label: "Retention",
-    value: (league) => league.player_retention_mode === "two_use_release" ? "Two-use release" : "Retained rosters",
+    value: (league) => league.player_retention_mode === "limited_use" || league.player_retention_mode === "two_use_release" ? `Limited use (${Number(league.player_retention_limit || 2)} starts)` : "Retained rosters",
     description: "Controls whether players stay rostered or return to the free agent board after usage limits.",
   },
   {

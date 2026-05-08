@@ -54,16 +54,14 @@ export function useAvailablePlayers(leagueId, weekNumber, managerId) {
   return useQuery({
     queryKey: ["available-players", leagueId, weekNumber, managerId],
     queryFn: async () => {
-      const [players, usage, leagues, rosters] = await Promise.all([
+      const [players, leagues, rosters] = await Promise.all([
         appClient.entities.Player.list("-avg_points"),
-        appClient.entities.ManagerPlayerUsage.filter({ league_id: leagueId, league_member_id: managerId }),
         appClient.entities.League.filter({ id: leagueId }),
         appClient.entities.Roster.list(),
       ]);
       const league = leagues[0] || {};
       if (league.draft_mode === "weekly_redraft" || league.mode === "weekly_redraft") {
-        const usedIds = new Set(usage.map((item) => item.player_id));
-        return players.filter((player) => !usedIds.has(player.id));
+        return players;
       }
       const leagueMemberIds = new Set((await appClient.entities.LeagueMember.filter({ league_id: leagueId })).map((member) => member.id));
       const rosteredIds = new Set(rosters.filter((slot) => leagueMemberIds.has(slot.league_member_id)).map((slot) => slot.player_id));

@@ -112,6 +112,7 @@ export const DEFAULT_SCHEDULE_CONFIG = {
 export const DEFAULT_LEAGUE_PLAY_SETTINGS = {
   draft_mode: "season_snake",
   player_retention_mode: "retained",
+  player_retention_limit: 2,
   schedule_type: "head_to_head",
   ranking_system: "standard",
   advancement_mode: "manual",

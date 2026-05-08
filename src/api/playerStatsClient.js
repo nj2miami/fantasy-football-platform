@@ -26,6 +26,15 @@ export async function countPlayerWeeks(playerId, seasonYear) {
 }
 
 export const playerStats = {
+  async availableSourceSeasonYears() {
+    const { data, error } = await supabase
+      .from("player_week_stats")
+      .select("season_year")
+      .order("season_year", { ascending: false });
+    if (error) throw mapSupabaseError(error);
+    return [...new Set((data || []).map((row) => Number(row.season_year || 0)).filter(Boolean))]
+      .sort((a, b) => b - a);
+  },
   async latestSourceSeasonYear() {
     const { data, error } = await supabase
       .from("player_week_stats")
