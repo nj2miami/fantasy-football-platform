@@ -174,16 +174,6 @@ const PREMIUM_LEAGUE_LIMIT = 4;
 const PAID_JOIN_FEE_MIN_CENTS = 500;
 const PAID_JOIN_FEE_DEFAULT_MAX_CENTS = 5000;
 const AI_PERSONAS = new Set(["BALANCED", "OFFENSIVE", "DEFENSIVE"]);
-const AI_RANDOM_FIRST_NAMES = [
-  "Avery", "Blake", "Casey", "Dakota", "Emerson", "Finley", "Harper", "Jordan", "Kendall", "Logan",
-  "Morgan", "Parker", "Quinn", "Reese", "Riley", "Rowan", "Sawyer", "Skyler", "Taylor", "Terry",
-  "Alex", "Bailey", "Cameron", "Drew", "Elliot", "Hayden", "Jamie", "Micah", "Payton", "Shawn",
-];
-const AI_RANDOM_LAST_NAMES = [
-  "Anderson", "Bennett", "Brooks", "Campbell", "Carter", "Collins", "Cooper", "Davis", "Foster", "Gray",
-  "Hayes", "Henderson", "Jackson", "Johnson", "Kelly", "Lewis", "Marshall", "Miller", "Morgan", "Parker",
-  "Reed", "Robinson", "Russell", "Simmons", "Stewart", "Taylor", "Thompson", "Walker", "Williams", "Young",
-];
 
 export async function parseRequest(request: Request) {
   try {
@@ -1032,16 +1022,17 @@ async function nextAiTeamName(supabase: ReturnType<typeof createClient>, leagueI
   const { data: parts } = await supabase.from("ai_team_name_parts").select("part_type,value");
   const partTypeKey = (value: unknown) => String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   const firsts = (parts || [])
-    .filter((part) => partTypeKey(part.part_type) === "RANDOM_FIRSTNAME" || partTypeKey(part.part_type) === "RANDOM_FIRST_NAME")
-    .map((part) => part.value);
+    .filter((part) => partTypeKey(part.part_type) === "FIRST")
+    .map((part) => String(part.value || "").trim())
+    .filter(Boolean);
   const lasts = (parts || [])
-    .filter((part) => partTypeKey(part.part_type) === "RANDOM_LASTNAME" || partTypeKey(part.part_type) === "RANDOM_LAST_NAME")
-    .map((part) => part.value);
-  const safeFirsts = firsts.length ? firsts : AI_RANDOM_FIRST_NAMES;
-  const safeLasts = lasts.length ? lasts : AI_RANDOM_LAST_NAMES;
+    .filter((part) => partTypeKey(part.part_type) === "LAST")
+    .map((part) => String(part.value || "").trim())
+    .filter(Boolean);
+  if (!firsts.length || !lasts.length) throw new Error("AI team name parts are not configured.");
   const { data: used } = await supabase.from("used_ai_team_names").select("name").eq("league_id", leagueId);
   const usedNames = new Set((used || []).map((row) => row.name));
-  const candidates = safeFirsts.flatMap((first) => safeLasts.map((last) => `${first} ${last}`))
+  const candidates = firsts.flatMap((first) => lasts.map((last) => `${first} ${last}`))
     .sort(() => Math.random() - 0.5);
 
   for (const name of candidates) {
