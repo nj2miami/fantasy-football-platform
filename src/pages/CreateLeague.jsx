@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Trophy, ArrowLeft, Shuffle, Shield, CalendarRange } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_ROSTER_RULES, DEFAULT_SCORING_RULES } from "@/api/appClient";
-import { LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
+import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS, DEFAULT_ROSTER_RULES } from "@/api/appClient";
+import { LeaguePlayFields } from "@/components/league/LeagueConfigFields";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +49,18 @@ function errorText(error, fallback) {
     if (serializedError && serializedError !== "{}") return serializedError;
   }
   return fallback;
+}
+
+function FormSection({ title, description, children }) {
+  return (
+    <section className="border-t-4 border-black pt-6">
+      <div className="mb-5">
+        <h2 className="text-2xl font-black uppercase text-black">{title}</h2>
+        {description && <p className="mt-1 text-sm font-bold text-gray-600">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
 }
 
 export default function CreateLeague() {
@@ -156,6 +168,13 @@ export default function CreateLeague() {
     ? entitlements.canCreatePaidLeague
     : entitlements.canCreateFreeLeague;
   const teamLimits = leagueTeamLimits(formData.league_tier);
+  const updateScheduleConfig = (patch) => setFormData((current) => ({
+    ...current,
+    schedule_config: {
+      ...current.schedule_config,
+      ...patch,
+    },
+  }));
 
   useEffect(() => {
     if (!entitlements.canCreateFreeLeague && entitlements.canCreatePaidLeague && formData.league_tier !== "PAID") {
@@ -235,24 +254,21 @@ export default function CreateLeague() {
 
   if (isLoadingUser || isLoadingMemberships || isLoadingLeagues || isLoadingFeeSettings) {
     return (
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="neo-card bg-white p-8">
-          <p className="text-lg font-black uppercase text-black">Loading account...</p>
-        </div>
+      <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+        <p className="border-t-4 border-black pt-6 text-lg font-black uppercase text-black">Loading account...</p>
       </div>
     );
   }
 
   if (!canCreateLeagues) {
     return (
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
         <Button onClick={() => navigate(-1)} className="neo-btn bg-white text-black mb-6">
           <ArrowLeft className="w-5 h-5 mr-2" />
           Back
         </Button>
 
-        <div className="neo-card bg-white p-8 text-center">
-          <Shield className="w-16 h-16 mx-auto mb-4 text-[#6A4C93]" />
+        <div className="border-t-4 border-black pt-8 text-center">
           <h1 className="text-4xl font-black uppercase mb-3 text-black">League Limit Reached</h1>
           <p className="text-lg font-bold text-gray-700 mb-6">
             Your current league limit is full. Premium managers can create or join up to 4 leagues.
@@ -269,254 +285,295 @@ export default function CreateLeague() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
       <Button onClick={() => navigate(-1)} className="neo-btn bg-white text-black mb-6">
         <ArrowLeft className="w-5 h-5 mr-2" />
         Back
       </Button>
 
-      <div className="neo-card bg-black text-white p-8 mb-8 rotate-[0.5deg]">
-        <div className="rotate-[-0.5deg] flex items-center gap-4">
-          <Trophy className="w-12 h-12 text-[#F7B801]" />
-          <div>
-            <h1 className="text-orange-600 mb-2 text-4xl font-black uppercase">Create League</h1>
-            <p className="text-lg font-bold text-[#F7B801]">
-              Set up a randomized historical NFL season
-            </p>
-          </div>
-        </div>
-      </div>
+      <header className="mb-8 border-b-4 border-black pb-5">
+        <p className="text-sm font-black uppercase text-orange-600">League Setup</p>
+        <h1 className="mt-1 text-4xl font-black uppercase text-black">Create League</h1>
+        <p className="mt-2 max-w-3xl text-base font-bold text-gray-700">
+          Set the required league details first, then tune draft, scoring, and schedule rules.
+        </p>
+      </header>
 
-      <form onSubmit={handleSubmit} className="neo-card bg-white p-8 space-y-6">
-        <div className="neo-border p-4 bg-[#EFFBFF]">
-          <Label className="text-sm font-black uppercase mb-2 block">League Type</Label>
-          <Select
-            value={formData.league_tier}
-            onValueChange={(value) => {
-              const limits = leagueTeamLimits(value);
-              setFormData({
-                ...formData,
-                league_tier: value,
-                max_members: Math.min(Math.max(formData.max_members, limits.min), limits.max),
-                join_fee_cents: value === "PAID" ? (formData.join_fee_cents || PAID_JOIN_FEE_MIN_CENTS) : 0,
-                join_fee_currency: "usd",
-              });
-            }}
-          >
-            <SelectTrigger className="neo-border font-bold bg-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="FREE" disabled={!entitlements.canCreateFreeLeague}>
-                Free League - 4 to 8 teams
-              </SelectItem>
-              <SelectItem value="PAID" disabled={!entitlements.canCreatePaidLeague}>
-                Paid League - 4 to 16 teams
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs font-bold text-gray-600 mt-2">
-            Paid league creators receive the PREMIUM tag and can create or join up to 4 leagues.
-          </p>
-        </div>
-
-        {formData.league_tier === "PAID" && (
-          <div className="neo-border p-4 bg-[#FFF1E8]">
-            <Label className="text-sm font-black uppercase mb-2 block">Amount to Join *</Label>
-            <div className="flex items-center gap-3">
-              <span className="font-black text-2xl">$</span>
+      <form onSubmit={handleSubmit} className="space-y-10">
+        <FormSection title="League Basics" description="These are the visible setup choices managers need to understand before joining.">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+            <div className="md:col-span-2 lg:col-span-1">
+              <Label className="text-sm font-black uppercase mb-2 block">League Name *</Label>
               <Input
-                type="number"
-                min={centsToDollarInput(PAID_JOIN_FEE_MIN_CENTS)}
-                max={centsToDollarInput(paidFeeMaxCents)}
-                step="0.01"
-                value={centsToDollarInput(formData.join_fee_cents || PAID_JOIN_FEE_MIN_CENTS)}
-                onChange={(e) => setFormData({
-                  ...formData,
-                  join_fee_cents: dollarsToCents(e.target.value),
-                  join_fee_currency: "usd",
-                })}
-                className="neo-border font-bold text-lg bg-white"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="Enter league name..."
+                className="neo-border font-bold text-lg"
                 required
               />
             </div>
-            <p className="text-xs font-bold text-gray-600 mt-2">
-              Paid leagues require ${centsToDollarInput(PAID_JOIN_FEE_MIN_CENTS)}-${centsToDollarInput(paidFeeMaxCents)} to join. Stripe payment collection will be added later.
-            </p>
-          </div>
-        )}
 
-        <div>
-          <Label className="text-sm font-black uppercase mb-2 block">League Name *</Label>
-          <Input
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="Enter league name..."
-            className="neo-border font-bold text-lg"
-            required
-          />
-        </div>
-
-        <div>
-          <Label className="text-sm font-black uppercase mb-2 block">Description</Label>
-          <Textarea
-            value={formData.description}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Describe your league..."
-            className="neo-border font-bold h-32"
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <LeaguePlayFields
-            value={formData}
-            onChange={setFormData}
-            showDescriptions
-            fields={["draft_mode", "player_retention_mode"]}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="neo-border p-4 bg-[#EFFBFF]">
-            <Label className="text-sm font-black uppercase mb-2 block">Source Season Year</Label>
-            {availableSourceSeasonYears.length ? (
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">League Type</Label>
               <Select
-                value={String(formData.source_season_year)}
-                onValueChange={(value) => setFormData({ ...formData, source_season_year: Number(value) })}
+                value={formData.league_tier}
+                onValueChange={(value) => {
+                  const limits = leagueTeamLimits(value);
+                  setFormData({
+                    ...formData,
+                    league_tier: value,
+                    max_members: Math.min(Math.max(formData.max_members, limits.min), limits.max),
+                    join_fee_cents: value === "PAID" ? (formData.join_fee_cents || PAID_JOIN_FEE_MIN_CENTS) : 0,
+                    join_fee_currency: "usd",
+                  });
+                }}
               >
                 <SelectTrigger className="neo-border font-bold bg-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableSourceSeasonYears.map((year) => (
-                    <SelectItem key={year} value={String(year)}>{year}</SelectItem>
-                  ))}
+                  <SelectItem value="FREE" disabled={!entitlements.canCreateFreeLeague}>
+                    Free League - 4 to 8 teams
+                  </SelectItem>
+                  <SelectItem value="PAID" disabled={!entitlements.canCreatePaidLeague}>
+                    Paid League - 4 to 16 teams
+                  </SelectItem>
                 </SelectContent>
               </Select>
-            ) : (
+              <p className="text-xs font-bold text-gray-600 mt-2">
+                Premium managers can create or join up to 4 leagues.
+              </p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Start Date</Label>
               <Input
-                type="number"
-                value={formData.source_season_year}
-                onChange={(e) => setFormData({ ...formData, source_season_year: parseInt(e.target.value, 10) })}
+                type="date"
+                value={formData.schedule_config.start_date || ""}
+                onChange={(e) => updateScheduleConfig({ start_date: e.target.value })}
                 className="neo-border font-bold bg-white"
               />
-            )}
-            <p className="text-xs font-bold text-gray-600 mt-2">
-              v1 uses one completed NFL season as the hidden source pool for the league.
-            </p>
+              <p className="text-xs font-bold text-gray-600 mt-2">First scheduled game date.</p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Weeks</Label>
+              <Input
+                type="number"
+                value={formData.season_length_weeks}
+                disabled
+                className="neo-border font-bold bg-gray-100"
+              />
+              <p className="text-xs font-bold text-gray-600 mt-2">Set to 8 weeks for the first implementation pass.</p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Max Members</Label>
+              <Input
+                type="number"
+                min={teamLimits.min}
+                max={teamLimits.max}
+                step="2"
+                value={formData.max_members}
+                onChange={(e) => setFormData({ ...formData, max_members: parseInt(e.target.value, 10) })}
+                className="neo-border font-bold"
+              />
+              <p className="text-xs font-bold text-gray-600 mt-2">
+                {formData.league_tier} leagues allow {teamLimits.min}-{teamLimits.max} teams.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-l-4 border-black pl-4">
+              <div>
+                <Label className="text-sm font-black uppercase block mb-1">Public League</Label>
+                <p className="text-xs font-bold text-black/70">Allow anyone to join.</p>
+              </div>
+              <Switch
+                checked={formData.is_public}
+                onCheckedChange={(checked) => setFormData({ ...formData, is_public: checked })}
+                className="data-[state=checked]:bg-black"
+              />
+            </div>
           </div>
 
-          <LeaguePlayFields
-            value={formData}
-            onChange={setFormData}
-            showDescriptions
-            fields={["ranking_system"]}
-          />
-        </div>
+          {formData.league_tier === "PAID" && (
+            <div className="mt-5 max-w-sm">
+              <Label className="text-sm font-black uppercase mb-2 block">Amount to Join *</Label>
+              <div className="flex items-center gap-3">
+                <span className="font-black text-2xl">$</span>
+                <Input
+                  type="number"
+                  min={centsToDollarInput(PAID_JOIN_FEE_MIN_CENTS)}
+                  max={centsToDollarInput(paidFeeMaxCents)}
+                  step="0.01"
+                  value={centsToDollarInput(formData.join_fee_cents || PAID_JOIN_FEE_MIN_CENTS)}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    join_fee_cents: dollarsToCents(e.target.value),
+                    join_fee_currency: "usd",
+                  })}
+                  className="neo-border font-bold text-lg bg-white"
+                  required
+                />
+              </div>
+              <p className="text-xs font-bold text-gray-600 mt-2">
+                Paid leagues require ${centsToDollarInput(PAID_JOIN_FEE_MIN_CENTS)}-${centsToDollarInput(paidFeeMaxCents)} to join.
+              </p>
+            </div>
+          )}
 
-        <div className="neo-border flex items-center justify-between gap-4 bg-[#FFF1E8] p-4">
-          <div>
-            <Label className="text-sm font-black uppercase block mb-1">Lock Scoring Rules Now</Label>
-            <p className="text-xs font-bold text-black/70">
-              Freeze the current admin season defaults for this league immediately instead of waiting for draft start.
-            </p>
-          </div>
-          <Switch
-            checked={formData.lock_scoring_rules}
-            onCheckedChange={(checked) => setFormData({ ...formData, lock_scoring_rules: checked })}
-            className="data-[state=checked]:bg-black"
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <LeaguePlayFields
-            value={formData}
-            onChange={setFormData}
-            fields={["schedule_type", "advancement_mode", "playoff_mode"]}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <ScheduleConfigFields
-            value={formData.schedule_config}
-            onChange={(scheduleConfig) => setFormData({ ...formData, schedule_config: scheduleConfig })}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Season Length (Weeks)</Label>
-            <Input
-              type="number"
-              value={formData.season_length_weeks}
-              disabled
-              className="neo-border font-bold bg-gray-100"
+          <div className="mt-5">
+            <Label className="text-sm font-black uppercase mb-2 block">Description</Label>
+            <Textarea
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="Describe your league..."
+              className="neo-border font-bold h-24"
             />
-            <p className="text-xs font-bold text-gray-500 mt-1">Set to 8 weeks for the first implementation pass.</p>
           </div>
+        </FormSection>
 
-          <div>
-            <Label className="text-sm font-black uppercase mb-2 block">Max Members</Label>
-            <Input
-              type="number"
-              min={teamLimits.min}
-              max={teamLimits.max}
-              step="2"
-              value={formData.max_members}
-              onChange={(e) => setFormData({ ...formData, max_members: parseInt(e.target.value, 10) })}
-              className="neo-border font-bold"
+        <FormSection title="Draft And Rosters" description="Choose how often managers draft and whether season rosters keep players or release them after limited starts.">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <LeaguePlayFields
+              value={formData}
+              onChange={setFormData}
+              showDescriptions
+              plain
+              fields={["draft_mode", "player_retention_mode"]}
             />
-            <p className="text-xs font-bold text-gray-500 mt-1">
-              {formData.league_tier} leagues allow {teamLimits.min}-{teamLimits.max} teams.
-            </p>
           </div>
-        </div>
+        </FormSection>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="neo-border p-4 bg-black text-white">
-            <div className="flex items-center gap-2 mb-2">
-              <Shuffle className="w-5 h-5 text-[#00D9FF]" />
-              <p className="font-black uppercase">Randomization</p>
+        <FormSection title="Season Source And Scoring" description="Pick the hidden statistical season and the standings format for scoring results.">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Source Season Year</Label>
+              {availableSourceSeasonYears.length ? (
+                <Select
+                  value={String(formData.source_season_year)}
+                  onValueChange={(value) => setFormData({ ...formData, source_season_year: Number(value) })}
+                >
+                  <SelectTrigger className="neo-border font-bold bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableSourceSeasonYears.map((year) => (
+                      <SelectItem key={year} value={String(year)}>{year}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  type="number"
+                  value={formData.source_season_year}
+                  onChange={(e) => setFormData({ ...formData, source_season_year: parseInt(e.target.value, 10) })}
+                  className="neo-border font-bold bg-white"
+                />
+              )}
+              <p className="text-xs font-bold text-gray-600 mt-2">
+                Completed NFL season used as the hidden source pool.
+              </p>
             </div>
-            <p className="text-sm font-bold text-white/80">
-              Each fantasy week uses hidden real NFL weeks assigned per NFL team. Managers never know the source weeks before reveal.
-            </p>
-          </div>
-          <div className="neo-border p-4 bg-white">
-            <div className="flex items-center gap-2 mb-2">
-              <Shield className="w-5 h-5 text-[#6A4C93]" />
-              <p className="font-black uppercase">Roster Rules</p>
-            </div>
-            <p className="text-sm font-bold text-gray-700">
-              Draft 10 total: 2 QB, 1 K, 2 DEF, 2 OFF, 3 FLEX. Max 4 OFF or 4 DEF. Start 5 each week: 1 QB, 1 K, 1 DEF, 1 OFF, 1 FLEX.
-            </p>
-          </div>
-          <div className="neo-border p-4 bg-white">
-            <div className="flex items-center gap-2 mb-2">
-              <CalendarRange className="w-5 h-5 text-[#FF6B35]" />
-              <p className="font-black uppercase">Draft Config</p>
-            </div>
-            <p className="text-sm font-bold text-gray-700">
-              Snake draft, {formData.draft_config.rounds} rounds, {formData.draft_config.timer_seconds}s timer.
-            </p>
-          </div>
-        </div>
 
-        <div className="flex items-center justify-between p-4 neo-border bg-[#F7B801] rounded-none">
-          <div>
-            <Label className="text-sm font-black uppercase block mb-1">Public League</Label>
-            <p className="text-xs font-bold text-black/70">
-              Allow anyone to join your league
-            </p>
+            <LeaguePlayFields
+              value={formData}
+              onChange={setFormData}
+              showDescriptions
+              plain
+              fields={["ranking_system"]}
+            />
           </div>
-          <Switch
-            checked={formData.is_public}
-            onCheckedChange={(checked) => setFormData({ ...formData, is_public: checked })}
-            className="data-[state=checked]:bg-black"
-          />
-        </div>
 
-        <div className="flex gap-4 pt-4">
+          <div className="mt-5 flex items-center justify-between gap-4 border-l-4 border-black pl-4">
+            <div>
+              <Label className="text-sm font-black uppercase block mb-1">Lock Scoring Rules Now</Label>
+              <p className="text-xs font-bold text-black/70">
+                Freeze the current admin season defaults immediately instead of waiting for draft start.
+              </p>
+            </div>
+            <Switch
+              checked={formData.lock_scoring_rules}
+              onCheckedChange={(checked) => setFormData({ ...formData, lock_scoring_rules: checked })}
+              className="data-[state=checked]:bg-black"
+            />
+          </div>
+        </FormSection>
+
+        <FormSection title="Schedule And Playoffs" description="Set matchup structure, week advancement, playoff roster behavior, and schedule generation.">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+            <LeaguePlayFields
+              value={formData}
+              onChange={setFormData}
+              showDescriptions
+              plain
+              fields={["schedule_type", "advancement_mode", "playoff_mode"]}
+            />
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Schedule Pattern</Label>
+              <Select
+                value={formData.schedule_config.type}
+                onValueChange={(type) => updateScheduleConfig({ type })}
+              >
+                <SelectTrigger className="neo-border font-bold bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="one_day">One Day</SelectItem>
+                  <SelectItem value="interval">Every X Days</SelectItem>
+                  <SelectItem value="preset">Preset Dates</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs font-bold text-gray-600 mt-2">How generated schedule dates are spaced.</p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Games / Period</Label>
+              <Input
+                type="number"
+                min="1"
+                value={formData.schedule_config.games_per_period || 1}
+                onChange={(e) => updateScheduleConfig({ games_per_period: Number(e.target.value) || 1 })}
+                className="neo-border font-bold bg-white"
+              />
+              <p className="text-xs font-bold text-gray-600 mt-2">Matchups generated inside each schedule period.</p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-black uppercase mb-2 block">Period Days</Label>
+              <Input
+                type="number"
+                min="1"
+                value={formData.schedule_config.period_days || 7}
+                onChange={(e) => updateScheduleConfig({ period_days: Number(e.target.value) || 7 })}
+                className="neo-border font-bold bg-white"
+              />
+              <p className="text-xs font-bold text-gray-600 mt-2">Days between schedule periods for interval schedules.</p>
+            </div>
+          </div>
+        </FormSection>
+
+        <FormSection title="League Defaults" description="These defaults can be tuned later from commissioner tools as the league workflow expands.">
+          <dl className="grid grid-cols-1 gap-4 text-sm font-bold text-gray-700 md:grid-cols-3">
+            <div>
+              <dt className="font-black uppercase text-black">Draft</dt>
+              <dd>Snake draft, {formData.draft_config.rounds} rounds, {formData.draft_config.timer_seconds}s timer.</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase text-black">Rosters</dt>
+              <dd>Draft 10 total and start 5 each week: QB, K, DEF, OFF, FLEX.</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase text-black">Results</dt>
+              <dd>Each fantasy week reveals hidden real NFL weeks assigned per NFL team.</dd>
+            </div>
+          </dl>
+        </FormSection>
+
+        <div className="flex flex-col gap-4 border-t-4 border-black pt-6 sm:flex-row">
           <Button type="button" onClick={() => navigate(-1)} className="neo-btn bg-gray-200 text-black hover:bg-gray-200 flex-1">
             Cancel
           </Button>

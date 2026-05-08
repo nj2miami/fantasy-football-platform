@@ -53,9 +53,10 @@ function NumberField({ label, value, onChange, disabled, min, max, step, descrip
   );
 }
 
-export function LeaguePlayFields({ value, onChange, disabled = false, compactLabels = false, showDescriptions = false, showPlayoffDetails = false, fields = null }) {
+export function LeaguePlayFields({ value, onChange, disabled = false, compactLabels = false, showDescriptions = false, showPlayoffDetails = false, fields = null, plain = false }) {
   const update = (patch) => onChange({ ...value, ...patch });
   const visible = new Set(fields || ["draft_mode", "player_retention_mode", "schedule_type", "ranking_system", "advancement_mode", "playoff_mode"]);
+  const fieldClass = (className) => plain ? "" : className;
   return (
     <>
       {visible.has("draft_mode") && <SelectField
@@ -85,7 +86,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
             ? "Draft once, then set weekly lineups against hidden randomized historical outcomes."
             : "Re-draft every week from the full player pool."
         ) : null}
-        className="neo-border p-4 bg-[#FFF1E8]"
+        className={fieldClass("neo-border p-4 bg-[#FFF1E8]")}
       />}
       {visible.has("player_retention_mode") && <SelectField
         label={compactLabels ? "Retention" : "Player Retention"}
@@ -109,7 +110,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
             ? "Weekly redraft leagues reset the available player pool every week."
             : "Limited-use season leagues release a player after the configured number of starts by one team."
         ) : null}
-        className="neo-border p-4 bg-white"
+        className={fieldClass("neo-border p-4 bg-white")}
       />}
       {visible.has("player_retention_mode") && value.draft_mode !== "weekly_redraft" && value.player_retention_mode === "limited_use" && (
         <NumberField
@@ -120,7 +121,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           disabled={disabled}
           onChange={(playerRetentionLimit) => update({ player_retention_limit: Math.max(1, Number(playerRetentionLimit || 1)) })}
           description="Number of starts a player can make for one team before automatic release."
-          className="neo-border p-4 bg-[#FFF7D6]"
+          className={fieldClass("neo-border p-4 bg-[#FFF7D6]")}
         />
       )}
       {visible.has("schedule_type") && <SelectField
@@ -141,7 +142,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           },
         ]}
         description={showDescriptions ? "Controls how weekly games are matched." : null}
-        className="neo-border p-4 bg-white"
+        className={fieldClass("neo-border p-4 bg-white")}
       />}
       {visible.has("ranking_system") && <SelectField
         label={compactLabels ? "Ranking" : "Standings Format"}
@@ -161,7 +162,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           },
         ]}
         description={showDescriptions ? "H2H + League Points uses record first, then weekly league points as the standings tiebreaker." : null}
-        className="neo-border p-4 bg-[#EFFBFF]"
+        className={fieldClass("neo-border p-4 bg-[#EFFBFF]")}
       />}
       {visible.has("advancement_mode") && <SelectField
         label="Advancement"
@@ -180,7 +181,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           },
         ]}
         description={showDescriptions ? "Controls who moves the league from one period to the next." : null}
-        className="neo-border p-4 bg-white"
+        className={fieldClass("neo-border p-4 bg-white")}
       />}
       {visible.has("playoff_mode") && <SelectField
         label={compactLabels ? "Playoff Mode" : "Playoffs"}
@@ -200,7 +201,7 @@ export function LeaguePlayFields({ value, onChange, disabled = false, compactLab
           },
         ]}
         description={showDescriptions ? "Controls how playoff rosters are built." : null}
-        className="neo-border p-4 bg-white"
+        className={fieldClass("neo-border p-4 bg-white")}
       />}
       {showPlayoffDetails && (
         <>
