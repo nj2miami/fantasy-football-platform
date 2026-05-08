@@ -6,17 +6,32 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Play,
+  RotateCcw,
   Search,
+  Timer,
   Trash2,
   Trophy,
   User,
   Check,
+  UserCheck,
+  Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import PlayerStatsDialog from "@/components/player/PlayerStatsDialog";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -148,6 +163,33 @@ function playPickChime() {
     oscillator.stop(start + 0.26);
   });
   window.setTimeout(() => context.close().catch(() => {}), 1000);
+}
+
+function playDraftDayStartSound() {
+  if (typeof window === "undefined") return Promise.resolve();
+  const audio = new Audio("/assets/draft-day-start.m4a");
+  audio.volume = 0.85;
+  return audio.play();
+}
+
+function memberCheckInRecord(checkIn, memberId) {
+  return checkIn?.statuses?.[memberId] || null;
+}
+
+function memberCheckInStatus(checkIn, memberId) {
+  return String(memberCheckInRecord(checkIn, memberId)?.status || "").toUpperCase();
+}
+
+function memberIsCheckedIn(checkIn, memberId) {
+  return ["CHECKED_IN", "FORCED"].includes(memberCheckInStatus(checkIn, memberId));
+}
+
+function formatMinuteCountdown(target, nowMs) {
+  if (!target) return "--";
+  const remaining = Math.max(0, new Date(target).getTime() - nowMs);
+  const minutes = Math.floor(remaining / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function PlayerTierCell({ player }) {
@@ -290,8 +332,11 @@ export default function LeagueDraft() {
   const [selectedPlayer, setSelectedPlayer] = React.useState(null);
   const [boardDraftNotice, setBoardDraftNotice] = React.useState(null);
   const [draftPoolProgress, setDraftPoolProgress] = React.useState(null);
+  const [checkInMinutes, setCheckInMinutes] = React.useState(15);
   const previousBoardRef = React.useRef(new Map());
   const notifiedPickIdsRef = React.useRef(new Set());
+  const draftDaySoundRef = React.useRef(null);
+  const expiredPickRef = React.useRef(null);
 
   const { data: user, isLoading: isUserLoading } = useQuery({
     queryKey: ["draft-user"],
@@ -315,12 +360,17 @@ export default function LeagueDraft() {
   );
   const isOpen = String(state?.draft?.status || "").toUpperCase() === "OPEN";
   const isCompleted = String(state?.draft?.status || "").toUpperCase() === "COMPLETED";
-  const canStart = isCommissioner && state?.draft?.start && Date.now() >= new Date(state.draft.start).getTime() && !isOpen && !isCompleted;
   const requiredWeeks = MIN_DRAFT_STAT_WEEKS;
   const seasonYear = Number(state?.league?.source_season_year || new Date().getFullYear() - 1);
+  const draftRoomState = state?.room?.state || {};
+  const draftCheckIn = draftRoomState.check_in || {};
+  const checkedInCount = (state?.members || []).filter((member) => memberIsCheckedIn(draftCheckIn, member.id)).length;
+  const allManagersCheckedIn = Boolean(state?.members?.length) && checkedInCount === state.members.length;
+  const canStart = isCommissioner && allManagersCheckedIn && !isOpen && !isCompleted;
   const currentTurnMember = state?.members?.find((member) => member.id === state?.currentTurn?.league_member_id);
   const isMyTurn = isOpen && currentMember?.id && currentMember.id === state?.currentTurn?.league_member_id;
-  const countdown = isOpen ? "Live" : isCompleted ? "Complete" : formatCountdown(state?.draft?.start, nowMs);
+  const draftDayCountdown = draftCheckIn.active ? formatMinuteCountdown(draftCheckIn.ends_at, nowMs) : formatCountdown(state?.draft?.start, nowMs);
+  const countdown = isOpen ? "Live" : isCompleted ? "Complete" : draftDayCountdown;
   const pickRemaining = getPickRemaining(state?.room, nowMs);
   const tierCap = Number(state?.league?.team_tier_cap || 0);
   const draftPoolCacheKey = [
@@ -369,13 +419,39 @@ export default function LeagueDraft() {
     return () => window.clearInterval(timer);
   }, [draftId, invalidate, isOpen]);
 
+  React.useEffect(() => {
+    if (!isOpen || !draftId || pickRemaining > 0) return;
+    const pickKey = `${draftId}:${state?.room?.current_pick || 1}`;
+    if (expiredPickRef.current === pickKey) return;
+    expiredPickRef.current = pickKey;
+    appClient.functions.invoke("process_draft_timer", { draft_id: draftId }).then(invalidate).catch(() => {});
+  }, [draftId, invalidate, isOpen, pickRemaining, state?.room?.current_pick]);
+
   const startMutation = useMutation({
     mutationFn: () => appClient.functions.invoke("start_draft", { league_id: leagueId, draft_id: draftId }),
     onSuccess: () => {
+      playDraftDayStartSound().catch(() => {});
       toast.success("Draft started.");
       invalidate();
     },
     onError: (error) => toast.error(error.message || "Failed to start draft."),
+  });
+
+  const checkInMutation = useMutation({
+    mutationFn: (payload) => appClient.functions.invoke("update_draft_check_in", { league_id: leagueId, draft_id: draftId, ...payload }),
+    onSuccess: () => {
+      invalidate();
+    },
+    onError: (error) => toast.error(error.message || "Draft check-in update failed."),
+  });
+
+  const resetDraftMutation = useMutation({
+    mutationFn: () => appClient.functions.invoke("reset_draft", { league_id: leagueId, draft_id: draftId }),
+    onSuccess: (result) => {
+      toast.success(`Draft reset. Removed ${Number(result?.removed_picks || 0)} picks.`);
+      invalidate();
+    },
+    onError: (error) => toast.error(error.message || "Failed to reset draft."),
   });
 
   const prepareDraftPoolMutation = useMutation({
@@ -450,6 +526,15 @@ export default function LeagueDraft() {
     previousBoardRef.current = currentBoardMap;
   }, [currentMember?.id, state?.board, state?.draft?.id, state?.members, state?.picks]);
 
+  React.useEffect(() => {
+    const soundVersion = state?.room?.state?.draft_day_sound_version || state?.draft?.started_at || null;
+    if (!soundVersion || draftDaySoundRef.current === soundVersion) return;
+    draftDaySoundRef.current = soundVersion;
+    playDraftDayStartSound().catch(() => {
+      toast.info("Draft Day sound is ready. Use Test Sound if your browser blocked autoplay.");
+    });
+  }, [state?.draft?.started_at, state?.room?.state?.draft_day_sound_version]);
+
   if (isLoading || isUserLoading) {
     return <div className="mx-auto max-w-5xl px-4"><div className="neo-card bg-white p-8 text-center font-black uppercase">Loading Draft...</div></div>;
   }
@@ -518,6 +603,26 @@ export default function LeagueDraft() {
     boardMutation.mutate({ action: "remove", payload: { id: item.id } });
   };
 
+  const startCheckIn = () => {
+    checkInMutation.mutate({ action: "start", duration_minutes: checkInMinutes });
+  };
+
+  const checkInMyTeam = () => {
+    checkInMutation.mutate({ action: "check_in" });
+  };
+
+  const forceCheckInTeam = (memberId) => {
+    checkInMutation.mutate({ action: "force", league_member_id: memberId });
+  };
+
+  const testDraftDaySound = () => {
+    playDraftDayStartSound()
+      .then(() => {
+        if (isCommissioner && draftId) checkInMutation.mutate({ action: "sound" });
+      })
+      .catch(() => toast.error("Your browser blocked the Draft Day sound."));
+  };
+
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -541,9 +646,49 @@ export default function LeagueDraft() {
         )}
         {isCommissioner && (
           <div className="flex flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min="1"
+                max="240"
+                value={checkInMinutes}
+                onChange={(event) => setCheckInMinutes(event.target.value)}
+                className="neo-border h-11 w-24 bg-white font-black text-black"
+              />
+              <Button onClick={startCheckIn} disabled={checkInMutation.isPending || isOpen || isCompleted} className="neo-btn bg-white text-black">
+                <Timer className="mr-2 h-5 w-5" />Check In
+              </Button>
+            </div>
+            <Button onClick={testDraftDaySound} disabled={checkInMutation.isPending} className="neo-btn bg-[#00D9FF] text-black">
+              <Volume2 className="mr-2 h-5 w-5" />Test Sound
+            </Button>
             <Button onClick={() => startMutation.mutate()} disabled={!canStart || startMutation.isPending || draftPoolNeedsPreparation || prepareDraftPoolMutation.isPending} className="neo-btn bg-[#F7B801] text-black">
               <Play className="mr-2 h-5 w-5" />Start Draft
             </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={resetDraftMutation.isPending || !draftId} className="neo-btn bg-red-600 text-white">
+                  <RotateCcw className="mr-2 h-5 w-5" />Restart Draft
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent className="neo-border bg-white">
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="text-2xl font-black uppercase text-red-600">Restart Draft?</AlertDialogTitle>
+                  <AlertDialogDescription className="font-bold text-gray-600">
+                    This removes draft picks, roster entries created by those picks, randomized draft order, check-in state, timer state, and live draft room state. The draft returns to scheduled setup.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="neo-btn bg-white text-black">Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => resetDraftMutation.mutate()}
+                    className="neo-btn bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Restart Draft
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         )}
       </div>
@@ -575,38 +720,76 @@ export default function LeagueDraft() {
           </section>
 
           <section className={`neo-border p-4 ${isMyTurn ? "bg-[#F7B801] text-black" : "bg-white text-black"}`}>
-            <p className="text-xs font-black uppercase text-gray-500">On The Clock</p>
-            <p className="mt-1 truncate text-2xl font-black uppercase">{isMyTurn ? "DRAFT NOW" : memberName(currentTurnMember) || "Waiting"}</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="neo-border bg-gray-50 p-2">
-                <p className="text-xs font-black uppercase text-gray-500">Pick</p>
-                <p className="text-xl font-black">{state.room?.current_pick || 1}</p>
-              </div>
-              <div className="neo-border bg-gray-50 p-2">
-                <p className="text-xs font-black uppercase text-gray-500">Timer</p>
-                <p className="text-xl font-black">{isOpen ? `${pickRemaining}s` : "--"}</p>
-              </div>
-            </div>
+            {isOpen ? (
+              <>
+                <p className="text-xs font-black uppercase text-gray-500">On The Clock</p>
+                <p className="mt-1 truncate text-2xl font-black uppercase">{isMyTurn ? "DRAFT NOW" : memberName(currentTurnMember) || "Waiting"}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="neo-border bg-gray-50 p-2">
+                    <p className="text-xs font-black uppercase text-gray-500">Pick</p>
+                    <p className="text-xl font-black">{state.room?.current_pick || 1}</p>
+                  </div>
+                  <div className="neo-border bg-gray-50 p-2">
+                    <p className="text-xs font-black uppercase text-gray-500">Timer</p>
+                    <p className="text-xl font-black">{pickRemaining}s</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-black uppercase text-gray-500">Time to Draft Day</p>
+                <p className="mt-1 text-3xl font-black uppercase">{countdown}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="neo-border bg-gray-50 p-2">
+                    <p className="text-xs font-black uppercase text-gray-500">Checked In</p>
+                    <p className="text-xl font-black">{checkedInCount}/{state.members?.length || 0}</p>
+                  </div>
+                  <div className="neo-border bg-gray-50 p-2">
+                    <p className="text-xs font-black uppercase text-gray-500">Status</p>
+                    <p className="truncate text-xl font-black">{allManagersCheckedIn ? "Ready" : draftCheckIn.active ? "Open" : "Waiting"}</p>
+                  </div>
+                </div>
+              </>
+            )}
           </section>
         </div>
       </div>
 
       <section className="neo-card mb-8 bg-white p-4">
         <h2 className="mb-3 flex items-center gap-2 text-xl font-black uppercase text-orange-600">
-          <Trophy className="h-5 w-5" />Draft Order
+          <Trophy className="h-5 w-5" />{isOpen || isCompleted ? "Draft Order" : "Draft Teams"}
         </h2>
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(state.turns?.length ? state.turns : state.members || []).map((turnOrMember, index) => {
+          {((isOpen || isCompleted) && state.turns?.length ? state.turns : state.members || []).map((turnOrMember, index) => {
             const isTurn = Boolean(turnOrMember.league_member_id);
             const turn = isTurn ? turnOrMember : null;
             const member = isTurn ? state.members.find((item) => item.id === turn.league_member_id) : turnOrMember;
             const pick = turn ? state.picks.find((item) => Number(item.overall_pick) === Number(turn.overall_pick)) : null;
             const isCurrent = turn && Number(turn.overall_pick) === Number(state.room?.current_pick);
+            const checkInStatus = memberCheckInStatus(draftCheckIn, member?.id);
+            const isOwnTeam = member?.id && currentMember?.id === member.id;
             return (
-              <div key={turn?.id || member?.id || index} className={`neo-border w-44 flex-none p-2 text-xs ${isCurrent ? "bg-[#F7B801]" : pick ? "bg-[#D7F8E8]" : "bg-gray-50"}`}>
+              <div key={turn?.id || member?.id || index} className={`neo-border w-52 flex-none p-2 text-xs ${isCurrent ? "bg-[#F7B801]" : pick || checkInStatus === "CHECKED_IN" ? "bg-[#D7F8E8]" : checkInStatus === "FORCED" ? "bg-orange-100" : "bg-gray-50"}`}>
                 <p className="font-black uppercase">{turn ? `#${turn.overall_pick} R${turn.round}` : `Team ${index + 1}`}</p>
                 <p className="truncate font-black">{memberName(member)}</p>
                 <p className="truncate font-bold text-gray-600">{pick ? playerName(pick.player) : turn ? "Pending" : "Registered"}</p>
+                {!turn && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {checkInStatus === "CHECKED_IN" && <span className="neo-border bg-[#D7F8E8] px-2 py-1 font-black uppercase text-black">Checked In</span>}
+                    {checkInStatus === "FORCED" && <span className="neo-border bg-[#F7B801] px-2 py-1 font-black uppercase text-black">Forced</span>}
+                    {!checkInStatus && <span className="neo-border bg-white px-2 py-1 font-black uppercase text-gray-500">Pending</span>}
+                    {isOwnTeam && checkInStatus !== "CHECKED_IN" && checkInStatus !== "FORCED" && (
+                      <Button onClick={checkInMyTeam} disabled={!draftCheckIn.active || checkInMutation.isPending} className="neo-btn h-8 bg-[#00D9FF] px-2 text-[11px] text-black">
+                        <UserCheck className="mr-1 h-4 w-4" />Check In
+                      </Button>
+                    )}
+                    {isCommissioner && checkInStatus !== "CHECKED_IN" && checkInStatus !== "FORCED" && (
+                      <Button onClick={() => forceCheckInTeam(member.id)} disabled={!draftCheckIn.active || checkInMutation.isPending} className="neo-btn h-8 bg-black px-2 text-[11px] text-white">
+                        Force
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

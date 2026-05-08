@@ -2514,6 +2514,14 @@ async function enforceTeamTierCap(supabase: ReturnType<typeof createClient>, lea
   }
 }
 
+async function canFitTeamTierCap(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, playerId: string) {
+  const cap = Number(league.team_tier_cap || 0);
+  if (cap <= 0) return true;
+  const currentTotal = await leagueMemberTierTotal(supabase, league, leagueMemberId);
+  const playerTier = await getPlayerTierValue(supabase, league, playerId);
+  return currentTotal + playerTier <= cap;
+}
+
 async function ensureManagerPointAccounts(supabase: ReturnType<typeof createClient>, league: Json, seasonId: unknown) {
   const startingPoints = Number(league.manager_points_starting || 0);
   if (startingPoints <= 0) return;
@@ -2547,6 +2555,151 @@ function shuffleRows<T>(rows: T[]) {
   return shuffled;
 }
 
+function draftCheckInState(room?: Json | null) {
+  const state = ((room?.state || {}) as Json);
+  const checkIn = ((state.check_in || {}) as Json);
+  return {
+    active: checkIn.active === true,
+    started_at: checkIn.started_at || null,
+    ends_at: checkIn.ends_at || null,
+    duration_minutes: Number(checkIn.duration_minutes || 0),
+    statuses: ((checkIn.statuses || {}) as Json),
+  };
+}
+
+function draftCheckInStatus(checkIn: Json, memberId: unknown) {
+  return String((((checkIn.statuses || {}) as Json)[String(memberId || "")] as Json | undefined)?.status || "").toUpperCase();
+}
+
+function draftCheckInComplete(members: Json[] = [], checkIn: Json) {
+  if (!members.length) return false;
+  return members.every((member) => ["CHECKED_IN", "FORCED"].includes(draftCheckInStatus(checkIn, member.id)));
+}
+
+async function upsertDraftRoomState(supabase: ReturnType<typeof createClient>, draft: Json, league: Json, state: Json) {
+  const { data: existingRoom, error: existingRoomError } = await supabase
+    .from("draft_rooms")
+    .select("current_pick,timer_seconds")
+    .eq("draft_id", draft.id)
+    .maybeSingle();
+  if (existingRoomError) throw existingRoomError;
+  const { data: room, error } = await supabase
+    .from("draft_rooms")
+    .upsert(
+      {
+        draft_id: draft.id,
+        current_pick: Number(existingRoom?.current_pick || 1),
+        timer_seconds: Number(existingRoom?.timer_seconds || (league.draft_config as Json | undefined)?.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds),
+        state,
+        updated_date: new Date().toISOString(),
+      },
+      { onConflict: "draft_id" },
+    )
+    .select("*")
+    .single();
+  if (error) throw error;
+  return room;
+}
+
+async function draftAndLeagueForCheckIn(supabase: ReturnType<typeof createClient>, payload: Json) {
+  let draftQuery = supabase.from("drafts").select("*, leagues(*)");
+  if (payload.draft_id) draftQuery = draftQuery.eq("id", payload.draft_id);
+  else draftQuery = draftQuery.eq("league_id", payload.league_id).order("created_date", { ascending: false }).limit(1);
+  const { data, error } = await draftQuery.maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Draft was not found.");
+  return { draft: data, league: normalizeLeaguePlaySettings(data.leagues) };
+}
+
+async function updateDraftCheckIn(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const action = String(payload.action || "").toLowerCase();
+  const { draft, league } = await draftAndLeagueForCheckIn(supabase, payload);
+  if (String(draft.status || "").toUpperCase() === "COMPLETED") throw new Error("Draft is already complete.");
+
+  const { data: existingRoom, error: roomError } = await supabase
+    .from("draft_rooms")
+    .select("*")
+    .eq("draft_id", draft.id)
+    .maybeSingle();
+  if (roomError) throw roomError;
+  const roomState = ((existingRoom?.state || {}) as Json);
+  const checkIn = draftCheckInState(existingRoom);
+  const statuses = { ...((checkIn.statuses || {}) as Json) };
+
+  if (action === "check_in") {
+    let member: Json | null = null;
+    const { data: profileMember, error: profileMemberError } = await supabase
+      .from("league_members")
+      .select("*")
+      .eq("league_id", league.id)
+      .eq("is_active", true)
+      .eq("profile_id", user.id)
+      .maybeSingle();
+    if (profileMemberError) throw profileMemberError;
+    member = profileMember;
+    if (!member && user.email) {
+      const { data: emailMember, error: emailMemberError } = await supabase
+        .from("league_members")
+        .select("*")
+        .eq("league_id", league.id)
+        .eq("is_active", true)
+        .eq("user_email", user.email)
+        .maybeSingle();
+      if (emailMemberError) throw emailMemberError;
+      member = emailMember;
+    }
+    if (!member) throw new Error("Only active league managers can check in.");
+    statuses[String(member.id)] = { status: "CHECKED_IN", checked_in_at: new Date().toISOString(), by: user.id };
+  } else {
+    const { league: controlledLeague } = await requireLeagueControl(supabase, user, league.id);
+    const controlled = normalizeLeaguePlaySettings(controlledLeague);
+    if (action === "start") {
+      const durationMinutes = Math.max(1, Math.min(240, Number(payload.duration_minutes || 15)));
+      const startedAt = new Date();
+      const endsAt = new Date(startedAt.getTime() + durationMinutes * 60000);
+      const nextCheckIn = {
+        active: true,
+        started_at: startedAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        duration_minutes: durationMinutes,
+        statuses,
+      };
+      const nextState = { ...roomState, check_in: nextCheckIn };
+      const room = await upsertDraftRoomState(supabase, draft, controlled, nextState);
+      return { room, check_in: nextCheckIn };
+    }
+    if (action === "force") {
+      const memberId = String(payload.league_member_id || "");
+      if (!memberId) throw new Error("Team is required.");
+      const { data: member, error: memberError } = await supabase
+        .from("league_members")
+        .select("id")
+        .eq("league_id", league.id)
+        .eq("id", memberId)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (memberError) throw memberError;
+      if (!member) throw new Error("Team is not active in this league.");
+      statuses[memberId] = { status: "FORCED", forced_at: new Date().toISOString(), by: user.id, auto_draft: true };
+    } else if (action === "sound") {
+      const nextState = { ...roomState, draft_day_sound_version: new Date().toISOString() };
+      const room = await upsertDraftRoomState(supabase, draft, controlled, nextState);
+      return { room };
+    } else {
+      throw new Error("Unsupported draft check-in action.");
+    }
+  }
+
+  const nextCheckIn = {
+    ...checkIn,
+    active: checkIn.active !== false,
+    statuses,
+  };
+  const nextState = { ...roomState, check_in: nextCheckIn };
+  const room = await upsertDraftRoomState(supabase, draft, league, nextState);
+  return { room, check_in: nextCheckIn };
+}
+
 async function startDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
   const league = normalizeLeaguePlaySettings(rawLeague);
@@ -2558,14 +2711,6 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .single();
   if (draftError) throw draftError;
   if (draft.status === "OPEN") return { draft };
-  const start = draft.start ? new Date(draft.start) : null;
-  if (!start || Date.now() < start.getTime()) throw new Error("Draft cannot start before its scheduled time");
-  const lockedLeague = await lockLeagueScoringRules(supabase, league, "draft_start");
-  const { scoringRulesHash } = await scoringRulesHashForLeague(supabase, lockedLeague);
-  if (!(await existingLeaguePlayerScoresComplete(supabase, lockedLeague, scoringRulesHash))) {
-    throw new Error("Draft pool is still preparing. Wait for the Eligible Players panel to finish before starting the draft.");
-  }
-  await syncLeagueDurabilityRows(supabase, lockedLeague);
 
   const { data: members, error: memberError } = await supabase
     .from("league_members")
@@ -2576,38 +2721,62 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
   if (memberError) throw memberError;
   if (!members?.length) throw new Error("No active teams are in this league");
 
-  const { count: existingTurns, error: countError } = await supabase
-    .from("draft_turns")
+  const { data: existingRoom, error: existingRoomError } = await supabase
+    .from("draft_rooms")
+    .select("*")
+    .eq("draft_id", draft.id)
+    .maybeSingle();
+  if (existingRoomError) throw existingRoomError;
+  const room = existingRoom || null;
+  const checkIn = draftCheckInState(room);
+  if (!draftCheckInComplete(members || [], checkIn)) {
+    throw new Error("All active managers must check in or be force checked-in before the draft can start.");
+  }
+
+  const lockedLeague = await lockLeagueScoringRules(supabase, league, "draft_start");
+  const { scoringRulesHash } = await scoringRulesHashForLeague(supabase, lockedLeague);
+  if (!(await existingLeaguePlayerScoresComplete(supabase, lockedLeague, scoringRulesHash))) {
+    throw new Error("Draft pool is still preparing. Wait for the Eligible Players panel to finish before starting the draft.");
+  }
+  await syncLeagueDurabilityRows(supabase, lockedLeague);
+
+  const { count: existingPicks, error: pickCountError } = await supabase
+    .from("draft_picks")
     .select("id", { count: "exact", head: true })
     .eq("draft_id", draft.id);
-  if (countError) throw countError;
+  if (pickCountError) throw pickCountError;
+  if (Number(existingPicks || 0) > 0) throw new Error("Draft order cannot be randomized after picks have been made.");
 
-  if (!existingTurns) {
-    const order = shuffleRows(members);
-    const rounds = Math.max(1, Number((lockedLeague.draft_config as Json | undefined)?.rounds || DEFAULT_DRAFT_CONFIG.rounds));
-    const isSnake = String(draft.type || (lockedLeague.draft_config as Json | undefined)?.type || "snake") === "snake";
-    const turns = [];
-    for (let round = 1; round <= rounds; round += 1) {
-      const roundOrder = isSnake && round % 2 === 0 ? [...order].reverse() : order;
-      for (const member of roundOrder) {
-        turns.push({
-          draft_id: draft.id,
-          overall_pick: turns.length + 1,
-          round,
-          league_member_id: member.id,
-        });
-      }
+  await supabase.from("draft_turns").delete().eq("draft_id", draft.id);
+  const order = shuffleRows(members || []);
+  const rounds = Math.max(1, Number((lockedLeague.draft_config as Json | undefined)?.rounds || DEFAULT_DRAFT_CONFIG.rounds));
+  const isSnake = String(draft.type || (lockedLeague.draft_config as Json | undefined)?.type || "snake") === "snake";
+  const turns = [];
+  for (let round = 1; round <= rounds; round += 1) {
+    const roundOrder = isSnake && round % 2 === 0 ? [...order].reverse() : order;
+    for (const member of roundOrder) {
+      turns.push({
+        draft_id: draft.id,
+        overall_pick: turns.length + 1,
+        round,
+        league_member_id: member.id,
+      });
     }
-    const { error: turnError } = await supabase.from("draft_turns").insert(turns);
-    if (turnError) throw turnError;
   }
+  const { error: turnError } = await supabase.from("draft_turns").insert(turns);
+  if (turnError) throw turnError;
 
   const { error: roomError } = await supabase.from("draft_rooms").upsert(
     {
       draft_id: draft.id,
       current_pick: 1,
       timer_seconds: Number((lockedLeague.draft_config as Json | undefined)?.timer_seconds || DEFAULT_DRAFT_CONFIG.timer_seconds),
-      state: { pick_started_at: new Date().toISOString() },
+      state: {
+        ...(((room?.state || {}) as Json)),
+        check_in: { ...checkIn, active: false },
+        pick_started_at: new Date().toISOString(),
+        draft_day_sound_version: new Date().toISOString(),
+      },
     },
     { onConflict: "draft_id" },
   );
@@ -2621,6 +2790,70 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .single();
   if (updateError) throw updateError;
   return { draft: updatedDraft };
+}
+
+async function resetDraft(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  const { data: draft, error: draftError } = await supabase
+    .from("drafts")
+    .select("*")
+    .eq("id", payload.draft_id)
+    .eq("league_id", league.id)
+    .single();
+  if (draftError) throw draftError;
+
+  const { data: picks, error: picksError } = await supabase
+    .from("draft_picks")
+    .select("league_member_id,player_id")
+    .eq("draft_id", draft.id);
+  if (picksError) throw picksError;
+
+  for (const pick of picks || []) {
+    const { error: rosterDeleteError } = await supabase
+      .from("roster_slots")
+      .delete()
+      .eq("league_member_id", pick.league_member_id)
+      .eq("player_id", pick.player_id);
+    if (rosterDeleteError) throw rosterDeleteError;
+  }
+
+  const { error: picksDeleteError } = await supabase.from("draft_picks").delete().eq("draft_id", draft.id);
+  if (picksDeleteError) throw picksDeleteError;
+  const { error: turnsDeleteError } = await supabase.from("draft_turns").delete().eq("draft_id", draft.id);
+  if (turnsDeleteError) throw turnsDeleteError;
+  const { error: roomsDeleteError } = await supabase.from("draft_rooms").delete().eq("draft_id", draft.id);
+  if (roomsDeleteError) throw roomsDeleteError;
+
+  if (league.scoring_rules_lock_source === "draft_start") {
+    const { error: leagueUpdateError } = await supabase
+      .from("leagues")
+      .update({
+        scoring_rules_locked_at: null,
+        scoring_rules_lock_source: null,
+        updated_date: new Date().toISOString(),
+      })
+      .eq("id", league.id);
+    if (leagueUpdateError) throw leagueUpdateError;
+  }
+
+  const { data: updatedDraft, error: updateError } = await supabase
+    .from("drafts")
+    .update({
+      status: "SCHEDULED",
+      started_at: null,
+      completed_at: null,
+      updated_date: new Date().toISOString(),
+    })
+    .eq("id", draft.id)
+    .select("*")
+    .single();
+  if (updateError) throw updateError;
+  return {
+    draft: updatedDraft,
+    removed_picks: (picks || []).length,
+    reset: true,
+  };
 }
 
 async function prepareDraftPool(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
@@ -2653,26 +2886,32 @@ async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, le
         .single();
       if (playerError) throw playerError;
       const { allowed } = await canDraftPositionForMember(supabase, league, memberId, String(player.position || ""));
-      if (allowed) return item.player_id;
+      if (allowed && await canFitTeamTierCap(supabase, league, memberId, String(item.player_id))) return item.player_id;
     }
   }
 
   const { data: players, error: playersError } = await supabase
     .from("league_player_scores")
-    .select("player_id,total_points,position_rank,players!inner(position)")
+    .select("player_id,total_points,position_rank,tier_value,players!inner(position)")
     .eq("league_id", league.id)
     .lte("position_rank", 30)
-    .order("total_points", { ascending: false })
-    .order("position_rank", { ascending: true })
     .limit(1000);
   if (playersError) throw playersError;
 
-  for (const player of players || []) {
+  const tierPriority = new Map([[3, 0], [2, 1], [1, 2], [4, 3], [5, 4]]);
+  const orderedPlayers = [...(players || [])].sort((a: Json, b: Json) =>
+    Number(tierPriority.get(Number(a.tier_value || 1)) ?? 99) - Number(tierPriority.get(Number(b.tier_value || 1)) ?? 99) ||
+    Number(b.total_points || 0) - Number(a.total_points || 0) ||
+    Number(a.position_rank || 0) - Number(b.position_rank || 0)
+  );
+
+  for (const player of orderedPlayers) {
     if (pickedIds.has(player.player_id)) continue;
     if (memberId) {
       const playerRow = Array.isArray(player.players) ? player.players[0] : player.players;
       const { allowed } = await canDraftPositionForMember(supabase, league, memberId, String(playerRow?.position || ""));
       if (!allowed) continue;
+      if (!(await canFitTeamTierCap(supabase, league, memberId, String(player.player_id)))) continue;
     }
     return player.player_id;
   }
@@ -3427,14 +3666,18 @@ export async function handleAction(action: string, request: Request) {
                                       ? await setLeagueStatus(supabase, user, payload, "ACTIVE")
                                       : action === "schedule_draft"
                                         ? await scheduleDraft(supabase, user, payload)
-                                        : action === "start_draft"
-                                          ? await startDraft(supabase, user, payload)
-                                          : action === "prepare_draft_pool"
-                                            ? await prepareDraftPool(supabase, user, payload)
-                                            : action === "submit_draft_pick"
-                                              ? await submitDraftPick(supabase, user, payload)
-                                              : action === "process_draft_timer"
-                                                ? await processDraftTimer(supabase, user, payload)
+                                        : action === "update_draft_check_in"
+                                          ? await updateDraftCheckIn(supabase, user, payload)
+                                          : action === "start_draft"
+                                            ? await startDraft(supabase, user, payload)
+                                            : action === "reset_draft"
+                                              ? await resetDraft(supabase, user, payload)
+                                              : action === "prepare_draft_pool"
+                                                ? await prepareDraftPool(supabase, user, payload)
+                                                : action === "submit_draft_pick"
+                                                  ? await submitDraftPick(supabase, user, payload)
+                                                  : action === "process_draft_timer"
+                                                    ? await processDraftTimer(supabase, user, payload)
         : action === "start_season"
           ? await startSeason(supabase, payload)
         : action === "open_week_draft"
