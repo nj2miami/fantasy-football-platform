@@ -112,6 +112,7 @@ function maxSafeTierForPick(league, currentTierTotal, rosteredCount) {
 
 function buildPositionDraftStatus(league, roster) {
   const limits = normalizeRosterRuleMap(league?.roster_rules?.position_limits, DEFAULT_POSITION_LIMITS);
+  const minimums = normalizeRosterRuleMap(league?.roster_rules?.draft_groups, DEFAULT_DRAFT_GROUPS);
   const drafted = roster.reduce((counts, slot) => {
     const position = rosterBucket(slot.player?.position || slot.slot_type);
     if (POSITION_OPTIONS.includes(position)) counts[position] = (counts[position] || 0) + 1;
@@ -120,9 +121,11 @@ function buildPositionDraftStatus(league, roster) {
   return ["QB", "OFF", "DEF", "K"].map((position) => {
     const draftedCount = Number(drafted[position] || 0);
     const max = Number(limits[position] || 0);
+    const minimum = Number(minimums[position] || 0);
     return {
       position,
       drafted: draftedCount,
+      minimum,
       max,
       remaining: Math.max(0, max - draftedCount),
     };
@@ -513,6 +516,7 @@ export default function LeagueDraft() {
     },
     onError: (error) => toast.error(error.message || "Failed to prepare draft pool."),
   });
+  const draftPoolIsPreparing = prepareDraftPoolMutation.isPending || draftPoolIsRunning;
 
   const pickMutation = useMutation({
     mutationFn: (playerId) => appClient.functions.invoke("submit_draft_pick", { draft_id: draftId, player_id: playerId }),
@@ -682,7 +686,7 @@ export default function LeagueDraft() {
   const primaryDraftDisabled = isCompleted ||
     checkInMutation.isPending ||
     startMutation.isPending ||
-    (!isOpen && allManagersCheckedIn && (draftPoolNeedsPreparation || prepareDraftPoolMutation.isPending));
+    (!isOpen && allManagersCheckedIn && (draftPoolNeedsPreparation || draftPoolIsPreparing));
 
   const checkInMyTeam = () => {
     checkInMutation.mutate({ action: "check_in" });
@@ -710,10 +714,10 @@ export default function LeagueDraft() {
           <div className="flex flex-wrap gap-2">
             <Button
               onClick={() => prepareDraftPoolMutation.mutate()}
-              disabled={prepareDraftPoolMutation.isPending || isOpen || isCompleted}
+              disabled={draftPoolIsPreparing || isOpen || isCompleted}
               className="neo-btn bg-[#00D9FF] text-black"
             >
-              {prepareDraftPoolMutation.isPending
+              {draftPoolIsPreparing
                 ? "Preparing Pool"
                 : draftPoolNeedsPreparation || draftPoolIsRunning
                   ? "Prepare Draft Pool"
@@ -918,7 +922,7 @@ export default function LeagueDraft() {
                     <h3 className="text-sm font-black uppercase text-gray-700">{position}</h3>
                     {positionDraftStatusByPosition[position] && (
                       <span className="text-[11px] font-black uppercase text-gray-500">
-                        {positionDraftStatusByPosition[position].drafted} drafted / {positionDraftStatusByPosition[position].remaining} remaining
+                        Min {positionDraftStatusByPosition[position].minimum} / {positionDraftStatusByPosition[position].drafted} drafted / {positionDraftStatusByPosition[position].remaining} remaining
                       </span>
                     )}
                   </div>
@@ -1007,14 +1011,14 @@ export default function LeagueDraft() {
                   {draftPoolNeedsPreparation ? (
                     <div>
                       <p className="text-lg font-black uppercase text-orange-600">
-                        {prepareDraftPoolMutation.isPending ? "Preparing Draft Pool" : "Draft Pool Needs Preparation"}
+                        {draftPoolIsPreparing ? "Preparing Draft Pool" : "Draft Pool Needs Preparation"}
                       </p>
                       <p className="mt-2 text-sm font-bold text-gray-600">
-                        {prepareDraftPoolMutation.isPending
+                        {draftPoolIsPreparing
                           ? draftPoolPreparation?.summary || "Building this league's eligible player list from the scoring rules."
                           : eligibleResult.draftPoolStatus?.reason || state?.draftPoolStatus?.reason || "The commissioner must prepare the draft pool before players can be shown."}
                       </p>
-                      {(prepareDraftPoolMutation.isPending || draftPoolIsRunning || draftPoolPreparation?.progress) && (
+                      {(draftPoolIsPreparing || draftPoolPreparation?.progress) && (
                         <>
                           <div className="neo-border mt-4 h-4 overflow-hidden bg-white">
                             <div
@@ -1031,10 +1035,10 @@ export default function LeagueDraft() {
                       {isCommissioner ? (
                         <Button
                           onClick={() => prepareDraftPoolMutation.mutate()}
-                          disabled={prepareDraftPoolMutation.isPending || isOpen || isCompleted}
+                          disabled={draftPoolIsPreparing || isOpen || isCompleted}
                           className="neo-btn mt-5 bg-[#00D9FF] text-black"
                         >
-                          {prepareDraftPoolMutation.isPending ? "Preparing..." : "Prepare Draft Pool"}
+                          {draftPoolIsPreparing ? "Preparing..." : "Prepare Draft Pool"}
                         </Button>
                       ) : (
                         <p className="mt-4 text-xs font-black uppercase text-gray-500">Waiting for the commissioner to prepare the pool.</p>
