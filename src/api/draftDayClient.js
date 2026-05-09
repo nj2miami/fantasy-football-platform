@@ -9,6 +9,7 @@ const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
 const DRAFT_BUCKET_TARGETS = { QB: 36, OFF: 36, DEF: 36, K: 20 };
 const DRAFT_BUCKET_MINIMUMS = { QB: 36, OFF: 36, DEF: 36, K: 20 };
 const DRAFT_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
+const DRAFT_POOL_ENGINE_VERSION = "draft-pool-low-tier-flex-v3";
 
 function durabilityLabel(value) {
   return DURABILITY_LABELS[Number(value)] || "Normal";
@@ -126,7 +127,12 @@ async function effectiveLeagueScoringContext(league = {}) {
 function expectedDraftScoreHash(scoringContext = {}) {
   const scoringRules = scoringContext.rules || scoringContext || DEFAULT_SCORING_RULES;
   const sourceUpdatedAt = scoringContext.sourceUpdatedAt || null;
-  return `${DRAFT_SCORE_METHOD}:${stableContentHash({ scoringRules, sourceUpdatedAt })}`;
+  return `${DRAFT_SCORE_METHOD}:${stableContentHash({
+    scoringRules,
+    sourceUpdatedAt,
+    draftPoolEngineVersion: DRAFT_POOL_ENGINE_VERSION,
+    draftBucketTargets: DRAFT_BUCKET_TARGETS,
+  })}`;
 }
 
 function draftPoolHashStatus(tiers, scoringRules, job) {
