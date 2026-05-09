@@ -42,6 +42,7 @@ const PAGE_SIZE = 10;
 const MIN_DRAFT_STAT_WEEKS = 8;
 const POSITION_OPTIONS = ["ALL", "QB", "OFF", "DEF", "K"];
 const DEFAULT_DRAFT_GROUPS = { QB: 2, OFF: 2, DEF: 2, K: 1, FLEX: 3 };
+const DEFAULT_POSITION_LIMITS = { QB: 2, OFF: 4, DEF: 4, K: 1 };
 const OFFENSE_POSITIONS = new Set(["RB", "FB", "WR", "TE", "OL", "C", "G", "OT", "OFF"]);
 const DEFENSE_POSITIONS = new Set(["DL", "DE", "DT", "NT", "LB", "ILB", "MLB", "OLB", "DB", "CB", "S", "SAF", "FS", "DEF"]);
 
@@ -85,49 +86,59 @@ function getPickRemaining(room, nowMs) {
   return Math.max(0, timerSeconds - elapsed);
 }
 
-function buildRosterNeeds(league, roster) {
-  const draftGroups = league?.roster_rules?.draft_groups;
-  const required = draftGroups && typeof draftGroups === "object" && Object.keys(draftGroups).length
-    ? { ...DEFAULT_DRAFT_GROUPS, ...Object.fromEntries(Object.entries(draftGroups).map(([key, value]) => [String(key).toUpperCase(), Number(value || 0)])) }
-    : DEFAULT_DRAFT_GROUPS;
+function normalizeRosterRuleMap(value, defaults) {
+  return value && typeof value === "object" && Object.keys(value).length
+    ? { ...defaults, ...Object.fromEntries(Object.entries(value).map(([key, item]) => [String(key).toUpperCase(), Number(item || 0)])) }
+    : defaults;
+}
+
+function draftTotalSlots(league) {
+  const draftGroups = normalizeRosterRuleMap(league?.roster_rules?.draft_groups, DEFAULT_DRAFT_GROUPS);
+  return Math.max(
+    1,
+    Number(league?.draft_config?.rounds || 0),
+    Object.values(draftGroups).reduce((sum, value) => sum + Number(value || 0), 0)
+  );
+}
+
+function maxSafeTierForPick(league, currentTierTotal, rosteredCount) {
+  const tierCap = Number(league?.team_tier_cap || 0);
+  if (tierCap <= 0) return 5;
+  const remainingSlotsIncludingCurrent = Math.max(1, draftTotalSlots(league) - Number(rosteredCount || 0));
+  const remainingCap = Math.max(0, tierCap - Number(currentTierTotal || 0));
+  if (remainingCap <= remainingSlotsIncludingCurrent) return 1;
+  return Math.max(1, Math.min(5, remainingCap - (remainingSlotsIncludingCurrent - 1)));
+}
+
+function buildPositionDraftStatus(league, roster) {
+  const limits = normalizeRosterRuleMap(league?.roster_rules?.position_limits, DEFAULT_POSITION_LIMITS);
   const drafted = roster.reduce((counts, slot) => {
     const position = rosterBucket(slot.player?.position || slot.slot_type);
-    counts[position] = (counts[position] || 0) + 1;
+    if (POSITION_OPTIONS.includes(position)) counts[position] = (counts[position] || 0) + 1;
     return counts;
   }, {});
-  const fixedOff = Math.min(Number(required.OFF || 0), Number(drafted.OFF || 0));
-  const fixedDef = Math.min(Number(required.DEF || 0), Number(drafted.DEF || 0));
-  const flexFilled = Math.min(
-    Number(required.FLEX || 0),
-    Math.max(0, Number(drafted.OFF || 0) - Number(required.OFF || 0)) +
-      Math.max(0, Number(drafted.DEF || 0) - Number(required.DEF || 0))
-  );
-  const filledByPosition = {
-    QB: Math.min(Number(required.QB || 0), Number(drafted.QB || 0)),
-    K: Math.min(Number(required.K || 0), Number(drafted.K || 0)),
-    OFF: fixedOff,
-    DEF: fixedDef,
-    FLEX: flexFilled,
-  };
-  return ["QB", "K", "OFF", "DEF", "FLEX"]
-    .filter((position) => Number(required[position] || 0) > 0)
-    .map((position) => ({
+  return ["QB", "OFF", "DEF", "K"].map((position) => {
+    const draftedCount = Number(drafted[position] || 0);
+    const max = Number(limits[position] || 0);
+    return {
       position,
-      needed: Number(required[position] || 0),
-      filled: Number(filledByPosition[position] || 0),
-      remaining: Math.max(0, Number(required[position] || 0) - Number(filledByPosition[position] || 0)),
-    }));
+      drafted: draftedCount,
+      max,
+      remaining: Math.max(0, max - draftedCount),
+    };
+  });
 }
 
 function groupBoardByPosition(board) {
-  const order = ["QB", "OFF", "DEF", "K", "UNK"];
+  const order = ["QB", "OFF", "DEF", "K"];
   const groups = board.reduce((acc, item) => {
     const position = rosterBucket(item.player?.position);
     if (!acc[position]) acc[position] = [];
     acc[position].push(item);
     return acc;
-  }, {});
-  return Object.entries(groups).sort(([a], [b]) => {
+  }, Object.fromEntries(order.map((position) => [position, []])));
+  if (groups.UNK?.length) order.push("UNK");
+  return order.map((position) => [position, groups[position] || []]).sort(([a], [b]) => {
     const indexA = order.indexOf(a);
     const indexB = order.indexOf(b);
     return (indexA === -1 ? order.length : indexA) - (indexB === -1 ? order.length : indexB);
@@ -252,7 +263,7 @@ function draftPickLabel(player) {
   return `${playerName(player)} (T${Number(player.tier_value || 1)})`;
 }
 
-function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted }) {
+function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, isBoardBusy, isDraftBusy, isInBoard, isDrafted, draftDisabledReason }) {
   const nameClass = "block max-w-full truncate text-left text-sm font-black uppercase sm:text-base";
   return (
     <div className="grid grid-cols-1 gap-3 border-b-2 border-black/10 py-3 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_260px_auto] md:items-center">
@@ -286,16 +297,17 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
         </div>
       </div>
       <PlayerTierCell player={player} />
-      <div className="flex flex-nowrap md:justify-end">
-        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isDraftBusy} className="neo-btn whitespace-nowrap bg-[#F7B801] px-4 text-black">
+      <div className="flex flex-col items-start gap-1 md:items-end">
+        <Button onClick={() => onDraft(player.id)} disabled={!canDraft || isDrafted || isDraftBusy || Boolean(draftDisabledReason)} className="neo-btn whitespace-nowrap bg-[#F7B801] px-4 text-black" title={draftDisabledReason || "Draft player"}>
           Draft
         </Button>
+        {draftDisabledReason && <p className="max-w-44 text-left text-[11px] font-black uppercase text-red-600 md:text-right">{draftDisabledReason}</p>}
       </div>
     </div>
   );
 }
 
-function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) {
+function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy, draftDisabledReason }) {
   const player = item.player;
   const nameClass = "block max-w-full truncate text-left text-sm font-black uppercase sm:text-base";
   return (
@@ -321,10 +333,11 @@ function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy }) 
         <Button onClick={() => onRemove(item.id)} disabled={isBusy} className="neo-btn bg-red-500 p-2 text-white" title="Remove from draft board">
           <Trash2 className="h-4 w-4" />
         </Button>
-        <Button onClick={() => onDraft(item.player_id)} disabled={!canDraft || isBusy} className="neo-btn bg-[#F7B801] p-2 text-black" title="Draft player">
+        <Button onClick={() => onDraft(item.player_id)} disabled={!canDraft || isBusy || Boolean(draftDisabledReason)} className="neo-btn bg-[#F7B801] p-2 text-black" title={draftDisabledReason || "Draft player"}>
           <Check className="h-4 w-4" />
         </Button>
       </div>
+      {draftDisabledReason && <p className="text-[11px] font-black uppercase text-red-600">{draftDisabledReason}</p>}
     </div>
   );
 }
@@ -614,12 +627,21 @@ export default function LeagueDraft() {
     : 0;
   const boardPlayerIds = new Set(board.map((item) => item.player_id));
   const boardGroups = groupBoardByPosition(board);
-  const rosterNeeds = buildRosterNeeds(state.league, roster);
+  const positionDraftStatus = buildPositionDraftStatus(state.league, roster);
+  const positionDraftStatusByPosition = Object.fromEntries(positionDraftStatus.map((item) => [item.position, item]));
+  const maxSafeTier = maxSafeTierForPick(state.league, currentTierTotal, roster.length);
+  const tierCapRemaining = tierCap > 0 ? Math.max(0, tierCap - currentTierTotal) : null;
   const eligiblePlayers = eligibleResult.data || [];
   const draftPoolPreparation = currentDraftPoolPreparation;
   const commissioner = state.commissionerProfile;
   const commissionerName = commissioner?.display_name || commissioner?.profile_name || "Commissioner";
   const commissionerProfileUrl = commissioner?.profile_name ? createPageUrl(`Profile?name=${encodeURIComponent(commissioner.profile_name)}`) : null;
+  const draftDisabledReason = (player) => {
+    if (!isMyTurn) return "";
+    if (!player) return "";
+    if (Number(player.tier_value || 1) > maxSafeTier) return `Max T${maxSafeTier} this pick`;
+    return "";
+  };
 
   const addToBoard = (player) => {
     if (!currentMember?.id) {
@@ -875,11 +897,30 @@ export default function LeagueDraft() {
         <aside className="space-y-8">
           <section className="neo-card bg-white p-5">
             <h2 className="mb-4 text-2xl font-black uppercase text-orange-600">My Draft Board</h2>
+            <div className="neo-border mb-5 bg-[#EFFBFF] p-3">
+              <div className="grid grid-cols-1 gap-2 text-xs font-black uppercase text-black sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                <span className={`neo-border px-2 py-1 ${tierCap && currentTierTotal > tierCap ? "bg-red-500 text-white" : "bg-white"}`}>
+                  Tier Cap {currentTierTotal}{tierCap ? ` / ${tierCap}` : ""}
+                </span>
+                <span className="neo-border bg-white px-2 py-1">
+                  Remaining {tierCapRemaining === null ? "--" : tierCapRemaining}
+                </span>
+                <span className="neo-border bg-[#D7F8E8] px-2 py-1">
+                  Max Pick T{maxSafeTier}
+                </span>
+              </div>
+              {managerPointsEnabled && <p className="mt-2 text-xs font-black uppercase text-gray-600">Manager Pts {currentManagerPoints}</p>}
+            </div>
             <div>
               {boardGroups.map(([position, items]) => (
                 <div key={position} className="mb-5 last:mb-0">
-                  <div className="mb-1 border-b-4 border-black pb-1">
+                  <div className="mb-1 flex flex-wrap items-end justify-between gap-2 border-b-4 border-black pb-1">
                     <h3 className="text-sm font-black uppercase text-gray-700">{position}</h3>
+                    {positionDraftStatusByPosition[position] && (
+                      <span className="text-[11px] font-black uppercase text-gray-500">
+                        {positionDraftStatusByPosition[position].drafted} drafted / {positionDraftStatusByPosition[position].remaining} remaining
+                      </span>
+                    )}
                   </div>
                   <div>
                     {items.map((item) => (
@@ -891,8 +932,10 @@ export default function LeagueDraft() {
                         onRemove={(id) => boardMutation.mutate({ action: "remove", payload: { id } })}
                         onStats={setSelectedPlayer}
                         isBusy={boardMutation.isPending || pickMutation.isPending}
+                        draftDisabledReason={draftDisabledReason(item.player)}
                       />
                     ))}
+                    {!items.length && <p className="py-3 text-xs font-bold uppercase text-gray-400">No players saved.</p>}
                   </div>
                 </div>
               ))}
@@ -908,22 +951,6 @@ export default function LeagueDraft() {
                 <div>
                   <h2 className="text-2xl font-black uppercase text-orange-600">{isMyTurn ? "DRAFT NOW" : "Eligible Players"}</h2>
                   <p className="text-sm font-bold text-gray-600">Minimum weeks required: {requiredWeeks}{isMyTurn ? ` | ${pickRemaining}s remaining` : ""}</p>
-                </div>
-                <div className="neo-border bg-[#EFFBFF] p-3 lg:ml-auto lg:max-w-md">
-                  <p className="mb-2 text-xs font-black uppercase text-gray-500">Roster Limits</p>
-                  <div className="mb-2 flex flex-wrap gap-2 lg:justify-end">
-                    <span className={`neo-border px-2 py-1 text-xs font-black uppercase ${tierCap && currentTierTotal > tierCap ? "bg-red-500 text-white" : "bg-white text-black"}`}>
-                      Tier {currentTierTotal}{tierCap ? ` / ${tierCap}` : ""}
-                    </span>
-                    {managerPointsEnabled && <span className="neo-border bg-white px-2 py-1 text-xs font-black uppercase text-black">Manager Pts {currentManagerPoints}</span>}
-                  </div>
-                  <div className="flex flex-wrap gap-2 lg:justify-end">
-                    {rosterNeeds.map((need) => (
-                      <span key={need.position} className={`neo-border px-2 py-1 text-xs font-black uppercase ${need.remaining ? "bg-white text-black" : "bg-[#D7F8E8] text-black"}`}>
-                        {need.position} {need.remaining}
-                      </span>
-                    ))}
-                  </div>
                 </div>
               </div>
               <div className="flex flex-col gap-3 lg:flex-row">
@@ -972,6 +999,7 @@ export default function LeagueDraft() {
                   isDrafted={pickedIds.has(player.id)}
                   isBoardBusy={boardMutation.isPending}
                   isDraftBusy={pickMutation.isPending}
+                  draftDisabledReason={draftDisabledReason(player)}
                 />
               ))}
               {!eligiblePlayers.length && (

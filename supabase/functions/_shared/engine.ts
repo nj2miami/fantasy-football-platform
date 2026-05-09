@@ -100,8 +100,8 @@ const DEFAULT_DRAFT_CONFIG = {
   rounds: 10,
   timer_seconds: 60,
 };
-const AI_DRAFT_PICK_DELAY_MIN_SECONDS = 10;
-const AI_DRAFT_PICK_DELAY_MAX_SECONDS = 30;
+const AI_DRAFT_PICK_DELAY_MIN_SECONDS = 3;
+const AI_DRAFT_PICK_DELAY_MAX_SECONDS = 3;
 
 const DEFAULT_TEAM_TIER_CAP = 25;
 const DEFAULT_MANAGER_POINTS_STARTING = 0;
@@ -142,12 +142,13 @@ const DURABILITY_MULTIPLIERS: Record<number, number> = {
 };
 
 const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
-const DRAFT_BUCKET_TARGETS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30, K: 24 };
-const DRAFT_BUCKET_MINIMUMS: Record<string, number> = { QB: 30, OFF: 30, DEF: 30, K: 1 };
+const DRAFT_BUCKET_TARGETS: Record<string, number> = { QB: 36, OFF: 36, DEF: 36, K: 20 };
+const DRAFT_BUCKET_MINIMUMS: Record<string, number> = { QB: 36, OFF: 36, DEF: 36, K: 20 };
+const DRAFT_MAX_BUCKET_TARGET = Math.max(...Object.values(DRAFT_BUCKET_TARGETS));
 const MIN_DRAFT_STAT_WEEKS = 8;
 const PLAYER_TWO_WEEK_ASSIGNMENT = "per_lineup_player_two_week_average_v1";
 const LEAGUE_PLAYER_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
-const DRAFT_POOL_ENGINE_VERSION = "draft-pool-finalizer-pagination-v2";
+const DRAFT_POOL_ENGINE_VERSION = "draft-pool-low-tier-flex-v3";
 const DRAFT_POOL_CHUNK_SIZE = 200;
 
 const DEFAULT_SCHEDULE_CONFIG = {
@@ -424,16 +425,13 @@ function draftBucketMinimum(position: unknown) {
 
 function playerTierForRank(rank: number, position?: unknown) {
   if (String(position || "").toUpperCase() === "K") {
-    if (rank <= 4) return 5;
-    if (rank <= 8) return 4;
-    if (rank <= 12) return 3;
-    if (rank <= 16) return 2;
+    if (rank <= 10) return 2;
     return 1;
   }
   if (rank <= 6) return 5;
   if (rank <= 12) return 4;
   if (rank <= 18) return 3;
-  if (rank <= 24) return 2;
+  if (rank <= 27) return 2;
   return 1;
 }
 
@@ -475,7 +473,12 @@ function stableContentHash(value: unknown) {
 }
 
 function scoringRulesHash(scoringRules: Json, sourceUpdatedAt?: string | null) {
-  return `${LEAGUE_PLAYER_SCORE_METHOD}:${stableContentHash({ scoringRules, sourceUpdatedAt: sourceUpdatedAt || null })}`;
+  return `${LEAGUE_PLAYER_SCORE_METHOD}:${stableContentHash({
+    scoringRules,
+    sourceUpdatedAt: sourceUpdatedAt || null,
+    draftPoolEngineVersion: DRAFT_POOL_ENGINE_VERSION,
+    draftBucketTargets: DRAFT_BUCKET_TARGETS,
+  })}`;
 }
 
 async function adminSeasonScoringRules(supabase: ReturnType<typeof createClient>, sourceSeasonYear: number) {
@@ -1933,7 +1936,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
     .from("league_player_scores")
     .select("id,position,weeks_played,scoring_rules_hash")
     .eq("league_id", leagueId)
-    .lte("position_rank", 30);
+    .lte("position_rank", DRAFT_MAX_BUCKET_TARGET);
   if (existingError) throw existingError;
   const existingHashMatches = Boolean(existing?.length) && existing.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
   const existingWeeksEligible = Boolean(existing?.length) && existing.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
@@ -2028,7 +2031,7 @@ async function existingLeaguePlayerScoresComplete(supabase: ReturnType<typeof cr
     .from("league_player_scores")
     .select("id,position,weeks_played,scoring_rules_hash")
     .eq("league_id", league.id)
-    .lte("position_rank", 30);
+    .lte("position_rank", DRAFT_MAX_BUCKET_TARGET);
   if (error) throw error;
   const rows = existing || [];
   if (!rows.length) return false;
@@ -2047,7 +2050,7 @@ async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient
     .from("league_player_scores")
     .select("player_id")
     .eq("league_id", league.id)
-    .lte("position_rank", 30);
+    .lte("position_rank", DRAFT_MAX_BUCKET_TARGET);
   if (playersError) throw playersError;
   if (!players?.length) return;
   const playerIds = new Set((players || []).map((player: Json) => player.player_id));
@@ -2409,7 +2412,7 @@ async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClien
       .from("league_player_scores")
       .select("id,position", { count: "exact" })
       .eq("league_id", league.id)
-      .lte("position_rank", 30);
+      .lte("position_rank", DRAFT_MAX_BUCKET_TARGET);
     if (error) throw error;
     return {
       league_id: league.id,
@@ -2505,14 +2508,38 @@ async function leagueMemberTierTotal(supabase: ReturnType<typeof createClient>, 
   return playerIds.reduce((sum, playerId) => sum + Number(tiersByPlayer.get(playerId) || 1), 0);
 }
 
+async function leagueMemberRosterCount(supabase: ReturnType<typeof createClient>, leagueMemberId: string) {
+  const { count, error } = await supabase
+    .from("roster_slots")
+    .select("id", { count: "exact", head: true })
+    .eq("league_member_id", leagueMemberId);
+  if (error) throw error;
+  return Number(count || 0);
+}
+
+function maxSafeTierForPick(league: Json, tierTotal: number, rosteredCount: number) {
+  const plan = draftRosterPlan(league);
+  const cap = Number(league.team_tier_cap || DEFAULT_TEAM_TIER_CAP);
+  if (cap <= 0) return 5;
+  const remainingPicksIncludingCurrent = Math.max(1, plan.totalSlots - rosteredCount);
+  const remainingCap = Math.max(0, cap - tierTotal);
+  if (remainingCap <= remainingPicksIncludingCurrent) return 1;
+  return Math.max(1, Math.min(5, remainingCap - (remainingPicksIncludingCurrent - 1)));
+}
+
 async function enforceTeamTierCap(supabase: ReturnType<typeof createClient>, league: Json, leagueMemberId: string, playerId: string) {
   const cap = Number(league.team_tier_cap || 0);
   if (cap <= 0) return;
   await ensureLeaguePlayerScores(supabase, league);
   const currentTotal = await leagueMemberTierTotal(supabase, league, leagueMemberId);
   const playerTier = await getPlayerTierValue(supabase, league, playerId);
+  const rosteredCount = await leagueMemberRosterCount(supabase, leagueMemberId);
+  const maxSafeTier = maxSafeTierForPick(league, currentTotal, rosteredCount);
   if (currentTotal + playerTier > cap) {
     throw new Error(`Drafting this player would exceed the team tier cap (${currentTotal + playerTier}/${cap}).`);
+  }
+  if (playerTier > maxSafeTier) {
+    throw new Error(`Drafting this player would leave too little tier cap to complete the roster. Max allowed for this pick is Tier ${maxSafeTier}.`);
   }
 }
 
@@ -2521,7 +2548,9 @@ async function canFitTeamTierCap(supabase: ReturnType<typeof createClient>, leag
   if (cap <= 0) return true;
   const currentTotal = await leagueMemberTierTotal(supabase, league, leagueMemberId);
   const playerTier = await getPlayerTierValue(supabase, league, playerId);
-  return currentTotal + playerTier <= cap;
+  const rosteredCount = await leagueMemberRosterCount(supabase, leagueMemberId);
+  const maxSafeTier = maxSafeTierForPick(league, currentTotal, rosteredCount);
+  return currentTotal + playerTier <= cap && playerTier <= maxSafeTier;
 }
 
 function randomIntegerInclusive(min: number, max: number) {
@@ -2594,15 +2623,6 @@ async function aiRosterContext(supabase: ReturnType<typeof createClient>, league
     counts: rosterCountsFromRows(rows),
     tierTotal: rows.reduce((sum, row) => sum + Number(row.tier_value || 1), 0),
   };
-}
-
-function maxSafeTierForPick(league: Json, tierTotal: number, rosteredCount: number) {
-  const plan = draftRosterPlan(league);
-  const cap = Number(league.team_tier_cap || DEFAULT_TEAM_TIER_CAP);
-  if (cap <= 0) return 5;
-  const remainingPicksIncludingCurrent = Math.max(1, plan.totalSlots - rosteredCount);
-  const remainingCap = Math.max(1, cap - tierTotal);
-  return Math.max(1, Math.min(5, remainingCap - (remainingPicksIncludingCurrent - 1)));
 }
 
 function aiPersonaBucketScore(persona: string, bucket: string) {
@@ -2684,7 +2704,7 @@ async function aiBestAvailablePlayer(
     .from("league_player_scores")
     .select("player_id,position,position_rank,tier_value")
     .eq("league_id", league.id)
-    .lte("position_rank", 30)
+    .lte("position_rank", DRAFT_MAX_BUCKET_TARGET)
     .order("tier_value", { ascending: false })
     .order("position_rank", { ascending: true })
     .limit(1000);
@@ -2693,14 +2713,13 @@ async function aiBestAvailablePlayer(
   const legalRows = (playerRows || [])
     .filter((row: Json) => !pickedIds.has(String(row.player_id)))
     .filter((row: Json) => Number(row.tier_value || 1) <= remainingCap)
+    .filter((row: Json) => Number(row.tier_value || 1) <= maxSafeTier)
     .filter((row: Json) => aiCanCompleteRosterAfterPick(league, rosterContext.counts, String(row.position || "").toUpperCase(), rosteredCount));
 
   const hasNonKickerOptions = legalRows.some((row: Json) =>
-    String(row.position || "").toUpperCase() !== "K" &&
-    Number(row.tier_value || 1) <= maxSafeTier
+    String(row.position || "").toUpperCase() !== "K"
   );
   const candidates = legalRows
-    .filter((row: Json) => Number(row.tier_value || 1) <= maxSafeTier)
     .filter((row: Json) => {
       const bucket = String(row.position || "").toUpperCase();
       return bucket !== "K" || aiKickerAllowed(league, rosterContext.counts, rosteredCount, round, hasNonKickerOptions);
@@ -3222,7 +3241,7 @@ async function bestAvailablePlayer(supabase: ReturnType<typeof createClient>, le
     .from("league_player_scores")
     .select("player_id,total_points,position_rank,tier_value,players!inner(position)")
     .eq("league_id", league.id)
-    .lte("position_rank", 30)
+    .lte("position_rank", DRAFT_MAX_BUCKET_TARGET)
     .limit(1000);
   if (playersError) throw playersError;
 
