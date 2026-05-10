@@ -1044,7 +1044,8 @@ function sampleTwoSourceWeeks(weeks: number[], lockedWeeks: Set<number>) {
   const sorted = [...new Set(weeks)].filter(Boolean).sort((a, b) => a - b);
   if (sorted.length < 2) throw new Error("At least two usable source stat weeks are required for weekly scoring.");
   const available = sorted.filter((week) => !lockedWeeks.has(week));
-  const pool = available.length >= 2 ? available : sorted;
+  if (available.length < 2) throw new Error("At least two unlocked source stat weeks are required for weekly scoring in the current season segment.");
+  const pool = available;
   const first = randomItem(pool);
   const secondPool = pool.filter((week) => week !== first);
   return [first, randomItem(secondPool)];

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS } from "@/api/appClient";
 import { LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
 
 export default function LeagueScheduleSettings({ league }) {
   const queryClient = useQueryClient();
@@ -98,16 +99,22 @@ export default function LeagueScheduleSettings({ league }) {
   });
 
   const updateWeekMutation = useMutation({
-    mutationFn: ({ status }) => {
-      if (!currentWeek) {
-        return appClient.entities.Week.create({
-          league_id: league.id,
-          week_number: currentWeekNumber,
-          status,
-          reveal_state: "hidden",
-        });
-      }
-      return appClient.entities.Week.update(currentWeek.id, { status });
+    mutationFn: async ({ status }) => {
+      const { data, error } = await supabase
+        .from("league_weeks")
+        .upsert(
+          {
+            league_id: league.id,
+            week_number: currentWeekNumber,
+            status,
+            reveal_state: currentWeek?.reveal_state || "hidden",
+          },
+          { onConflict: "league_id,week_number" }
+        )
+        .select("*")
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     },
     onSuccess: () => {
       toast.success("Week status updated.");

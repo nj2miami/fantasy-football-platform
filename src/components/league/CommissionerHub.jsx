@@ -5,6 +5,7 @@ import { Bot, CalendarDays, Eye, FastForward, Lock, Play, RefreshCw, ShieldCheck
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
 
 function StepBadge({ status }) {
   const styles = {
@@ -143,11 +144,22 @@ export default function CommissionerHub({ league }) {
   });
 
   const updateWeekMutation = useMutation({
-    mutationFn: ({ status }) => {
-      if (!currentWeek) {
-        return appClient.entities.Week.create({ league_id: league.id, week_number: currentWeekNumber, status, reveal_state: "hidden" });
-      }
-      return appClient.entities.Week.update(currentWeek.id, { status });
+    mutationFn: async ({ status }) => {
+      const { data, error } = await supabase
+        .from("league_weeks")
+        .upsert(
+          {
+            league_id: league.id,
+            week_number: currentWeekNumber,
+            status,
+            reveal_state: currentWeek?.reveal_state || "hidden",
+          },
+          { onConflict: "league_id,week_number" }
+        )
+        .select("*")
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     },
     onSuccess: () => {
       toast.success("Week status updated.");
