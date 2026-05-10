@@ -199,6 +199,21 @@ function DurabilityBadge({ durability }) {
   return <span className={`neo-border px-2 py-1 text-[11px] font-black uppercase ${classes}`}>Dur {prefix}{value}</span>;
 }
 
+function formatBonus(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return "+0.00";
+  if (Math.abs(numeric) < 0.005) return "+0.00";
+  return `${numeric > 0 ? "+" : ""}${numeric.toFixed(2)}`;
+}
+
+function durabilityBonusForSlot(slot) {
+  if (slot?.durability_bonus !== undefined) return Number(slot.durability_bonus || 0);
+  if (slot?.scored_points === undefined) return 0;
+  const average = Number(slot.average_points || 0);
+  const multiplier = Number(slot.lineup_multiplier ?? 1);
+  return Number(slot.scored_points || 0) - average * multiplier;
+}
+
 function lineupSlotIsPlayed(slot) {
   const status = lineupSlotStatus(slot);
   return !["bench", "benched", "treating", "treatment", "treated"].includes(status);
@@ -442,7 +457,7 @@ function StandingsPanel({ league, standings, members, isLoading, compact = false
             <tr>
               <th className="p-2 font-black uppercase">Rank</th>
               <th className="p-2 font-black uppercase">Team</th>
-              <th className="p-2 font-black uppercase">Record</th>
+              <th className="p-2 font-black uppercase">W-L-T</th>
               {league.ranking_system === "offl" && <th className="p-2 font-black uppercase">LP</th>}
               <th className="p-2 font-black uppercase">PF</th>
               <th className="p-2 font-black uppercase">PA</th>
@@ -967,6 +982,7 @@ function TeamScoringDetail({ title, result, lineup, playerById, tierByPlayer, du
                   const tier = tierByPlayer.get(slot.player_id);
                   const durability = durabilityByPlayer.get(slot.player_id);
                   const samples = normalizeSlots(slot.source_week_values);
+                  const durabilityBonus = durabilityBonusForSlot(slot);
                   return (
                     <div key={`${slot.player_id}-${index}`} className="neo-border bg-gray-50 p-3">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -978,7 +994,16 @@ function TeamScoringDetail({ title, result, lineup, playerById, tierByPlayer, du
                             <DurabilityBadge durability={slot.durability ?? durability?.durability} />
                           </div>
                         </div>
-                        <p className="text-lg font-black">{formatNumber(slot.scored_points, 2)}</p>
+                        <div className="grid grid-cols-2 gap-2 text-right sm:min-w-[160px]">
+                          <div>
+                            <p className="text-[10px] font-black uppercase text-gray-500">+Bonus</p>
+                            <p className={`font-black ${durabilityBonus < 0 ? "text-red-600" : "text-green-700"}`}>{formatBonus(durabilityBonus)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-black uppercase text-gray-500">Total</p>
+                            <p className="text-lg font-black">{formatNumber(slot.scored_points, 2)}</p>
+                          </div>
+                        </div>
                       </div>
                       {samples.length > 0 && (
                         <p className="mt-2 text-xs font-bold text-gray-600">

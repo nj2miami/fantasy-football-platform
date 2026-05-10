@@ -4211,6 +4211,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
       const baseAverage = sourceWeekValues.reduce((sum, row) => sum + row.points, 0) / sourceWeekValues.length;
       const slotPoints = baseAverage * lineupSlotMultiplier(slot);
       const finalPoints = durabilityEnabled(league) ? applyDurability(slotPoints, durabilityByPlayer.get(playerId)) : Number(slotPoints.toFixed(2));
+      const durabilityBonus = Number((finalPoints - slotPoints).toFixed(2));
       total += finalPoints;
       scoredSlots.push({
         ...slot,
@@ -4219,6 +4220,9 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
         source_week_values: sourceWeekValues,
         average_points: Number(baseAverage.toFixed(4)),
         lineup_multiplier: lineupSlotMultiplier(slot),
+        base_points: Number(slotPoints.toFixed(4)),
+        durability: durabilityByPlayer.get(playerId),
+        durability_bonus: durabilityBonus,
         scored_points: finalPoints,
       });
     }
@@ -4535,6 +4539,9 @@ async function recalculateStandings(supabase: ReturnType<typeof createClient>, p
   if (resultError) throw resultError;
   const { data: matchups, error: matchupError } = await supabase.from("matchups").select("*").eq("league_id", leagueId);
   if (matchupError) throw matchupError;
+  const resultByMemberWeek = new Map(
+    (results || []).map((row) => [`${row.league_member_id}:${row.week_number}`, row]),
+  );
 
   const rows = (members || []).map((member) => {
     const memberResults = (results || []).filter((row) => row.league_member_id === member.id);
@@ -4545,8 +4552,12 @@ async function recalculateStandings(supabase: ReturnType<typeof createClient>, p
     let pointsAgainst = 0;
     for (const matchup of memberMatchups) {
       const isHome = matchup.home_member_id === member.id;
-      const own = Number(isHome ? matchup.home_score : matchup.away_score);
-      const opp = Number(isHome ? matchup.away_score : matchup.home_score);
+      const opponentId = isHome ? matchup.away_member_id : matchup.home_member_id;
+      const ownResult = resultByMemberWeek.get(`${member.id}:${matchup.week_number}`);
+      const opponentResult = resultByMemberWeek.get(`${opponentId}:${matchup.week_number}`);
+      if (!ownResult || !opponentResult) continue;
+      const own = Number(ownResult.total_points || 0);
+      const opp = Number(opponentResult.total_points || 0);
       pointsAgainst += opp;
       if (own > opp) wins += 1;
       else if (own < opp) losses += 1;
