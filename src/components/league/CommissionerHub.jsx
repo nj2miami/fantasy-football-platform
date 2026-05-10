@@ -5,7 +5,6 @@ import { Bot, CalendarDays, Eye, FastForward, Lock, Play, RefreshCw, ShieldCheck
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 
 function StepBadge({ status }) {
   const styles = {
@@ -136,36 +135,12 @@ export default function CommissionerHub({ league }) {
         reveal_week_results: "Results revealed.",
         advance_week: "Advanced to next week.",
         recalculate_standings: "Standings recalculated.",
+        update_week_status: "Week status updated.",
       };
       toast.success(labels[variables.action] || "Action complete.");
       invalidate();
     },
     onError: (error) => toast.error(error.message || "League operation failed."),
-  });
-
-  const updateWeekMutation = useMutation({
-    mutationFn: async ({ status }) => {
-      const { data, error } = await supabase
-        .from("league_weeks")
-        .upsert(
-          {
-            league_id: league.id,
-            week_number: currentWeekNumber,
-            status,
-            reveal_state: currentWeek?.reveal_state || "hidden",
-          },
-          { onConflict: "league_id,week_number" }
-        )
-        .select("*")
-        .maybeSingle();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      toast.success("Week status updated.");
-      invalidate();
-    },
-    onError: (error) => toast.error(error.message || "Failed to update week status."),
   });
 
   const toggleScheduleLockMutation = useMutation({
@@ -198,7 +173,7 @@ export default function CommissionerHub({ league }) {
                   ? "Reveal results."
                   : "Advance to the next week when ready.";
 
-  const actionBusy = actionMutation.isPending || updateWeekMutation.isPending || toggleScheduleLockMutation.isPending;
+  const actionBusy = actionMutation.isPending || toggleScheduleLockMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -264,7 +239,7 @@ export default function CommissionerHub({ league }) {
         </WorkflowStep>
 
         <WorkflowStep number="5" title="Lock And Resolve" status={!lineupReady ? "blocked" : weekResolved ? "done" : weekStatus === "LOCKED" ? "active" : "waiting"} detail={weekResolved ? "Scores have been calculated for this week." : weekStatus === "LOCKED" ? "Lineups are locked. Resolve the week next." : "Lock the week after lineups are ready, then resolve scoring."}>
-          <Button onClick={() => updateWeekMutation.mutate({ status: weekStatus === "LOCKED" ? "LINEUPS_OPEN" : "LOCKED" })} disabled={actionBusy || !leagueStarted || weekResolved || !lineupReady} className="neo-btn bg-white text-black">
+          <Button onClick={() => run("update_week_status", { week_number: currentWeekNumber, status: weekStatus === "LOCKED" ? "LINEUPS_OPEN" : "LOCKED" })} disabled={actionBusy || !leagueStarted || weekResolved || !lineupReady} className="neo-btn bg-white text-black">
             {weekStatus === "LOCKED" ? <Unlock className="mr-2 h-5 w-5" /> : <Lock className="mr-2 h-5 w-5" />}
             {weekStatus === "LOCKED" ? "Unlock Week" : "Lock Week"}
           </Button>

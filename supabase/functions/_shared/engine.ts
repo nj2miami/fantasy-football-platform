@@ -1948,6 +1948,39 @@ async function startSeason(supabase: ReturnType<typeof createClient>, payload: J
   return { season, week };
 }
 
+async function updateWeekStatus(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueControl(supabase, user, payload.league_id);
+  const weekNumber = Number(payload.week_number || 0);
+  const status = String(payload.status || "").toUpperCase();
+  const allowedStatuses = new Set(["DRAFT_OPEN", "LINEUPS_OPEN", "LOCKED", "RESOLVED"]);
+  if (!weekNumber) throw new Error("Week number is required.");
+  if (!allowedStatuses.has(status)) throw new Error("Invalid week status.");
+
+  const { data: existing, error: existingError } = await supabase
+    .from("league_weeks")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("week_number", weekNumber)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  const { data: week, error } = await supabase
+    .from("league_weeks")
+    .upsert(
+      {
+        league_id: league.id,
+        week_number: weekNumber,
+        status,
+        reveal_state: existing?.reveal_state || "hidden",
+      },
+      { onConflict: "league_id,week_number" },
+    )
+    .select("*")
+    .single();
+  if (error) throw error;
+  return { week };
+}
+
 async function openWeekDraft(supabase: ReturnType<typeof createClient>, payload: Json) {
   const weekNumber = Number(payload.week_number || 1);
   const { data: draft, error: draftError } = await supabase
@@ -4621,6 +4654,8 @@ export async function handleAction(action: string, request: Request) {
                                                     ? await processDraftTimer(supabase, user, payload)
         : action === "start_season"
           ? await startSeason(supabase, payload)
+        : action === "update_week_status"
+          ? await updateWeekStatus(supabase, user, payload)
         : action === "generate_schedule"
           ? await generateSchedule(supabase, user, payload)
         : action === "open_week_draft"

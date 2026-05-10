@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS } from "@/api/appClient";
 import { LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 
 export default function LeagueScheduleSettings({ league }) {
   const queryClient = useQueryClient();
@@ -91,36 +90,12 @@ export default function LeagueScheduleSettings({ league }) {
         recalculate_standings: "Standings recalculated.",
         generate_schedule: "Schedule generated.",
         generate_ai_lineups: "AI lineups rebuilt.",
+        update_week_status: "Week status updated.",
       };
       toast.success(labels[variables.action] || "Action complete.");
       invalidate();
     },
     onError: (error) => toast.error(error.message || "League operation failed."),
-  });
-
-  const updateWeekMutation = useMutation({
-    mutationFn: async ({ status }) => {
-      const { data, error } = await supabase
-        .from("league_weeks")
-        .upsert(
-          {
-            league_id: league.id,
-            week_number: currentWeekNumber,
-            status,
-            reveal_state: currentWeek?.reveal_state || "hidden",
-          },
-          { onConflict: "league_id,week_number" }
-        )
-        .select("*")
-        .maybeSingle();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      toast.success("Week status updated.");
-      invalidate();
-    },
-    onError: (error) => toast.error(error.message || "Failed to update week status."),
   });
 
   const toggleScheduleLockMutation = useMutation({
@@ -262,7 +237,7 @@ export default function LeagueScheduleSettings({ league }) {
           <Pause className="w-5 h-5 mr-2" />
           {isPaused ? "Resume League" : "Pause League"}
         </Button>
-        <Button onClick={() => updateWeekMutation.mutate({ status: currentWeek?.status === "LOCKED" ? "LINEUPS_OPEN" : "LOCKED" })} disabled={updateWeekMutation.isPending || !leagueStarted} className="neo-btn bg-white text-black py-4">
+        <Button onClick={() => run("update_week_status", { week_number: currentWeekNumber, status: currentWeek?.status === "LOCKED" ? "LINEUPS_OPEN" : "LOCKED" })} disabled={actionMutation.isPending || !leagueStarted} className="neo-btn bg-white text-black py-4">
           {currentWeek?.status === "LOCKED" ? <Unlock className="w-5 h-5 mr-2" /> : <Lock className="w-5 h-5 mr-2" />}
           {currentWeek?.status === "LOCKED" ? "Unlock Week" : "Lock Week"}
         </Button>
