@@ -168,6 +168,9 @@ function rosterSlotPlayer(slot, playerById) {
 }
 
 function TierBadge({ tier }) {
+  if (tier === null || tier === undefined) {
+    return <span className="neo-border bg-gray-200 px-2 py-1 text-[11px] font-black uppercase text-black">T--</span>;
+  }
   const tierValue = Number(tier || 1);
   const classes = {
     5: "bg-[#F7B801] text-black",
@@ -967,8 +970,8 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
       const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
       if (!playerIds.length) return [];
       const { data, error } = await supabase
-        .from("league_player_scores")
-        .select("player_id,tier_value,position,total_points")
+        .from("league_player_draft_tiers")
+        .select("player_id,tier_value,position,position_rank")
         .eq("league_id", league.id)
         .in("player_id", playerIds);
       if (error) throw error;
@@ -1206,8 +1209,8 @@ function ManagerRosterPanel({ league, manager, weekResults }) {
       const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
       if (!playerIds.length) return [];
       const { data, error } = await supabase
-        .from("league_player_scores")
-        .select("player_id,tier_value,position,total_points,expected_avg_points,position_rank")
+        .from("league_player_draft_tiers")
+        .select("player_id,tier_value,position,position_rank")
         .eq("league_id", league.id)
         .in("player_id", playerIds);
       if (error) throw error;
