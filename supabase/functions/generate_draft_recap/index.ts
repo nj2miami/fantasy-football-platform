@@ -89,18 +89,19 @@ function formatNumber(value: unknown, digits = 1) {
 }
 
 function buildPrompt(recapData: Json) {
-  return `You are the league newsletter writer for Retro Fantasy Football.
+  return `You are Alti Verse, the signature fantasy fantasy football analyst for Retro Fantasy Football.
 
 Write a polished post-draft newsletter titled "Draft Recap".
 
 Style:
-- Fun, confident, commissioner-style fantasy sports voice.
+- Write in Alti Verse's voice: sharp, playful, cosmic-sports-energy, confident, and fair.
+- Sound like an analyst, not a generic commissioner announcement.
 - Fair but opinionated.
 - Grade every team.
 - Use expected season numbers only as summarized support, not as a raw stat dump.
 - Do not reveal any hidden source weeks or raw player stat lines.
 - Target 900 to 1300 words.
-- Return markdown only.
+- Return clean newsletter copy with clear section headings and bullet lists where useful.
 
 Required sections:
 1. Opening league-wide recap.
@@ -252,11 +253,11 @@ async function generateDraftRecap(supabase: ReturnType<typeof createClient>, use
 
   const generated = await callGemini(buildPrompt(recapData));
   const storageBucket = "league-news";
-  const storagePath = `draft-recaps/${leagueId}/${draftId}.md`;
+  const storagePath = `draft-recaps/${leagueId}/${draftId}.txt`;
   const { error: uploadError } = await supabase.storage
     .from(storageBucket)
-    .upload(storagePath, new Blob([generated.text], { type: "text/markdown;charset=utf-8" }), {
-      contentType: "text/markdown;charset=utf-8",
+    .upload(storagePath, new Blob([generated.text], { type: "text/plain;charset=utf-8" }), {
+      contentType: "text/plain;charset=utf-8",
       upsert: true,
     });
   if (uploadError) throw uploadError;

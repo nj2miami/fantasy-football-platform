@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import { useLeagueWeek, useLineup, useReleasedPlayers } from "@/api/hooks";
+import { supabase } from "@/lib/supabase";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 
@@ -131,6 +132,68 @@ function draftBucket(position) {
   return "OFF";
 }
 
+function leagueStatusLabel(league, season) {
+  const status = String(league?.league_status || "").toUpperCase();
+  const seasonStatus = String(season?.status || "").toUpperCase();
+  if (status && status !== "RECRUITING") return status.replace(/_/g, " ");
+  if (seasonStatus && seasonStatus !== "DRAFTING") return seasonStatus.replace(/_/g, " ");
+  if (season || status === "DRAFTING") return "DRAFTING";
+  return "RECRUITING";
+}
+
+function playerDisplayName(player, fallback = "Unknown Player") {
+  return player?.player_display_name || player?.full_name || player?.name || fallback;
+}
+
+function playerTeamText(player) {
+  return player?.team || "Team hidden";
+}
+
+function rosterSlotPlayer(slot, playerById) {
+  const joinedPlayer = Array.isArray(slot?.players) ? slot.players[0] : slot?.players;
+  return joinedPlayer || playerById.get(slot?.player_id) || null;
+}
+
+function StyledNewsBody({ body }) {
+  const lines = String(body || "").split(/\r?\n/);
+  const elements = [];
+  let listItems = [];
+  const flushList = () => {
+    if (!listItems.length) return;
+    elements.push(
+      <ul key={`list-${elements.length}`} className="my-3 list-disc space-y-1 pl-6 text-sm font-bold text-gray-700">
+        {listItems.map((item, index) => <li key={index}>{item}</li>)}
+      </ul>
+    );
+    listItems = [];
+  };
+  const cleanInline = (value) => value.replace(/\*\*/g, "").replace(/^[-*]\s+/, "").trim();
+  lines.forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) {
+      flushList();
+      return;
+    }
+    if (line.startsWith("### ")) {
+      flushList();
+      elements.push(<h4 key={index} className="mt-5 text-base font-black uppercase text-black">{cleanInline(line.slice(4))}</h4>);
+    } else if (line.startsWith("## ")) {
+      flushList();
+      elements.push(<h3 key={index} className="mt-6 text-lg font-black uppercase text-orange-600">{cleanInline(line.slice(3))}</h3>);
+    } else if (line.startsWith("# ")) {
+      flushList();
+      elements.push(<h2 key={index} className="mt-2 text-xl font-black uppercase text-orange-600">{cleanInline(line.slice(2))}</h2>);
+    } else if (/^[-*]\s+/.test(line)) {
+      listItems.push(cleanInline(line));
+    } else {
+      flushList();
+      elements.push(<p key={index} className="mt-3 text-sm font-bold leading-7 text-gray-700">{cleanInline(line)}</p>);
+    }
+  });
+  flushList();
+  return <div className="mt-2">{elements}</div>;
+}
+
 function EmptyState({ icon: Icon = Inbox, title, detail }) {
   return (
     <div className="neo-border bg-gray-50 p-5 text-center">
@@ -230,14 +293,14 @@ function CompactHeader({ league, season, currentMember, memberCount, context }) 
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="neo-border bg-[#F7B801] px-2 py-1 text-xs font-black uppercase text-black">Private</span>
-            <span className="neo-border bg-white px-2 py-1 text-xs font-black uppercase text-black">{league.league_status || "Recruiting"}</span>
+            <span className="neo-border bg-white px-2 py-1 text-xs font-black uppercase text-black">{leagueStatusLabel(league, season)}</span>
             {context && <span className="text-xs font-black uppercase text-[#00D9FF]">{context}</span>}
           </div>
           <h1 className="mt-2 truncate text-2xl font-black uppercase text-orange-500 sm:text-3xl">{league.name}</h1>
         </div>
         <div className="grid gap-2 sm:grid-cols-3 xl:min-w-[560px]">
           <StatTile label="Week" value={season?.current_week || 1} tone="bg-white" />
-          <StatTile label="Teams" value={`${memberCount}/${league.max_members || memberCount}`} tone="bg-[#D7F8E8]" />
+          <StatTile label="Teams" value={memberCount} tone="bg-[#D7F8E8]" />
           <StatTile label="Your Team" value={currentMember ? memberName(currentMember) : "--"} tone="bg-[#EFFBFF]" />
         </div>
       </div>
@@ -371,7 +434,7 @@ function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId })
           <article key={item.id} className="neo-border bg-white p-4">
             <p className="text-xs font-black uppercase text-gray-500">{formatDate(item.published_at || item.created_date)}</p>
             <h2 className="mt-1 text-xl font-black uppercase text-orange-600">{item.title}</h2>
-            <p className="mt-2 whitespace-pre-wrap font-bold text-gray-700">{item.body}</p>
+            <StyledNewsBody body={item.body} />
           </article>
         ))}
       </div>
@@ -799,15 +862,35 @@ function ManagerLineupPanel({ league, lineupWeek, manager }) {
   const { data: lineup } = useLineup(league.id, lineupWeek, manager.id);
   const { data: roster = [] } = useQuery({
     queryKey: ["manager-roster", manager.id],
-    queryFn: () => appClient.entities.Roster.filter({ league_member_id: manager.id }),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("roster_slots")
+        .select("*, players(id,full_name,player_display_name,position,team)")
+        .eq("league_member_id", manager.id);
+      if (error) throw error;
+      return data || [];
+    },
     enabled: Boolean(manager.id),
   });
   const { data: players = [] } = useQuery({
-    queryKey: ["manager-roster-players", manager.id],
-    queryFn: () => appClient.entities.Player.list(),
+    queryKey: ["manager-roster-players", manager.id, roster.map((slot) => slot.player_id).filter(Boolean).join(":")],
+    queryFn: async () => {
+      const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
+      if (!playerIds.length) return [];
+      return appClient.entities.Player.filter({ id: playerIds });
+    },
     enabled: Boolean(roster.length),
   });
   const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
+  const rosterByPosition = useMemo(() => {
+    const groups = { QB: [], OFF: [], DEF: [], K: [] };
+    roster.forEach((slot) => {
+      const player = rosterSlotPlayer(slot, playerById);
+      const bucket = draftBucket(player?.position || slot.slot_type);
+      groups[bucket].push(slot);
+    });
+    return groups;
+  }, [playerById, roster]);
   const initialSelection = useMemo(() => {
     const lineupIds = normalizeSlots(lineup?.slots).map((slot) => slot.player_id).filter(Boolean);
     return lineupIds.length ? lineupIds : roster.map((slot) => slot.player_id).filter(Boolean);
@@ -820,7 +903,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager }) {
       const slots = roster
         .filter((slot) => selectedIds.has(slot.player_id))
         .map((slot) => ({
-          slot: slot.slot_type || playerById.get(slot.player_id)?.position || "FLEX",
+          slot: slot.slot_type || rosterSlotPlayer(slot, playerById)?.position || "FLEX",
           player_id: slot.player_id,
           status: "active",
         }));
@@ -858,23 +941,34 @@ function ManagerLineupPanel({ league, lineupWeek, manager }) {
         </Button>
       )}
     >
-      <div className="grid gap-2 lg:grid-cols-2">
-        {roster.map((slot) => {
-          const player = playerById.get(slot.player_id);
-          const selected = selectedIds.has(slot.player_id);
-          return (
-            <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`neo-border flex w-full items-center justify-between gap-3 p-3 text-left ${selected ? "bg-[#D7F8E8]" : "bg-gray-50"}`}>
-              <span className="flex items-center gap-3">
-                {selected ? <CheckSquare className="h-5 w-5 text-green-700" /> : <Square className="h-5 w-5 text-gray-500" />}
-                <span>
-                  <span className="block font-black">{player?.player_display_name || player?.full_name || slot.player_id}</span>
-                  <span className="block text-xs font-bold text-gray-500">{player?.team || "FA"} | {player?.position || slot.slot_type}</span>
-                </span>
-              </span>
-              <span className="font-black uppercase">{slot.slot_type}</span>
-            </button>
-          );
-        })}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {["QB", "OFF", "DEF", "K"].map((position) => (
+          <div key={position} className="neo-border bg-gray-50 p-3">
+            <div className="mb-2 flex items-center justify-between border-b-4 border-black pb-1">
+              <h3 className="text-sm font-black uppercase text-gray-700">{position}</h3>
+              <span className="text-[11px] font-black uppercase text-gray-500">{rosterByPosition[position].length} rostered</span>
+            </div>
+            <div className="space-y-2">
+              {rosterByPosition[position].map((slot) => {
+                const player = rosterSlotPlayer(slot, playerById);
+                const selected = selectedIds.has(slot.player_id);
+                return (
+                  <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`neo-border flex w-full items-center justify-between gap-3 p-3 text-left ${selected ? "bg-[#D7F8E8]" : "bg-white"}`}>
+                    <span className="flex min-w-0 items-center gap-3">
+                      {selected ? <CheckSquare className="h-5 w-5 shrink-0 text-green-700" /> : <Square className="h-5 w-5 shrink-0 text-gray-500" />}
+                      <span className="min-w-0">
+                        <span className="block truncate font-black">{playerDisplayName(player, "Roster Player")}</span>
+                        <span className="block text-xs font-bold text-gray-500">{playerTeamText(player)} | {player?.position || slot.slot_type}</span>
+                      </span>
+                    </span>
+                    <span className="font-black uppercase">{slot.slot_type}</span>
+                  </button>
+                );
+              })}
+              {!rosterByPosition[position].length && <p className="py-2 text-xs font-bold uppercase text-gray-400">No {position} players rostered.</p>}
+            </div>
+          </div>
+        ))}
       </div>
       {!roster.length && <EmptyState title="No roster yet" detail="Draft or roster assignment must happen before lineup lock." />}
       <p className="mt-4 text-xs font-bold uppercase text-gray-500">{lineup?.finalized_at ? `Last finalized ${new Date(lineup.finalized_at).toLocaleString()}` : "Not finalized for this week."}</p>

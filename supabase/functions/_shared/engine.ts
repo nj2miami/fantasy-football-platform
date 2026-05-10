@@ -3109,6 +3109,11 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .select("*")
     .single();
   if (updateError) throw updateError;
+  const { error: leagueStatusError } = await supabase
+    .from("leagues")
+    .update({ league_status: "DRAFTING", updated_date: new Date().toISOString() })
+    .eq("id", league.id);
+  if (leagueStatusError) throw leagueStatusError;
   return { draft: updatedDraft };
 }
 

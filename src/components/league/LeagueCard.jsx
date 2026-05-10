@@ -66,11 +66,14 @@ export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], 
   const leagueType = officialLeague ? 'OFL' : isAILeague ? 'AI' : 'MEMBER';
   
   // Determine status
-  let status = 'recruiting';
-  let statusText = `Recruiting (${openSpots} spots)`;
+  const leagueStatus = String(league.league_status || '').toUpperCase();
+  let status = leagueStatus && leagueStatus !== 'RECRUITING' ? leagueStatus.toLowerCase() : 'recruiting';
+  let statusText = leagueStatus && leagueStatus !== 'RECRUITING' ? leagueStatus.replace(/_/g, ' ') : `Recruiting (${openSpots} spots)`;
   let statusColor = 'bg-green-500';
   
-  if (isFull && (!seasonRows.length || seasonRows[0]?.status === 'DRAFTING')) {
+  if (leagueStatus && leagueStatus !== 'RECRUITING') {
+    statusColor = leagueStatus === 'ACTIVE' ? 'bg-blue-500' : 'bg-yellow-500';
+  } else if (isFull && (!seasonRows.length || seasonRows[0]?.status === 'DRAFTING')) {
     status = 'coming_soon';
     statusText = 'Coming Soon';
     statusColor = 'bg-yellow-500';
@@ -212,7 +215,7 @@ export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], 
 
             <div className="flex items-center justify-between font-bold">
               <span className="text-gray-600">Teams:</span>
-              <span className="text-black">{activeMembers.length} / {league.max_members}</span>
+              <span className="text-black">{activeMembers.length}</span>
             </div>
 
             <div className="flex items-center justify-between font-bold">
