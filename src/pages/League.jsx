@@ -31,21 +31,21 @@ import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 
 const HUB_TABS = [
-  { id: "overview", label: "Overview", icon: Trophy },
-  { id: "news", label: "League News", icon: Newspaper },
-  { id: "free-agents", label: "Free Agent Board", icon: Shuffle },
-  { id: "rules", label: "League Rules", icon: ClipboardList },
-  { id: "schedule", label: "Full Schedule", icon: CalendarDays },
+  { id: "overview", path: "", label: "Overview", icon: Trophy },
+  { id: "news", path: "news", label: "League News", icon: Newspaper },
+  { id: "free-agents", path: "free-agents", label: "Free Agent Board", icon: Shuffle },
+  { id: "rules", path: "rules", label: "League Rules", icon: ClipboardList },
+  { id: "schedule", path: "schedule", label: "Full Schedule", icon: CalendarDays },
 ];
 
 const FREE_AGENT_POSITIONS = ["QB", "OFF", "DEF", "K"];
 const FREE_AGENT_TIERS = [5, 4, 3, 2, 1];
 const MANAGER_PORTAL_TABS = [
-  { id: "lineup", label: "Set Lineup", icon: ClipboardList },
-  { id: "matches", label: "Previous Matches", icon: Trophy },
-  { id: "messages", label: "Messages", icon: Mail },
-  { id: "free-agents", label: "Free Agent Board", icon: Shuffle },
-  { id: "roster", label: "Manage Roster", icon: Users },
+  { id: "lineup", path: "lineup", label: "Set Lineup", icon: ClipboardList },
+  { id: "matches", path: "matches", label: "Previous Matches", icon: Trophy },
+  { id: "messages", path: "messages", label: "Messages", icon: Mail },
+  { id: "free-agents", path: "free-agents", label: "Free Agent Board", icon: Shuffle },
+  { id: "roster", path: "roster", label: "Manage Roster", icon: Users },
 ];
 const RULE_DEFINITIONS = [
   {
@@ -286,6 +286,27 @@ function Panel({ title, icon: Icon, children, action }) {
   );
 }
 
+function hubTabPath(leagueId, tab) {
+  return tab.path ? `/league/${tab.path}?id=${leagueId}` : `/league?id=${leagueId}`;
+}
+
+function managerTabPath(leagueId, managerId, tab) {
+  return `/league/manager/${tab.path}?id=${leagueId}&managerId=${managerId}`;
+}
+
+function resolveHubTabId(routeSection, queryTab) {
+  const routeValue = String(routeSection || "").toLowerCase();
+  const byPath = HUB_TABS.find((tab) => tab.path === routeValue);
+  if (byPath) return byPath.id;
+  const byQuery = HUB_TABS.find((tab) => tab.id === queryTab);
+  return byQuery?.id || "overview";
+}
+
+function resolveManagerTabId(routeSection) {
+  const routeValue = String(routeSection || "").toLowerCase();
+  return MANAGER_PORTAL_TABS.find((tab) => tab.path === routeValue || tab.id === routeValue)?.id || "lineup";
+}
+
 function LeagueNav({ league, currentMember, isCommissioner, activeArea, draftStatus }) {
   const draftIsCompleted = String(draftStatus || "").toUpperCase() === "COMPLETED";
   const draftHref = draftIsCompleted ? `/league/draft-recap?id=${league.id}` : `/league/draft?id=${league.id}`;
@@ -306,7 +327,7 @@ function LeagueNav({ league, currentMember, isCommissioner, activeArea, draftSta
           </Button>
         </Link>
         {currentMember && (
-          <Link to={`/league/manager?id=${league.id}&managerId=${currentMember.id}`}>
+          <Link to={`/league/manager/lineup?id=${league.id}&managerId=${currentMember.id}`}>
             <Button className={`neo-btn ${activeArea === "manager" ? "bg-[#00D9FF] text-black" : "bg-white text-black"}`}>
               <LayoutDashboard className="mr-2 h-5 w-5" />
               Manager Portal
@@ -544,8 +565,12 @@ function RulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
   );
 }
 
-function FreeAgentBoard({ league, currentMember, compact = false }) {
+function FreeAgentBoard({ league, currentMember }) {
   const queryClient = useQueryClient();
+  const [positionFilter, setPositionFilter] = useState("ALL");
+  const [searchInput, setSearchInput] = useState("");
+  const [selectedTiers, setSelectedTiers] = useState(new Set(FREE_AGENT_TIERS));
+  const [appliedFilters, setAppliedFilters] = useState(null);
   const { data: board = { tiers: [], playersById: new Map() } } = useQuery({
     queryKey: ["free-agent-draft-tiers", league.id, currentMember?.id],
     queryFn: async () => {
@@ -582,12 +607,20 @@ function FreeAgentBoard({ league, currentMember, compact = false }) {
   const playerById = useMemo(() => board.playersById || new Map(), [board.playersById]);
   const rowsByPosition = useMemo(() => {
     const grouped = Object.fromEntries(FREE_AGENT_POSITIONS.map((position) => [position, []]));
+    if (!appliedFilters) return grouped;
+    const filterPosition = String(appliedFilters.position || "ALL").toUpperCase();
+    const filterTiers = appliedFilters.tiers || new Set();
+    const searchTerm = String(appliedFilters.search || "").trim().toLowerCase();
     tiers
       .forEach((tier) => {
         const bucket = draftBucket(tier.position);
         if (!grouped[bucket]) return;
+        if (filterPosition !== "ALL" && bucket !== filterPosition) return;
+        if (!filterTiers.has(Number(tier.tier_value || 1))) return;
         const player = playerById.get(tier.player_id);
         if (!player) return;
+        const searchable = `${player.player_display_name || ""} ${player.full_name || ""} ${player.team || ""}`.toLowerCase();
+        if (searchTerm && !searchable.includes(searchTerm)) return;
         grouped[bucket].push({ tier, player });
       });
     for (const position of FREE_AGENT_POSITIONS) {
@@ -596,8 +629,24 @@ function FreeAgentBoard({ league, currentMember, compact = false }) {
         .slice(0, 30);
     }
     return grouped;
-  }, [playerById, tiers]);
+  }, [appliedFilters, playerById, tiers]);
   const visibleCount = FREE_AGENT_POSITIONS.reduce((sum, position) => sum + rowsByPosition[position].length, 0);
+  const visiblePositions = appliedFilters?.position && appliedFilters.position !== "ALL" ? [appliedFilters.position] : FREE_AGENT_POSITIONS;
+  const toggleTier = (tierValue) => {
+    setSelectedTiers((current) => {
+      const next = new Set(current);
+      if (next.has(tierValue)) next.delete(tierValue);
+      else next.add(tierValue);
+      return next;
+    });
+  };
+  const runSearch = () => {
+    setAppliedFilters({
+      position: positionFilter,
+      tiers: new Set(selectedTiers),
+      search: searchInput,
+    });
+  };
   const claimMutation = useMutation({
     mutationFn: async ({ player, tier }) => {
       if (!currentMember?.id) throw new Error("Manager membership is required.");
@@ -627,8 +676,54 @@ function FreeAgentBoard({ league, currentMember, compact = false }) {
   });
   return (
     <Panel title="Free Agent Board" icon={Shuffle}>
-      <div className={`grid gap-4 ${compact ? "xl:grid-cols-2" : "xl:grid-cols-4"}`}>
-        {FREE_AGENT_POSITIONS.map((position) => (
+      <div className="neo-border mb-4 bg-[#EFFBFF] p-3">
+        <div className="grid gap-3 lg:grid-cols-[180px_minmax(220px,1fr)_1fr_auto] lg:items-end">
+          <label className="block">
+            <span className="mb-1 block text-xs font-black uppercase text-gray-600">Position</span>
+            <select
+              value={positionFilter}
+              onChange={(event) => setPositionFilter(event.target.value)}
+              className="neo-border h-10 w-full bg-white px-3 text-sm font-black uppercase text-black"
+            >
+              <option value="ALL">All Positions</option>
+              {FREE_AGENT_POSITIONS.map((position) => <option key={position} value={position}>{position}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-black uppercase text-gray-600">Player Search</span>
+            <input
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Name or team"
+              className="neo-border h-10 w-full bg-white px-3 text-sm font-bold text-black"
+            />
+          </label>
+          <div>
+            <span className="mb-1 block text-xs font-black uppercase text-gray-600">Tiers</span>
+            <div className="flex flex-wrap gap-2">
+              {FREE_AGENT_TIERS.map((tierValue) => (
+                <label key={tierValue} className={`neo-border inline-flex h-10 items-center gap-2 bg-white px-3 text-xs font-black uppercase ${selectedTiers.has(tierValue) ? "text-black" : "text-gray-400"}`}>
+                  <input
+                    type="checkbox"
+                    checked={selectedTiers.has(tierValue)}
+                    onChange={() => toggleTier(tierValue)}
+                    className="h-4 w-4 accent-black"
+                  />
+                  T{tierValue}
+                </label>
+              ))}
+            </div>
+          </div>
+          <Button onClick={runSearch} disabled={!selectedTiers.size} className="neo-btn h-10 bg-[#F7B801] px-5 text-black">
+            Search
+          </Button>
+        </div>
+      </div>
+      {!appliedFilters ? (
+        <EmptyState title="Search free agents" detail="Choose a position, tier range, or player name to display available players." />
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-4">
+        {visiblePositions.map((position) => (
           <div key={position} className="neo-border bg-gray-50">
             <div className="border-b-4 border-black bg-black p-3 text-white">
               <p className="text-center text-lg font-black uppercase">{position}</p>
@@ -669,8 +764,9 @@ function FreeAgentBoard({ league, currentMember, compact = false }) {
             </div>
           </div>
         ))}
-      </div>
-      {!visibleCount && <EmptyState title="No free agents visible" detail="Prepare the league draft pool or check whether all tiered players are already rostered." />}
+        </div>
+      )}
+      {appliedFilters && !visibleCount && <EmptyState title="No free agents found" detail="Try another position, tier, or player search." />}
     </Panel>
   );
 }
@@ -761,7 +857,7 @@ function LeagueHubPage(props) {
         {HUB_TABS.map((tab) => {
           const Icon = tab.icon;
           return (
-            <Link key={tab.id} to={`/league?id=${league.id}&tab=${tab.id}`} className={`neo-border inline-flex shrink-0 items-center gap-2 px-3 py-2 text-sm font-black uppercase ${activeTab === tab.id ? "bg-[#F7B801] text-black" : "bg-white text-black"}`}>
+            <Link key={tab.id} to={hubTabPath(league.id, tab)} className={`neo-border inline-flex shrink-0 items-center gap-2 px-3 py-2 text-sm font-black uppercase ${activeTab === tab.id ? "bg-[#F7B801] text-black" : "bg-white text-black"}`}>
               <Icon className="h-4 w-4" />
               {tab.label}
             </Link>
@@ -804,7 +900,7 @@ function WeekMatchupsPage({ league, season, currentMember, members, matchups, we
   return (
     <>
       <CompactHeader league={league} season={season} currentMember={currentMember} memberCount={members.length} context={`Week ${weekNumber}`} />
-      <Panel title={`Week ${weekNumber}`} icon={CalendarDays} action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league?id=${league.id}&tab=schedule`}>Schedule</Link>}>
+      <Panel title={`Week ${weekNumber}`} icon={CalendarDays} action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/schedule?id=${league.id}`}>Schedule</Link>}>
         <p className="mb-4 text-sm font-bold uppercase text-gray-500">{formatDate(weekSchedule?.scheduled_at)} | {weekSchedule?.status || "Scheduled"}</p>
         <div className="grid gap-3 lg:grid-cols-2">
           {weekMatchups.map((matchup) => {
@@ -950,6 +1046,23 @@ function LineupRequirementBadge({ label, value, target, valid }) {
     <span className={`neo-border flex items-center justify-between gap-2 px-2 py-1 ${valid ? "bg-[#D7F8E8] text-black" : "bg-red-100 text-red-800"}`}>
       <span>{label} {target ? `${value}/${target}` : value}</span>
       <Icon className="h-4 w-4 shrink-0" />
+    </span>
+  );
+}
+
+function LineupPositionHeaderStatus({ position, selectedCounts, flexPositionsAreValid, qbIsValid, kickerIsValid }) {
+  const rules = {
+    QB: { value: selectedCounts.QB, target: "1", valid: qbIsValid },
+    OFF: { value: selectedCounts.OFF, target: "1-2", valid: flexPositionsAreValid },
+    DEF: { value: selectedCounts.DEF, target: "1-2", valid: flexPositionsAreValid },
+    K: { value: selectedCounts.K, target: "1", valid: kickerIsValid },
+  };
+  const rule = rules[position] || { value: 0, target: "--", valid: false };
+  const Icon = rule.valid ? CheckCircle : XCircle;
+  return (
+    <span className={`neo-border inline-flex items-center gap-1 bg-white px-2 py-1 text-[11px] font-black uppercase ${rule.valid ? "text-green-700" : "text-red-700"}`}>
+      <Icon className="h-4 w-4" />
+      {rule.value}/{rule.target}
     </span>
   );
 }
@@ -1133,11 +1246,20 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
           <span className="text-right">Points</span>
         </div>
         {["QB", "OFF", "DEF", "K"].map((position) => (
-          <div key={position}>
-            <div className="flex items-center justify-between border-b-2 border-black bg-black px-3 py-2 text-white">
-              <h3 className="text-sm font-black uppercase text-white">{position}</h3>
-              <span className="text-[11px] font-black uppercase">{selectedCounts[position]} played | {rosterByPosition[position].length} rostered</span>
-            </div>
+            <div key={position}>
+              <div className="flex items-center justify-between border-b-2 border-black bg-black px-3 py-2 text-white">
+                <h3 className="text-sm font-black uppercase text-white">{position}</h3>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <LineupPositionHeaderStatus
+                    position={position}
+                    selectedCounts={selectedCounts}
+                    flexPositionsAreValid={flexPositionsAreValid}
+                    qbIsValid={qbIsValid}
+                    kickerIsValid={kickerIsValid}
+                  />
+                  <span className="text-[11px] font-black uppercase">{selectedCounts[position]} played | {rosterByPosition[position].length} rostered</span>
+                </div>
+              </div>
             {rosterByPosition[position].map((slot) => {
               const player = rosterSlotPlayer(slot, playerById);
               const tier = tierByPlayer.get(slot.player_id);
@@ -1368,8 +1490,7 @@ function ManagerMessagingPanel({ messages, members }) {
   );
 }
 
-function ManagerPortalPage({ league, season, manager, members, matchups, weekResults, messages }) {
-  const [activeTab, setActiveTab] = useState("lineup");
+function ManagerPortalPage({ league, season, manager, members, matchups, weekResults, messages, activeTab }) {
   const currentWeek = season?.current_week || 1;
   const nextMatchup = matchups
     .filter((item) => item.home_member_id === manager.id || item.away_member_id === manager.id)
@@ -1389,16 +1510,15 @@ function ManagerPortalPage({ league, season, manager, members, matchups, weekRes
               const active = activeTab === tab.id;
               const badge = tab.id === "messages" ? unreadMessages : 0;
               return (
-                <button
+                <Link
                   key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
+                  to={managerTabPath(league.id, manager.id, tab)}
                   className={`neo-border relative inline-flex items-center gap-2 px-3 py-2 text-xs font-black uppercase ${active ? "bg-[#F7B801] text-black" : "bg-white text-black hover:bg-[#EFFBFF]"}`}
                 >
                   <Icon className="h-4 w-4" />
                   {tab.label}
                   {badge > 0 && <span className="neo-border ml-1 bg-red-500 px-2 py-0.5 text-[10px] text-white">{badge}</span>}
-                </button>
+                </Link>
               );
             })}
           </div>
@@ -1407,12 +1527,7 @@ function ManagerPortalPage({ league, season, manager, members, matchups, weekRes
         {activeTab === "matches" && <ManagerResultsPanel league={league} weekResults={weekResults} matchups={matchups} members={members} manager={manager} />}
         {activeTab === "messages" && <ManagerMessagingPanel messages={messages} members={members} />}
         {activeTab === "free-agents" && <FreeAgentBoard league={league} currentMember={manager} />}
-        {activeTab === "roster" && (
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.8fr)]">
-            <ManagerRosterPanel league={league} manager={manager} weekResults={weekResults} />
-            <FreeAgentBoard league={league} currentMember={manager} compact />
-          </div>
-        )}
+        {activeTab === "roster" && <ManagerRosterPanel league={league} manager={manager} weekResults={weekResults} />}
       </div>
     </>
   );
@@ -1427,9 +1542,12 @@ export default function League() {
   const requestedManagerId = searchParams.get("managerId") || searchParams.get("memberId") || searchParams.get("teamId");
   const requestedMatchId = searchParams.get("matchId");
   const routeWeekNumber = Number(params.weekNumber || 0);
+  const routeHubSection = params.hubSection;
+  const routeManagerSection = params.managerSection;
   const isManagerPortal = location.pathname.toLowerCase().startsWith("/league/manager");
   const isWeekView = location.pathname.toLowerCase().startsWith("/league/week/");
-  const activeTab = HUB_TABS.some((tab) => tab.id === searchParams.get("tab")) ? searchParams.get("tab") : "overview";
+  const activeTab = resolveHubTabId(routeHubSection, searchParams.get("tab"));
+  const activeManagerTab = resolveManagerTabId(routeManagerSection);
 
   const [user, setUser] = useState(null);
   const [isLoadingUser, setIsLoadingUser] = useState(true);
@@ -1652,6 +1770,7 @@ export default function League() {
           matchups={matchups}
           weekResults={weekResults}
           messages={managerMessages}
+          activeTab={activeManagerTab}
         />
       ) : (
         <LeagueHubPage
