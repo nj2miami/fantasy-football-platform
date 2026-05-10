@@ -408,11 +408,23 @@ function isStartedLineupSlot(slot: Json) {
   return status !== "bench" && status !== "benched" && status !== "treating" && status !== "treatment" && status !== "treated";
 }
 
+function isTreatmentLineupSlot(slot: Json) {
+  const status = lineupSlotStatus(slot);
+  return status === "treating" || status === "treatment" || status === "treated";
+}
+
 function lineupSlotMultiplier(slot: Json) {
   const status = lineupSlotStatus(slot);
   if (status === "treating" || status === "treatment" || status === "treated") return 0.25;
   if (status === "bench" || status === "benched") return 0.5;
   return 1;
+}
+
+function lineupPositionBucket(position: unknown) {
+  const value = String(position || "").toUpperCase();
+  if (value === "QB" || value === "K") return value;
+  if (value === "DEF" || value === "DST" || value === "D/ST" || value === "DL" || value === "LB" || value === "DB") return "DEF";
+  return "OFF";
 }
 
 function draftBucketTarget(position: unknown) {
@@ -3642,7 +3654,339 @@ async function submitPick(supabase: ReturnType<typeof createClient>, payload: Js
   return { pick };
 }
 
+async function latestSeasonForLeague(supabase: ReturnType<typeof createClient>, leagueId: unknown) {
+  const { data, error } = await supabase
+    .from("league_seasons")
+    .select("*")
+    .eq("league_id", leagueId)
+    .order("created_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function validateLineupSlots(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  memberId: string,
+  slots: Json[] = [],
+) {
+  const playerIds = slots.map((slot) => String(slot.player_id || "")).filter(Boolean);
+  if (!playerIds.length) throw new Error("Lineup requires roster players.");
+  if (new Set(playerIds).size !== playerIds.length) throw new Error("Lineup cannot include duplicate players.");
+
+  const { data: roster, error: rosterError } = await supabase
+    .from("roster_slots")
+    .select("player_id,slot_type,players(position)")
+    .eq("league_member_id", memberId);
+  if (rosterError) throw rosterError;
+  const rosterByPlayer = new Map((roster || []).map((slot: Json) => [String(slot.player_id), slot]));
+  const missing = playerIds.filter((playerId) => !rosterByPlayer.has(playerId));
+  if (missing.length) throw new Error("Lineup includes players not on this roster.");
+
+  const counts: Record<string, number> = { QB: 0, OFF: 0, DEF: 0, K: 0 };
+  const treatmentSlots = slots.filter(isTreatmentLineupSlot);
+  if (treatmentSlots.length > 1) throw new Error("Only one player may be treated per week.");
+  if (treatmentSlots.length && !durabilityEnabled(league)) throw new Error("Treatment is only available when durability is enabled.");
+
+  for (const slot of slots) {
+    if (isTreatmentLineupSlot(slot) && isStartedLineupSlot(slot)) throw new Error("A treated player cannot also be a starter.");
+    if (!isStartedLineupSlot(slot)) continue;
+    const rosterSlot = rosterByPlayer.get(String(slot.player_id || "")) || {};
+    const player = Array.isArray(rosterSlot.players) ? rosterSlot.players[0] : rosterSlot.players;
+    const bucket = lineupPositionBucket(slot.slot || rosterSlot.slot_type || player?.position);
+    counts[bucket] = Number(counts[bucket] || 0) + 1;
+  }
+
+  const offDefTotal = Number(counts.OFF || 0) + Number(counts.DEF || 0);
+  const valid = Number(counts.QB || 0) === 1 &&
+    Number(counts.K || 0) === 1 &&
+    offDefTotal === 3 &&
+    Number(counts.OFF || 0) >= 1 &&
+    Number(counts.OFF || 0) <= 2 &&
+    Number(counts.DEF || 0) >= 1 &&
+    Number(counts.DEF || 0) <= 2;
+  if (!valid) throw new Error("Lineup must include 1 QB, 1 K, and either 2 OFF/1 DEF or 1 OFF/2 DEF.");
+  return { counts, treatmentPlayerId: treatmentSlots[0]?.player_id ? String(treatmentSlots[0].player_id) : null };
+}
+
+async function spendTreatmentPointsIfNeeded(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  memberId: string,
+  weekNumber: number,
+  treatmentPlayerId: string | null,
+) {
+  if (!treatmentPlayerId || league.manager_points_enabled !== true) return;
+  const actions = { ...DEFAULT_MANAGER_POINT_ACTIONS, ...((league.manager_point_actions || {}) as Json) };
+  const action = (actions.treat_bench_player || {}) as Json;
+  if (action.active !== true) throw new Error("Treat Bench Player is not enabled for Manager Points.");
+  const cost = Math.max(0, Number(action.cost || 0));
+  if (cost <= 0) return;
+
+  const { data: existingTransactions, error: existingError } = await supabase
+    .from("manager_point_transactions")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("league_member_id", memberId)
+    .eq("action_key", "treat_bench_player")
+    .contains("metadata", { week_number: weekNumber, purpose: "lineup_treatment" });
+  if (existingError) throw existingError;
+  const existing = (existingTransactions || [])[0];
+  if (existing) {
+    if (String(existing.target_player_id || "") !== treatmentPlayerId) {
+      throw new Error("A paid treatment has already been used this week and cannot be changed.");
+    }
+    return;
+  }
+
+  const season = await latestSeasonForLeague(supabase, league.id);
+  if (!season?.id) throw new Error("Manager Points require an active season.");
+  const { data: account, error: accountError } = await supabase
+    .from("manager_point_accounts")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("league_member_id", memberId)
+    .eq("season_id", season.id)
+    .maybeSingle();
+  if (accountError) throw accountError;
+  if (!account) throw new Error("Manager Points account was not found.");
+  if (Number(account.current_points || 0) < cost) throw new Error("Not enough Manager Points for treatment.");
+
+  const { error: updateError } = await supabase
+    .from("manager_point_accounts")
+    .update({ current_points: Number(account.current_points || 0) - cost })
+    .eq("id", account.id);
+  if (updateError) throw updateError;
+  const { error: transactionError } = await supabase.from("manager_point_transactions").insert({
+    account_id: account.id,
+    league_id: league.id,
+    league_member_id: memberId,
+    points_delta: -cost,
+    action_key: "treat_bench_player",
+    target_player_id: treatmentPlayerId,
+    metadata: { week_number: weekNumber, purpose: "lineup_treatment" },
+  });
+  if (transactionError) throw transactionError;
+}
+
+async function assertAllLineupsReady(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  weekNumber: number,
+  activeMembers: Json[],
+  lineups: Json[],
+) {
+  const lineupByMember = new Map((lineups || []).map((lineup: Json) => [String(lineup.league_member_id || ""), lineup]));
+  const missing = [];
+  for (const member of activeMembers || []) {
+    const memberId = String(member.id || "");
+    const lineup = lineupByMember.get(memberId);
+    if (!lineup?.finalized_at) {
+      missing.push(String(member.team_name || memberId));
+      continue;
+    }
+    await validateLineupSlots(supabase, league, memberId, Array.isArray(lineup.slots) ? lineup.slots as Json[] : []);
+  }
+  if (missing.length) throw new Error(`Lineups must be finalized before resolving: ${missing.join(", ")}.`);
+}
+
+function durabilityMultiplierFor(value: unknown) {
+  return DURABILITY_MULTIPLIERS[Number(value)] ?? 1;
+}
+
+function limitedUseThreshold(league: Json) {
+  return league.draft_mode === "season_snake" && league.player_retention_mode === "limited_use"
+    ? Math.max(1, Number(league.player_retention_limit || 2))
+    : 0;
+}
+
+function lineupCandidateSortValue(candidate: Json) {
+  const tier = Number(candidate.tier_value || 1);
+  const adjusted = Number(candidate.adjusted_points || 0);
+  const releasePenalty = candidate.would_release ? 0.75 : 0;
+  return (tier - releasePenalty) * 1000 + adjusted;
+}
+
+function sortLineupCandidates(candidates: Json[]) {
+  return [...candidates].sort((a, b) =>
+    lineupCandidateSortValue(b) - lineupCandidateSortValue(a) ||
+    Number(a.position_rank || 9999) - Number(b.position_rank || 9999) ||
+    String(a.name || a.player_id).localeCompare(String(b.name || b.player_id))
+  );
+}
+
+function chooseLineupCandidates(candidates: Json[], count: number) {
+  const sorted = sortLineupCandidates(candidates);
+  if (sorted.length <= count) return sorted;
+  const healthier = sorted.filter((candidate) => Number(candidate.durability ?? 0) > -2);
+  if (healthier.length >= count) return healthier.slice(0, count);
+  const notInjured = sorted.filter((candidate) => Number(candidate.durability ?? 0) > -3);
+  if (notInjured.length >= count) return notInjured.slice(0, count);
+  return sorted.slice(0, count);
+}
+
+async function managerPointTreatmentAffordable(supabase: ReturnType<typeof createClient>, league: Json, memberId: string) {
+  if (league.manager_points_enabled !== true) return true;
+  const actions = { ...DEFAULT_MANAGER_POINT_ACTIONS, ...((league.manager_point_actions || {}) as Json) };
+  const action = (actions.treat_bench_player || {}) as Json;
+  if (action.active !== true) return false;
+  const cost = Math.max(0, Number(action.cost || 0));
+  if (cost <= 0) return true;
+  const season = await latestSeasonForLeague(supabase, league.id);
+  if (!season?.id) return false;
+  const { data: account, error } = await supabase
+    .from("manager_point_accounts")
+    .select("current_points")
+    .eq("league_id", league.id)
+    .eq("league_member_id", memberId)
+    .eq("season_id", season.id)
+    .maybeSingle();
+  if (error) throw error;
+  return Number(account?.current_points || 0) >= cost;
+}
+
+async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, league: Json, member: Json) {
+  await ensureLeaguePlayerScores(supabase, league);
+  const memberId = String(member.id || "");
+  const { data: roster, error: rosterError } = await supabase
+    .from("roster_slots")
+    .select("player_id,slot_type,players(id,full_name,player_display_name,position,team)")
+    .eq("league_member_id", memberId);
+  if (rosterError) throw rosterError;
+  const playerIds = [...new Set((roster || []).map((slot: Json) => String(slot.player_id || "")).filter(Boolean))];
+  if (!playerIds.length) throw new Error(`${member.team_name || "AI team"} has no roster players.`);
+
+  const [{ data: tiers, error: tierError }, { data: scores, error: scoreError }, { data: durabilityRows, error: durabilityError }, { data: usageRows, error: usageError }] = await Promise.all([
+    supabase.from("league_player_draft_tiers").select("player_id,tier_value,position,position_rank").eq("league_id", league.id).in("player_id", playerIds),
+    supabase.from("league_player_scores").select("player_id,expected_avg_points,total_points,tier_value,position,position_rank").eq("league_id", league.id).in("player_id", playerIds),
+    durabilityEnabled(league)
+      ? supabase.from("league_player_durability").select("player_id,durability").eq("league_id", league.id).in("player_id", playerIds)
+      : Promise.resolve({ data: [], error: null }),
+    supabase.from("manager_player_usage").select("player_id,usage_count,released_at").eq("league_id", league.id).eq("league_member_id", memberId).in("player_id", playerIds),
+  ]);
+  if (tierError) throw tierError;
+  if (scoreError) throw scoreError;
+  if (durabilityError) throw durabilityError;
+  if (usageError) throw usageError;
+
+  const tierByPlayer = new Map((tiers || []).map((row: Json) => [String(row.player_id), row]));
+  const scoreByPlayer = new Map((scores || []).map((row: Json) => [String(row.player_id), row]));
+  const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
+  const usageByPlayer = new Map((usageRows || []).map((row: Json) => [String(row.player_id), row]));
+  const threshold = limitedUseThreshold(league);
+  const byBucket: Record<string, Json[]> = { QB: [], OFF: [], DEF: [], K: [] };
+
+  for (const slot of roster || []) {
+    const playerId = String(slot.player_id || "");
+    const player = Array.isArray(slot.players) ? slot.players[0] : slot.players;
+    const tier = tierByPlayer.get(playerId) || {};
+    const score = scoreByPlayer.get(playerId) || {};
+    const bucket = lineupPositionBucket(tier.position || score.position || player?.position || slot.slot_type);
+    const durability = durabilityByPlayer.has(playerId) ? durabilityByPlayer.get(playerId) : 0;
+    const usage = usageByPlayer.get(playerId) || {};
+    const usageCount = Number(usage.usage_count || 0);
+    const wouldRelease = threshold > 0 && !usage.released_at && usageCount + 1 >= threshold;
+    byBucket[bucket].push({
+      player_id: playerId,
+      slot: tier.position || score.position || player?.position || slot.slot_type || bucket,
+      bucket,
+      tier_value: Number(tier.tier_value || score.tier_value || 1),
+      position_rank: Number(tier.position_rank || score.position_rank || 9999),
+      expected_avg_points: Number(score.expected_avg_points || 0),
+      adjusted_points: Number(score.expected_avg_points || 0) * durabilityMultiplierFor(durability),
+      durability,
+      would_release: wouldRelease,
+      name: String(player?.player_display_name || player?.full_name || playerId),
+    });
+  }
+
+  const qb = chooseLineupCandidates(byBucket.QB, 1);
+  const kicker = chooseLineupCandidates(byBucket.K, 1);
+  const shapeA = [...chooseLineupCandidates(byBucket.OFF, 2), ...chooseLineupCandidates(byBucket.DEF, 1)];
+  const shapeB = [...chooseLineupCandidates(byBucket.OFF, 1), ...chooseLineupCandidates(byBucket.DEF, 2)];
+  const scoreShape = (items: Json[]) => items.length === 3 ? items.reduce((sum, item) => sum + lineupCandidateSortValue(item), 0) : -1;
+  const flex = scoreShape(shapeA) >= scoreShape(shapeB) ? shapeA : shapeB;
+  const starters = [...qb, ...kicker, ...flex];
+  if (starters.length !== 5 || qb.length !== 1 || kicker.length !== 1 || flex.length !== 3) {
+    throw new Error(`${member.team_name || "AI team"} does not have enough roster players for a valid lineup.`);
+  }
+
+  const starterIds = new Set(starters.map((candidate) => String(candidate.player_id)));
+  let treatmentId: string | null = null;
+  const treatmentAffordable = await managerPointTreatmentAffordable(supabase, league, memberId);
+  if (treatmentAffordable && durabilityEnabled(league)) {
+    const benchCandidates = sortLineupCandidates(Object.values(byBucket).flat())
+      .filter((candidate) => !starterIds.has(String(candidate.player_id)))
+      .filter((candidate) => Number(candidate.durability ?? 0) < 3)
+      .filter((candidate) => league.manager_points_enabled === true
+        ? Number(candidate.durability ?? 0) <= 0 && (Number(candidate.tier_value || 1) >= 3 || byBucket[String(candidate.bucket)]?.length <= 1)
+        : true);
+    treatmentId = benchCandidates[0]?.player_id ? String(benchCandidates[0].player_id) : null;
+  }
+
+  return (roster || []).map((slot: Json) => {
+    const playerId = String(slot.player_id || "");
+    const candidate = Object.values(byBucket).flat().find((item) => String(item.player_id) === playerId);
+    return {
+      slot: candidate?.slot || slot.slot_type || "FLEX",
+      player_id: playerId,
+      status: starterIds.has(playerId) ? "active" : treatmentId === playerId ? "treatment" : "bench",
+    };
+  });
+}
+
+async function generateAiLineups(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  const weekNumber = Number(payload.week_number || 0);
+  if (!weekNumber) throw new Error("Week number is required.");
+  const { count: resolvedCount, error: resolvedError } = await supabase
+    .from("league_week_results")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .eq("week_number", weekNumber);
+  if (resolvedError) throw resolvedError;
+  if (resolvedCount) throw new Error("AI lineups cannot be regenerated after the week is resolved.");
+
+  const { data: members, error: memberError } = await supabase
+    .from("league_members")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("is_active", true)
+    .eq("is_ai", true);
+  if (memberError) throw memberError;
+  const generated = [];
+  const skipped = [];
+  for (const member of members || []) {
+    const { data: existing, error: existingError } = await supabase
+      .from("lineups")
+      .select("*")
+      .eq("league_id", league.id)
+      .eq("league_member_id", member.id)
+      .eq("week_number", weekNumber)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing?.finalized_at && payload.force !== true) {
+      skipped.push(member.id);
+      continue;
+    }
+    const slots = await buildAiLineupSlots(supabase, league, member);
+    const result = await finalizeLineup(supabase, { league_id: league.id, league_member_id: member.id, week_number: weekNumber, slots });
+    generated.push(result.lineup);
+  }
+  return { generated_count: generated.length, skipped_count: skipped.length, lineups: generated };
+}
+
 async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload: Json) {
+  const { data: rawLeague, error: leagueError } = await supabase.from("leagues").select("*").eq("id", payload.league_id).single();
+  if (leagueError) throw leagueError;
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  const slots = Array.isArray(payload.slots) ? payload.slots as Json[] : [];
+  const memberId = String(payload.league_member_id || "");
+  const weekNumber = Number(payload.week_number || 0);
+  const validation = await validateLineupSlots(supabase, league, memberId, slots);
   const { data: lineup, error } = await supabase
     .from("lineups")
     .upsert(
@@ -3650,7 +3994,7 @@ async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload
         league_id: payload.league_id,
         league_member_id: payload.league_member_id,
         week_number: payload.week_number,
-        slots: payload.slots || [],
+        slots,
         finalized_at: new Date().toISOString(),
       },
       { onConflict: "league_id,league_member_id,week_number" },
@@ -3658,6 +4002,7 @@ async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload
     .select("*")
     .single();
   if (error) throw error;
+  await spendTreatmentPointsIfNeeded(supabase, league, memberId, weekNumber, validation.treatmentPlayerId);
   return { lineup };
 }
 
@@ -3682,6 +4027,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     .eq("league_id", leagueId)
     .eq("is_active", true);
   if (activeMembersError) throw activeMembersError;
+  await assertAllLineupsReady(supabase, league, weekNumber, activeMembers || [], lineups || []);
 
   const assignments = { ...((randomization?.assignments || {}) as Record<string, Json>) };
   const sourceSeasonYear = Number(randomization?.source_season_year || league.source_season_year || new Date().getFullYear() - 1);
@@ -4233,6 +4579,8 @@ export async function handleAction(action: string, request: Request) {
           ? await openWeekDraft(supabase, payload)
           : action === "submit_pick"
             ? await submitPick(supabase, payload)
+            : action === "generate_ai_lineups"
+              ? await generateAiLineups(supabase, user, payload)
             : action === "finalize_lineup"
               ? await finalizeLineup(supabase, payload)
               : action === "resolve_week"

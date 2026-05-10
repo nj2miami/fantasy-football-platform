@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Eye, FastForward, Lock, Pause, Play, RefreshCw, Save, ShieldCheck, Unlock } from "lucide-react";
+import { Bot, CalendarDays, Eye, FastForward, Lock, Pause, Play, RefreshCw, Save, ShieldCheck, Unlock } from "lucide-react";
 import { toast } from "sonner";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS } from "@/api/appClient";
 import { LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
@@ -30,9 +30,18 @@ export default function LeagueScheduleSettings({ league }) {
     queryKey: ["league-matchups", league.id],
     queryFn: () => appClient.entities.Matchup.filter({ league_id: league.id }, "week_number"),
   });
+  const { data: members = [] } = useQuery({
+    queryKey: ["league-schedule-members", league.id],
+    queryFn: () => appClient.entities.LeagueMember.filter({ league_id: league.id }),
+  });
 
   const activeSeason = seasons[0];
   const currentWeekNumber = activeSeason?.current_week || 1;
+  const { data: currentWeekLineups = [] } = useQuery({
+    queryKey: ["league-lineups", league.id, currentWeekNumber],
+    queryFn: () => appClient.entities.Lineup.filter({ league_id: league.id, week_number: currentWeekNumber }),
+    enabled: Boolean(league.id && currentWeekNumber),
+  });
   const currentWeek = weeks.find((week) => Number(week.week_number) === Number(currentWeekNumber));
   const leagueStarted = seasons.length > 0;
   const isPaused = league.league_status === "PAUSED";
@@ -46,6 +55,7 @@ export default function LeagueScheduleSettings({ league }) {
     queryClient.invalidateQueries({ queryKey: ["league-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-game-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
   };
 
@@ -79,6 +89,7 @@ export default function LeagueScheduleSettings({ league }) {
         reveal_week_results: "Results revealed.",
         recalculate_standings: "Standings recalculated.",
         generate_schedule: "Schedule generated.",
+        generate_ai_lineups: "AI lineups generated.",
       };
       toast.success(labels[variables.action] || "Action complete.");
       invalidate();
@@ -123,6 +134,9 @@ export default function LeagueScheduleSettings({ league }) {
 
   const run = (action, payload = {}) => actionMutation.mutate({ action, payload: { league_id: league.id, ...payload } });
   const currentWeekMatchups = matchups.filter((matchup) => Number(matchup.week_number) === Number(currentWeekNumber));
+  const activeMembers = members.filter((member) => member.is_active !== false);
+  const submittedLineups = currentWeekLineups.filter((lineup) => lineup.finalized_at);
+  const lineupReady = activeMembers.length > 0 && submittedLineups.length >= activeMembers.length;
 
   return (
     <div className="space-y-6">
@@ -149,6 +163,11 @@ export default function LeagueScheduleSettings({ league }) {
         <div className="neo-border p-4 bg-white">
           <p className="text-xs font-black uppercase text-gray-500 mb-1">Schedule Lock</p>
           <p className="text-lg font-black">{scheduleLocked ? "Locked" : "Unlocked"}</p>
+        </div>
+        <div className="neo-border p-4 bg-white md:col-span-4">
+          <p className="text-xs font-black uppercase text-gray-500 mb-1">Lineups Ready</p>
+          <p className="text-lg font-black">{submittedLineups.length} / {activeMembers.length || 0}</p>
+          <p className="mt-1 text-xs font-bold uppercase text-gray-500">{lineupReady ? "Ready to resolve" : "Resolve Week stays locked until every active team finalizes."}</p>
         </div>
       </div>
 
@@ -244,7 +263,11 @@ export default function LeagueScheduleSettings({ league }) {
           <FastForward className="w-5 h-5 mr-2" />
           Advance Week
         </Button>
-        <Button onClick={() => run("resolve_week", { week_number: currentWeekNumber })} disabled={actionMutation.isPending || !leagueStarted} className="neo-btn bg-white text-black py-4">
+        <Button onClick={() => run("generate_ai_lineups", { week_number: currentWeekNumber })} disabled={actionMutation.isPending || !leagueStarted} className="neo-btn bg-[#D7F8E8] text-black py-4">
+          <Bot className="w-5 h-5 mr-2" />
+          Generate AI Lineups
+        </Button>
+        <Button onClick={() => run("resolve_week", { week_number: currentWeekNumber })} disabled={actionMutation.isPending || !leagueStarted || !lineupReady} title={lineupReady ? "Resolve week" : "All active teams must finalize lineups first."} className="neo-btn bg-white text-black py-4">
           <ShieldCheck className="w-5 h-5 mr-2" />
           Resolve Week
         </Button>

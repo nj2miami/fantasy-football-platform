@@ -194,7 +194,12 @@ function DurabilityBadge({ durability }) {
 
 function lineupSlotIsPlayed(slot) {
   const status = lineupSlotStatus(slot);
-  return !["bench", "benched"].includes(status);
+  return !["bench", "benched", "treating", "treatment", "treated"].includes(status);
+}
+
+function lineupSlotIsTreatment(slot) {
+  const status = lineupSlotStatus(slot);
+  return ["treating", "treatment", "treated"].includes(status);
 }
 
 function StyledNewsBody({ body }) {
@@ -1154,14 +1159,37 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
     });
     return groups;
   }, [playerById, roster, tierByPlayer]);
-  const initialSelection = useMemo(() => {
-    return normalizeSlots(lineup?.slots)
-      .filter(lineupSlotIsPlayed)
-      .map((slot) => slot.player_id)
-      .filter(Boolean);
-  }, [lineup?.slots]);
-  const [selectedIds, setSelectedIds] = useState(new Set(initialSelection));
-  useEffect(() => setSelectedIds(new Set(initialSelection)), [initialSelection]);
+  const initialStatusByPlayer = useMemo(() => {
+    const statuses = {};
+    roster.forEach((slot) => {
+      statuses[slot.player_id] = "bench";
+    });
+    normalizeSlots(lineup?.slots).forEach((slot) => {
+      if (!slot.player_id) return;
+      statuses[slot.player_id] = lineupSlotIsTreatment(slot) ? "treatment" : lineupSlotIsPlayed(slot) ? "active" : "bench";
+    });
+    return statuses;
+  }, [lineup?.slots, roster]);
+  const [statusByPlayer, setStatusByPlayer] = useState(initialStatusByPlayer);
+  useEffect(() => setStatusByPlayer(initialStatusByPlayer), [initialStatusByPlayer]);
+  const selectedIds = useMemo(() => {
+    return new Set(Object.entries(statusByPlayer).filter(([, status]) => status === "active").map(([playerId]) => playerId));
+  }, [statusByPlayer]);
+  const treatmentIds = useMemo(() => {
+    return new Set(Object.entries(statusByPlayer).filter(([, status]) => status === "treatment").map(([playerId]) => playerId));
+  }, [statusByPlayer]);
+  const treatmentCount = treatmentIds.size;
+  const treatmentIsValid = treatmentCount <= 1;
+  const nextStatus = (currentStatus) => {
+    if (currentStatus === "bench") return "active";
+    if (currentStatus === "active") return "treatment";
+    return "bench";
+  };
+  const statusLabel = (status) => {
+    if (status === "active") return "Played";
+    if (status === "treatment") return "Treatment";
+    return "Benched";
+  };
 
   const selectedCounts = useMemo(() => {
     const counts = { QB: 0, OFF: 0, DEF: 0, K: 0 };
@@ -1184,12 +1212,13 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
     Number(selectedCounts.DEF || 0) <= 2;
   const lineupIsValid = qbIsValid &&
     kickerIsValid &&
-    flexPositionsAreValid;
+    flexPositionsAreValid &&
+    treatmentIsValid;
   const lineupRequirementText = "Need 1 QB, 1 K, and either 2 OFF/1 DEF or 1 OFF/2 DEF";
   const finalizeDisabledReason = !scheduleReady
     ? "Schedule must be created first."
     : !lineupIsValid
-      ? lineupRequirementText
+      ? treatmentIsValid ? lineupRequirementText : "Only one player can be in treatment each week."
       : "";
 
   const finalizeLineupMutation = useMutation({
@@ -1198,7 +1227,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
         .map((slot) => ({
           slot: slot.slot_type || rosterSlotPlayer(slot, playerById)?.position || "FLEX",
           player_id: slot.player_id,
-          status: selectedIds.has(slot.player_id) ? "active" : "bench",
+          status: statusByPlayer[slot.player_id] || "bench",
         }));
       return appClient.functions.invoke("finalize_lineup", {
         league_id: league.id,
@@ -1215,11 +1244,9 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
   });
 
   const togglePlayer = (playerId) => {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(playerId)) next.delete(playerId);
-      else next.add(playerId);
-      return next;
+    setStatusByPlayer((current) => {
+      const currentStatus = current[playerId] || "bench";
+      return { ...current, [playerId]: nextStatus(currentStatus) };
     });
   };
 
@@ -1234,11 +1261,12 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
         </Button>
       )}
     >
-      <div className="neo-border mb-4 grid gap-2 bg-[#EFFBFF] p-3 text-xs font-black uppercase text-black sm:grid-cols-5">
+      <div className="neo-border mb-4 grid gap-2 bg-[#EFFBFF] p-3 text-xs font-black uppercase text-black sm:grid-cols-6">
         <LineupRequirementBadge label="QB" value={selectedCounts.QB} target="1" valid={qbIsValid} />
         <LineupRequirementBadge label="K" value={selectedCounts.K} target="1" valid={kickerIsValid} />
         <LineupRequirementBadge label="OFF" value={selectedCounts.OFF} target="1-2" valid={flexPositionsAreValid} />
         <LineupRequirementBadge label="DEF" value={selectedCounts.DEF} target="1-2" valid={flexPositionsAreValid} />
+        <LineupRequirementBadge label="Treatment" value={treatmentCount} target="0-1" valid={treatmentIsValid} />
         <LineupRequirementBadge label="Schedule" value={scheduleReady ? "Ready" : "Missing"} valid={scheduleReady} />
       </div>
       {finalizeDisabledReason && <p className="mb-4 text-xs font-black uppercase text-red-600">{finalizeDisabledReason}</p>}
@@ -1270,11 +1298,13 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
               const player = rosterSlotPlayer(slot, playerById);
               const tier = tierByPlayer.get(slot.player_id);
               const selected = selectedIds.has(slot.player_id);
+              const treating = treatmentIds.has(slot.player_id);
+              const status = statusByPlayer[slot.player_id] || "bench";
               return (
-                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : "bg-white hover:bg-gray-50"}`}>
-                  <span className={`neo-border inline-flex w-fit items-center gap-2 px-2 py-1 text-[11px] font-black uppercase ${selected ? "bg-[#F7B801] text-black" : "bg-gray-200 text-black"}`}>
+                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : treating ? "bg-[#EFFBFF]" : "bg-white hover:bg-gray-50"}`}>
+                  <span className={`neo-border inline-flex w-fit items-center gap-2 px-2 py-1 text-[11px] font-black uppercase ${selected ? "bg-[#F7B801] text-black" : treating ? "bg-[#00D9FF] text-black" : "bg-gray-200 text-black"}`}>
                     {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                    {selected ? "Played" : "Benched"}
+                    {statusLabel(status)}
                   </span>
                   <span className="min-w-0">
                     <span className="block truncate font-black">{playerDisplayName(player, "Roster Player")}</span>
@@ -1300,7 +1330,11 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
         </div>
         <div className="neo-border bg-white p-3">
           <p className="text-xs font-black uppercase text-gray-500">Benched</p>
-          <p className="text-2xl font-black text-black">{Math.max(0, roster.length - selectedIds.size)}</p>
+          <p className="text-2xl font-black text-black">{Math.max(0, roster.length - selectedIds.size - treatmentCount)}</p>
+        </div>
+        <div className="neo-border bg-white p-3 sm:col-span-2">
+          <p className="text-xs font-black uppercase text-gray-500">Treatment</p>
+          <p className="text-2xl font-black text-black">{treatmentCount}</p>
         </div>
       </div>
       {!roster.length && <EmptyState title="No roster yet" detail="Draft or roster assignment must happen before lineup lock." />}
