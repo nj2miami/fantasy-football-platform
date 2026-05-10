@@ -844,6 +844,145 @@ async function generateGameSchedule(supabase: ReturnType<typeof createClient>, l
   return data || [];
 }
 
+function regularSeasonWeeksForLeague(league: Json) {
+  return Math.max(1, Number(league.playoff_start_week || Number(league.season_length_weeks || 8) + 1) - 1);
+}
+
+function scheduleLocked(league: Json) {
+  const config = (league.schedule_config || {}) as Json;
+  return config.schedule_locked === true;
+}
+
+function shuffleArray<T>(items: T[]) {
+  const shuffled = [...items];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = crypto.getRandomValues(new Uint32Array(1))[0] % (index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function matchupKey(first: unknown, second: unknown) {
+  return [String(first), String(second)].sort().join(":");
+}
+
+function roundRobinRounds(memberIds: string[]) {
+  const teams = shuffleArray(memberIds);
+  const rounds: Array<Array<{ home_member_id: string; away_member_id: string }>> = [];
+  const fixed = teams[0];
+  let rotating = teams.slice(1);
+  for (let round = 0; round < teams.length - 1; round += 1) {
+    const lineup = [fixed, ...rotating];
+    const pairs = [];
+    for (let index = 0; index < lineup.length / 2; index += 1) {
+      const first = lineup[index];
+      const second = lineup[lineup.length - 1 - index];
+      pairs.push(round % 2 === 0 ? { home_member_id: first, away_member_id: second } : { home_member_id: second, away_member_id: first });
+    }
+    rounds.push(pairs);
+    rotating = [rotating[rotating.length - 1], ...rotating.slice(0, rotating.length - 1)];
+  }
+  return rounds;
+}
+
+function findRepeatRound(memberIds: string[], pairCounts: Map<string, number>, maxPairCount = 2): Array<{ home_member_id: string; away_member_id: string }> | null {
+  const build = (remaining: string[]): Array<{ home_member_id: string; away_member_id: string }> | null => {
+    if (!remaining.length) return [];
+    const [first, ...rest] = remaining;
+    for (const second of shuffleArray(rest)) {
+      if ((pairCounts.get(matchupKey(first, second)) || 0) >= maxPairCount) continue;
+      const nextRemaining = rest.filter((id) => id !== second);
+      const nested = build(nextRemaining);
+      if (nested) return [{ home_member_id: first, away_member_id: second }, ...nested];
+    }
+    return null;
+  };
+  return build(shuffleArray(memberIds));
+}
+
+function balanceHomeAway(
+  pairs: Array<{ home_member_id: string; away_member_id: string }>,
+  homeCounts: Map<string, number>,
+  weekNumber: number,
+) {
+  return pairs.map((pair, index) => {
+    const homeCount = homeCounts.get(pair.home_member_id) || 0;
+    const awayHomeCount = homeCounts.get(pair.away_member_id) || 0;
+    let home = pair.home_member_id;
+    let away = pair.away_member_id;
+    if (awayHomeCount < homeCount || (awayHomeCount === homeCount && (weekNumber + index) % 2 === 0)) {
+      home = pair.away_member_id;
+      away = pair.home_member_id;
+    }
+    homeCounts.set(home, (homeCounts.get(home) || 0) + 1);
+    return { home_member_id: home, away_member_id: away };
+  });
+}
+
+async function buildFullSeasonMatchupRows(supabase: ReturnType<typeof createClient>, league: Json) {
+  if (league.schedule_type !== "head_to_head" && league.ranking_system !== "offl") return [];
+  const { data: members, error: memberError } = await supabase
+    .from("league_members")
+    .select("id")
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (memberError) throw memberError;
+  const memberIds = (members || []).map((member) => String(member.id));
+  if (memberIds.length < 2) throw new Error("At least two active teams are required to generate a schedule.");
+  if (memberIds.length % 2 !== 0) throw new Error("Schedule generation requires an even number of active teams.");
+
+  const regularWeeks = regularSeasonWeeksForLeague(league);
+  const baseRounds = roundRobinRounds(memberIds);
+  const pairCounts = new Map<string, number>();
+  const homeCounts = new Map<string, number>();
+  const rows = [];
+
+  for (let weekNumber = 1; weekNumber <= regularWeeks; weekNumber += 1) {
+    const rawPairs = weekNumber <= baseRounds.length
+      ? baseRounds[weekNumber - 1]
+      : findRepeatRound(memberIds, pairCounts, 2);
+    if (!rawPairs?.length) throw new Error(`Unable to create a legal matchup set for week ${weekNumber}.`);
+    const pairs = balanceHomeAway(rawPairs, homeCounts, weekNumber);
+    for (const pair of pairs) {
+      const key = matchupKey(pair.home_member_id, pair.away_member_id);
+      pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
+      if ((pairCounts.get(key) || 0) > 2) throw new Error("Generated schedule would repeat a matchup more than twice.");
+      rows.push({
+        league_id: league.id,
+        week_number: weekNumber,
+        home_member_id: pair.home_member_id,
+        away_member_id: pair.away_member_id,
+        home_score: 0,
+        away_score: 0,
+      });
+    }
+  }
+  return rows;
+}
+
+async function generateFullSeasonSchedule(
+  supabase: ReturnType<typeof createClient>,
+  league: Json,
+  options: { respectLock?: boolean; replace?: boolean } = {},
+) {
+  if (options.respectLock && scheduleLocked(league)) throw new Error("Schedule is locked. Unlock it before regenerating.");
+  if (options.replace !== false) {
+    await supabase.from("matchups").delete().eq("league_id", league.id);
+  }
+  const schedule = await generateGameSchedule(supabase, league);
+  const matchupRows = await buildFullSeasonMatchupRows(supabase, league);
+  if (!matchupRows.length) return { schedule, matchups: [] };
+  const { data: matchups, error } = await supabase.from("matchups").insert(matchupRows).select("*");
+  if (error) throw error;
+  return { schedule, matchups: matchups || [] };
+}
+
+async function generateSchedule(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league: rawLeague } = await requireLeagueControl(supabase, user, payload.league_id);
+  const league = normalizeLeaguePlaySettings(rawLeague);
+  return await generateFullSeasonSchedule(supabase, league, { respectLock: true, replace: true });
+}
+
 async function ensureWeekRandomization(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number, sourceSeasonYear: number) {
   const { data: existing, error: existingError } = await supabase
     .from("week_randomizations")
@@ -941,26 +1080,12 @@ async function generateMatchups(supabase: ReturnType<typeof createClient>, leagu
     .eq("week_number", weekNumber);
   if (existingError) throw existingError;
   if (existing?.length) return existing;
-  const { data: members, error: memberError } = await supabase
-    .from("league_members")
-    .select("id")
+  await generateFullSeasonSchedule(supabase, league, { respectLock: false, replace: true });
+  const { data, error } = await supabase
+    .from("matchups")
+    .select("*")
     .eq("league_id", league.id)
-    .eq("is_active", true);
-  if (memberError) throw memberError;
-  const rotated = [...(members || []).slice(weekNumber - 1), ...(members || []).slice(0, weekNumber - 1)];
-  const rows = [];
-  for (let index = 0; index < rotated.length - 1; index += 2) {
-    rows.push({
-      league_id: league.id,
-      week_number: weekNumber,
-      home_member_id: rotated[index].id,
-      away_member_id: rotated[index + 1].id,
-      home_score: 0,
-      away_score: 0,
-    });
-  }
-  if (!rows.length) return [];
-  const { data, error } = await supabase.from("matchups").insert(rows).select("*");
+    .eq("week_number", weekNumber);
   if (error) throw error;
   return data || [];
 }
@@ -1339,12 +1464,18 @@ async function transferCommissioner(supabase: ReturnType<typeof createClient>, u
 async function addAiTeam(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league } = await requireLeagueControl(supabase, user, payload.league_id);
   await assertLeagueSetupEditable(supabase, league.id);
-  const { count, error: countError } = await supabase.from("league_members").select("id", { count: "exact", head: true }).eq("league_id", league.id).eq("is_active", true);
-  if (countError) throw countError;
-  if ((count || 0) >= Number(league.max_members || 0)) throw new Error("League is full.");
   const persona = AI_PERSONAS.has(String(payload.ai_persona || payload.persona || "BALANCED"))
     ? String(payload.ai_persona || payload.persona || "BALANCED")
     : "BALANCED";
+  const result = await createAiLeagueMember(supabase, league, persona);
+  return result;
+}
+
+async function createAiLeagueMember(supabase: ReturnType<typeof createClient>, league: Json, persona = "BALANCED") {
+  const { count, error: countError } = await supabase.from("league_members").select("id", { count: "exact", head: true }).eq("league_id", league.id).eq("is_active", true);
+  if (countError) throw countError;
+  if ((count || 0) >= Number(league.max_members || 0)) throw new Error("League is full.");
+  const aiPersona = AI_PERSONAS.has(String(persona)) ? String(persona) : "BALANCED";
   const name = await nextAiTeamName(supabase, league.id);
   const { data: member, error } = await supabase
     .from("league_members")
@@ -1355,7 +1486,7 @@ async function addAiTeam(supabase: ReturnType<typeof createClient>, user: { id: 
       role_in_league: "MANAGER",
       is_active: true,
       is_ai: true,
-      ai_persona: persona,
+      ai_persona: aiPersona,
     })
     .select("*")
     .single();
@@ -1791,8 +1922,12 @@ async function startSeason(supabase: ReturnType<typeof createClient>, payload: J
   await ensureWeekRandomization(supabase, league, 1, Number(sourceSeasonYear));
   await ensureLeaguePlayerScores(supabase, league);
   await ensureManagerPointAccounts(supabase, league, season.id);
-  await generateGameSchedule(supabase, league);
-  await generateMatchups(supabase, league, 1);
+  const { count: matchupCount, error: matchupCountError } = await supabase
+    .from("matchups")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id);
+  if (matchupCountError) throw matchupCountError;
+  if (!matchupCount) await generateFullSeasonSchedule(supabase, league, { respectLock: false, replace: true });
 
   return { season, week };
 }
@@ -3039,13 +3174,14 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
   if (draftError) throw draftError;
   if (draft.status === "OPEN") return { draft };
 
-  const { data: members, error: memberError } = await supabase
+  const { data: memberRows, error: memberError } = await supabase
     .from("league_members")
     .select("*")
     .eq("league_id", league.id)
     .eq("is_active", true)
     .order("created_date", { ascending: true });
   if (memberError) throw memberError;
+  let members = memberRows || [];
   if (!members?.length) throw new Error("No active teams are in this league");
 
   const { data: existingRoom, error: existingRoomError } = await supabase
@@ -3055,7 +3191,14 @@ async function startDraft(supabase: ReturnType<typeof createClient>, user: { id:
     .maybeSingle();
   if (existingRoomError) throw existingRoomError;
   const room = existingRoom || null;
-  const checkIn = draftCheckInState(room);
+  let checkIn = draftCheckInState(room);
+  if (members.length % 2 !== 0) {
+    const createdAi = await createAiLeagueMember(supabase, league, "BALANCED");
+    members = [...members, createdAi.member];
+    const statuses = { ...((checkIn.statuses || {}) as Json) };
+    statuses[String(createdAi.member.id)] = { status: "FORCED", forced_at: new Date().toISOString(), by: user.id, auto_draft: true, reason: "odd_team_count" };
+    checkIn = { ...checkIn, statuses };
+  }
   if (!draftCheckInComplete(members || [], checkIn)) {
     throw new Error("All active managers must check in or be force checked-in before the draft can start.");
   }
@@ -4081,6 +4224,8 @@ export async function handleAction(action: string, request: Request) {
                                                     ? await processDraftTimer(supabase, user, payload)
         : action === "start_season"
           ? await startSeason(supabase, payload)
+        : action === "generate_schedule"
+          ? await generateSchedule(supabase, user, payload)
         : action === "open_week_draft"
           ? await openWeekDraft(supabase, payload)
           : action === "submit_pick"

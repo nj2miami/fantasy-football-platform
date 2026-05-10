@@ -6,11 +6,12 @@ import { useLocation, useNavigate, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Trophy, Settings, Users, PenSquare, BarChart, Eye, Grid, Bot, ShieldAlert, Trash2, Megaphone } from "lucide-react";
+import { ArrowLeft, Trophy, Settings, Users, PenSquare, BarChart, Eye, Grid, Bot, ShieldAlert, Trash2, Megaphone, CalendarDays } from "lucide-react";
 import LeagueSettings from "../components/league/LeagueSettings";
 import LeagueScoring from "../components/league/LeagueScoring";
 import LeagueMembers from "../components/league/LeagueMembers";
 import LeagueDraftSettings from "../components/league/LeagueDraftSettings";
+import LeagueScheduleSettings from "../components/league/LeagueScheduleSettings";
 import LeagueRosterSettings from "../components/league/LeagueRosterSettings";
 import LeagueAITeams from "../components/league/LeagueAITeams";
 import LeagueCommunications from "../components/league/LeagueCommunications";
@@ -157,6 +158,7 @@ export default function LeagueManage() {
     { id: 'scoring', label: 'Scoring', icon: BarChart },
     { id: 'roster', label: 'Roster', icon: Grid },
     { id: 'draft', label: 'Draft', icon: PenSquare },
+    { id: 'schedule', label: 'Schedule', icon: CalendarDays },
     { id: 'members', label: 'Members', icon: Users },
     { id: 'communications', label: 'Communications', icon: Megaphone },
     { id: 'ai_teams', label: 'AI Teams', icon: Bot },
@@ -235,6 +237,7 @@ export default function LeagueManage() {
         {activeTab === 'roster' && <LeagueRosterSettings league={league} />}
         {activeTab === 'members' && <LeagueMembers league={league} setupLocked={setupLocked} />}
         {activeTab === 'draft' && <LeagueDraftSettings league={league} setupLocked={setupLocked} />}
+        {activeTab === 'schedule' && <LeagueScheduleSettings league={league} setupLocked={setupLocked} />}
         {activeTab === 'ai_teams' && <LeagueAITeams league={league} setupLocked={setupLocked} />}
         {activeTab === 'communications' && <LeagueCommunications league={league} members={members} />}
       </div>
