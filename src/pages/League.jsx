@@ -38,6 +38,13 @@ const HUB_TABS = [
 
 const FREE_AGENT_POSITIONS = ["QB", "OFF", "DEF", "K"];
 const FREE_AGENT_TIERS = [5, 4, 3, 2, 1];
+const MANAGER_PORTAL_TABS = [
+  { id: "lineup", label: "Set Lineup", icon: ClipboardList },
+  { id: "matches", label: "Previous Matches", icon: Trophy },
+  { id: "messages", label: "Messages", icon: Mail },
+  { id: "free-agents", label: "Free Agent Board", icon: Shuffle },
+  { id: "roster", label: "Manage Roster", icon: Users },
+];
 const RULE_DEFINITIONS = [
   {
     key: "draft_cadence",
@@ -132,6 +139,12 @@ function draftBucket(position) {
   return "OFF";
 }
 
+function rosterCapacity(league) {
+  const groups = league?.roster_rules?.draft_groups || {};
+  const configured = Object.values(groups).reduce((sum, value) => sum + Number(value || 0), 0);
+  return Math.max(1, Number(league?.draft_config?.rounds || 0), configured || 0);
+}
+
 function leagueStatusLabel(league, season) {
   const status = String(league?.league_status || "").toUpperCase();
   const seasonStatus = String(season?.status || "").toUpperCase();
@@ -152,6 +165,31 @@ function playerTeamText(player) {
 function rosterSlotPlayer(slot, playerById) {
   const joinedPlayer = Array.isArray(slot?.players) ? slot.players[0] : slot?.players;
   return joinedPlayer || playerById.get(slot?.player_id) || null;
+}
+
+function TierBadge({ tier }) {
+  const tierValue = Number(tier || 1);
+  const classes = {
+    5: "bg-[#F7B801] text-black",
+    4: "bg-[#00D9FF] text-black",
+    3: "bg-[#D7F8E8] text-black",
+    2: "bg-white text-black",
+    1: "bg-gray-200 text-black",
+  };
+  return <span className={`neo-border px-2 py-1 text-[11px] font-black uppercase ${classes[tierValue] || classes[1]}`}>T{tierValue}</span>;
+}
+
+function DurabilityBadge({ durability }) {
+  if (durability === null || durability === undefined) return <span className="neo-border bg-gray-200 px-2 py-1 text-[11px] font-black uppercase text-black">Dur --</span>;
+  const value = Number(durability || 0);
+  const classes = value >= 2 ? "bg-[#D7F8E8] text-black" : value <= -2 ? "bg-red-100 text-red-800" : "bg-white text-black";
+  const prefix = value > 0 ? "+" : "";
+  return <span className={`neo-border px-2 py-1 text-[11px] font-black uppercase ${classes}`}>Dur {prefix}{value}</span>;
+}
+
+function lineupSlotIsPlayed(slot) {
+  const status = lineupSlotStatus(slot);
+  return !["bench", "benched"].includes(status);
 }
 
 function StyledNewsBody({ body }) {
@@ -498,7 +536,8 @@ function RulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
   );
 }
 
-function FreeAgentBoard({ league, currentMember }) {
+function FreeAgentBoard({ league, currentMember, compact = false }) {
+  const queryClient = useQueryClient();
   const { data: board = { tiers: [], playersById: new Map() } } = useQuery({
     queryKey: ["free-agent-draft-tiers", league.id, currentMember?.id],
     queryFn: async () => {
@@ -551,9 +590,36 @@ function FreeAgentBoard({ league, currentMember }) {
     return grouped;
   }, [playerById, tiers]);
   const visibleCount = FREE_AGENT_POSITIONS.reduce((sum, position) => sum + rowsByPosition[position].length, 0);
+  const claimMutation = useMutation({
+    mutationFn: async ({ player, tier }) => {
+      if (!currentMember?.id) throw new Error("Manager membership is required.");
+      const { count, error: countError } = await supabase
+        .from("roster_slots")
+        .select("id", { count: "exact", head: true })
+        .eq("league_member_id", currentMember.id);
+      if (countError) throw countError;
+      if (Number(count || 0) >= rosterCapacity(league)) {
+        throw new Error("Roster is full. Drop a player before adding a free agent.");
+      }
+      const { error } = await supabase.from("roster_slots").insert({
+        league_member_id: currentMember.id,
+        player_id: player.id,
+        slot_type: tier.position || player.position || "OFF",
+        week_number: null,
+      });
+      if (error) throw error;
+      return player;
+    },
+    onSuccess: (player) => {
+      toast.success(`${playerDisplayName(player)} added to roster.`);
+      queryClient.invalidateQueries({ queryKey: ["free-agent-draft-tiers", league.id, currentMember?.id] });
+      queryClient.invalidateQueries({ queryKey: ["manager-roster", currentMember?.id] });
+    },
+    onError: (error) => toast.error(error.message || "Could not add free agent."),
+  });
   return (
     <Panel title="Free Agent Board" icon={Shuffle}>
-      <div className="grid gap-4 xl:grid-cols-4">
+      <div className={`grid gap-4 ${compact ? "xl:grid-cols-2" : "xl:grid-cols-4"}`}>
         {FREE_AGENT_POSITIONS.map((position) => (
           <div key={position} className="neo-border bg-gray-50">
             <div className="border-b-4 border-black bg-black p-3 text-white">
@@ -570,11 +636,22 @@ function FreeAgentBoard({ league, currentMember }) {
                     </div>
                     <div className="space-y-1">
                       {tierRows.map(({ player, tier }) => (
-                        <Link key={player.id} to={createPageUrl(`PlayerStats?id=${player.id}`)} className="block bg-white p-2 text-sm font-bold hover:bg-[#FFF7D6]">
-                          <span className="font-black">{player.player_display_name || player.full_name}</span>
-                          <span className="text-gray-500"> | {player.team || "FA"}</span>
-                          <span className="sr-only"> Rank {tier.position_rank}</span>
-                        </Link>
+                        <div key={player.id} className="neo-border bg-white p-2 text-sm font-bold">
+                          <Link to={createPageUrl(`PlayerStats?id=${player.id}`)} className="block hover:underline">
+                            <span className="font-black">{player.player_display_name || player.full_name}</span>
+                            <span className="text-gray-500"> | {player.team || "FA"}</span>
+                            <span className="sr-only"> Rank {tier.position_rank}</span>
+                          </Link>
+                          {currentMember?.id && (
+                            <Button
+                              onClick={() => claimMutation.mutate({ player, tier })}
+                              disabled={claimMutation.isPending}
+                              className="neo-btn mt-2 h-8 w-full bg-[#00D9FF] px-2 text-[11px] text-black"
+                            >
+                              Add
+                            </Button>
+                          )}
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -857,7 +934,9 @@ function ManagerMatchupPanel({ league, matchups, weekResults, members, manager, 
   );
 }
 
-function ManagerLineupPanel({ league, lineupWeek, manager }) {
+const REQUIRED_LINEUP_COUNTS = { QB: 1, K: 1, FLEX_DEF_OFF: 3 };
+
+function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekResults }) {
   const queryClient = useQueryClient();
   const { data: lineup } = useLineup(league.id, lineupWeek, manager.id);
   const { data: roster = [] } = useQuery({
@@ -872,8 +951,9 @@ function ManagerLineupPanel({ league, lineupWeek, manager }) {
     },
     enabled: Boolean(manager.id),
   });
+  const rosterPlayerIdsKey = roster.map((slot) => slot.player_id).filter(Boolean).join(":");
   const { data: players = [] } = useQuery({
-    queryKey: ["manager-roster-players", manager.id, roster.map((slot) => slot.player_id).filter(Boolean).join(":")],
+    queryKey: ["manager-roster-players", manager.id, rosterPlayerIdsKey],
     queryFn: async () => {
       const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
       if (!playerIds.length) return [];
@@ -881,31 +961,102 @@ function ManagerLineupPanel({ league, lineupWeek, manager }) {
     },
     enabled: Boolean(roster.length),
   });
+  const { data: tierRows = [] } = useQuery({
+    queryKey: ["manager-roster-tiers", league.id, rosterPlayerIdsKey],
+    queryFn: async () => {
+      const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
+      if (!playerIds.length) return [];
+      const { data, error } = await supabase
+        .from("league_player_scores")
+        .select("player_id,tier_value,position,total_points")
+        .eq("league_id", league.id)
+        .in("player_id", playerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(league.id && roster.length),
+  });
+  const { data: durabilityRows = [] } = useQuery({
+    queryKey: ["manager-roster-durability", league.id, rosterPlayerIdsKey],
+    queryFn: async () => {
+      const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
+      if (!playerIds.length) return [];
+      const { data, error } = await supabase
+        .from("league_player_durability")
+        .select("player_id,durability")
+        .eq("league_id", league.id)
+        .in("player_id", playerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(league.id && roster.length),
+  });
   const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
+  const tierByPlayer = useMemo(() => new Map(tierRows.map((row) => [row.player_id, row])), [tierRows]);
+  const durabilityByPlayer = useMemo(() => new Map(durabilityRows.map((row) => [row.player_id, row.durability])), [durabilityRows]);
+  const scoredPointsByPlayer = useMemo(() => {
+    const totals = new Map();
+    weekResults
+      .filter((result) => result.league_member_id === manager.id)
+      .forEach((result) => {
+        (result.scoring_details || result.lineup_slots || result.slots || []).forEach((slot) => {
+          const playerId = slot.player_id;
+          if (!playerId) return;
+          totals.set(playerId, Number(totals.get(playerId) || 0) + Number(slot.scored_points || 0));
+        });
+      });
+    return totals;
+  }, [manager.id, weekResults]);
   const rosterByPosition = useMemo(() => {
     const groups = { QB: [], OFF: [], DEF: [], K: [] };
     roster.forEach((slot) => {
       const player = rosterSlotPlayer(slot, playerById);
-      const bucket = draftBucket(player?.position || slot.slot_type);
+      const tier = tierByPlayer.get(slot.player_id);
+      const bucket = draftBucket(tier?.position || player?.position || slot.slot_type);
       groups[bucket].push(slot);
     });
     return groups;
-  }, [playerById, roster]);
+  }, [playerById, roster, tierByPlayer]);
   const initialSelection = useMemo(() => {
-    const lineupIds = normalizeSlots(lineup?.slots).map((slot) => slot.player_id).filter(Boolean);
-    return lineupIds.length ? lineupIds : roster.map((slot) => slot.player_id).filter(Boolean);
-  }, [lineup?.slots, roster]);
+    return normalizeSlots(lineup?.slots)
+      .filter(lineupSlotIsPlayed)
+      .map((slot) => slot.player_id)
+      .filter(Boolean);
+  }, [lineup?.slots]);
   const [selectedIds, setSelectedIds] = useState(new Set(initialSelection));
   useEffect(() => setSelectedIds(new Set(initialSelection)), [initialSelection]);
+
+  const selectedCounts = useMemo(() => {
+    const counts = { QB: 0, OFF: 0, DEF: 0, K: 0 };
+    roster.forEach((slot) => {
+      if (!selectedIds.has(slot.player_id)) return;
+      const player = rosterSlotPlayer(slot, playerById);
+      const tier = tierByPlayer.get(slot.player_id);
+      const bucket = draftBucket(tier?.position || player?.position || slot.slot_type);
+      counts[bucket] += 1;
+    });
+    return counts;
+  }, [playerById, roster, selectedIds, tierByPlayer]);
+  const offDefTotal = Number(selectedCounts.OFF || 0) + Number(selectedCounts.DEF || 0);
+  const lineupIsValid = Number(selectedCounts.QB || 0) === 1 &&
+    Number(selectedCounts.K || 0) === 1 &&
+    offDefTotal === 3 &&
+    Number(selectedCounts.OFF || 0) >= 1 &&
+    Number(selectedCounts.DEF || 0) >= 1;
+  const lineupRequirementText = "Need 1 QB, 1 K, and either 2 OFF/1 DEF or 1 OFF/2 DEF";
+  const finalizeDisabledReason = !scheduleReady
+    ? "Schedule must be created first."
+    : !lineupIsValid
+      ? lineupRequirementText
+      : "";
 
   const finalizeLineupMutation = useMutation({
     mutationFn: () => {
       const slots = roster
-        .filter((slot) => selectedIds.has(slot.player_id))
         .map((slot) => ({
           slot: slot.slot_type || rosterSlotPlayer(slot, playerById)?.position || "FLEX",
           player_id: slot.player_id,
-          status: "active",
+          status: selectedIds.has(slot.player_id) ? "active" : "bench",
         }));
       return appClient.functions.invoke("finalize_lineup", {
         league_id: league.id,
@@ -935,40 +1086,71 @@ function ManagerLineupPanel({ league, lineupWeek, manager }) {
       title={`Set Lineup: Week ${lineupWeek}`}
       icon={ClipboardList}
       action={(
-        <Button onClick={() => finalizeLineupMutation.mutate()} disabled={finalizeLineupMutation.isPending || !roster.length || selectedIds.size === 0} className="neo-btn bg-[#FF6B35] text-white">
+        <Button onClick={() => finalizeLineupMutation.mutate()} disabled={finalizeLineupMutation.isPending || !roster.length || Boolean(finalizeDisabledReason)} className="neo-btn bg-[#FF6B35] text-white" title={finalizeDisabledReason || "Finalize lineup"}>
           <Save className="mr-2 h-5 w-5" />
           {finalizeLineupMutation.isPending ? "Saving..." : "Finalize"}
         </Button>
       )}
     >
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="neo-border mb-4 grid gap-2 bg-[#EFFBFF] p-3 text-xs font-black uppercase text-black sm:grid-cols-5">
+        <span className={`neo-border px-2 py-1 ${selectedCounts.QB === 1 ? "bg-[#D7F8E8]" : "bg-white"}`}>QB {selectedCounts.QB}/1</span>
+        <span className={`neo-border px-2 py-1 ${selectedCounts.K === 1 ? "bg-[#D7F8E8]" : "bg-white"}`}>K {selectedCounts.K}/1</span>
+        <span className={`neo-border px-2 py-1 ${selectedCounts.OFF >= 1 && selectedCounts.OFF <= 2 ? "bg-[#D7F8E8]" : "bg-white"}`}>OFF {selectedCounts.OFF}/1-2</span>
+        <span className={`neo-border px-2 py-1 ${selectedCounts.DEF >= 1 && selectedCounts.DEF <= 2 ? "bg-[#D7F8E8]" : "bg-white"}`}>DEF {selectedCounts.DEF}/1-2</span>
+        <span className={`neo-border px-2 py-1 ${scheduleReady ? "bg-[#D7F8E8]" : "bg-red-100 text-red-800"}`}>{scheduleReady ? "Schedule Ready" : "No Schedule"}</span>
+      </div>
+      {finalizeDisabledReason && <p className="mb-4 text-xs font-black uppercase text-red-600">{finalizeDisabledReason}</p>}
+      <div className="neo-border overflow-hidden bg-white">
+        <div className="hidden grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] gap-3 border-b-4 border-black bg-gray-50 p-3 text-xs font-black uppercase text-gray-500 lg:grid">
+          <span>Status</span>
+          <span>Player</span>
+          <span>Position</span>
+          <span>Tier</span>
+          <span>Durability</span>
+          <span className="text-right">Points</span>
+        </div>
         {["QB", "OFF", "DEF", "K"].map((position) => (
-          <div key={position} className="neo-border bg-gray-50 p-3">
-            <div className="mb-2 flex items-center justify-between border-b-4 border-black pb-1">
-              <h3 className="text-sm font-black uppercase text-gray-700">{position}</h3>
-              <span className="text-[11px] font-black uppercase text-gray-500">{rosterByPosition[position].length} rostered</span>
+          <div key={position}>
+            <div className="flex items-center justify-between border-b-2 border-black bg-black px-3 py-2 text-white">
+              <h3 className="text-sm font-black uppercase text-white">{position}</h3>
+              <span className="text-[11px] font-black uppercase">{selectedCounts[position]} played | {rosterByPosition[position].length} rostered</span>
             </div>
-            <div className="space-y-2">
-              {rosterByPosition[position].map((slot) => {
-                const player = rosterSlotPlayer(slot, playerById);
-                const selected = selectedIds.has(slot.player_id);
-                return (
-                  <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`neo-border flex w-full items-center justify-between gap-3 p-3 text-left ${selected ? "bg-[#D7F8E8]" : "bg-white"}`}>
-                    <span className="flex min-w-0 items-center gap-3">
-                      {selected ? <CheckSquare className="h-5 w-5 shrink-0 text-green-700" /> : <Square className="h-5 w-5 shrink-0 text-gray-500" />}
-                      <span className="min-w-0">
-                        <span className="block truncate font-black">{playerDisplayName(player, "Roster Player")}</span>
-                        <span className="block text-xs font-bold text-gray-500">{playerTeamText(player)} | {player?.position || slot.slot_type}</span>
-                      </span>
-                    </span>
-                    <span className="font-black uppercase">{slot.slot_type}</span>
-                  </button>
-                );
-              })}
-              {!rosterByPosition[position].length && <p className="py-2 text-xs font-bold uppercase text-gray-400">No {position} players rostered.</p>}
-            </div>
+            {rosterByPosition[position].map((slot) => {
+              const player = rosterSlotPlayer(slot, playerById);
+              const tier = tierByPlayer.get(slot.player_id);
+              const selected = selectedIds.has(slot.player_id);
+              return (
+                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : "bg-white hover:bg-gray-50"}`}>
+                  <span className={`neo-border inline-flex w-fit items-center gap-2 px-2 py-1 text-[11px] font-black uppercase ${selected ? "bg-[#F7B801] text-black" : "bg-gray-200 text-black"}`}>
+                    {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                    {selected ? "Played" : "Benched"}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate font-black">{playerDisplayName(player, "Roster Player")}</span>
+                    <span className="block text-xs font-bold text-gray-500">{playerTeamText(player)}</span>
+                  </span>
+                  <span className="text-xs font-black uppercase text-gray-600">{tier?.position || player?.position || slot.slot_type}</span>
+                  <span><TierBadge tier={tier?.tier_value} /></span>
+                  <span><DurabilityBadge durability={durabilityByPlayer.get(slot.player_id)} /></span>
+                  <span className="font-black lg:text-right">{formatNumber(scoredPointsByPlayer.get(slot.player_id), 2)}</span>
+                </button>
+              );
+            })}
+            {!rosterByPosition[position].length && (
+              <div className="border-b-2 border-black/10 p-3 text-xs font-bold uppercase text-gray-400">No {position} players rostered.</div>
+            )}
           </div>
         ))}
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="neo-border bg-white p-3">
+          <p className="text-xs font-black uppercase text-gray-500">Played</p>
+          <p className="text-2xl font-black text-black">{selectedIds.size}</p>
+        </div>
+        <div className="neo-border bg-white p-3">
+          <p className="text-xs font-black uppercase text-gray-500">Benched</p>
+          <p className="text-2xl font-black text-black">{Math.max(0, roster.length - selectedIds.size)}</p>
+        </div>
       </div>
       {!roster.length && <EmptyState title="No roster yet" detail="Draft or roster assignment must happen before lineup lock." />}
       <p className="mt-4 text-xs font-bold uppercase text-gray-500">{lineup?.finalized_at ? `Last finalized ${new Date(lineup.finalized_at).toLocaleString()}` : "Not finalized for this week."}</p>
@@ -1003,6 +1185,145 @@ function ManagerResultsPanel({ league, weekResults, matchups, members, manager }
   );
 }
 
+function ManagerRosterPanel({ league, manager, weekResults }) {
+  const queryClient = useQueryClient();
+  const { data: roster = [] } = useQuery({
+    queryKey: ["manager-roster", manager.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("roster_slots")
+        .select("*, players(id,full_name,player_display_name,position,team)")
+        .eq("league_member_id", manager.id);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(manager.id),
+  });
+  const rosterPlayerIdsKey = roster.map((slot) => slot.player_id).filter(Boolean).join(":");
+  const { data: tierRows = [] } = useQuery({
+    queryKey: ["manager-roster-tiers", league.id, rosterPlayerIdsKey],
+    queryFn: async () => {
+      const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
+      if (!playerIds.length) return [];
+      const { data, error } = await supabase
+        .from("league_player_scores")
+        .select("player_id,tier_value,position,total_points,expected_avg_points,position_rank")
+        .eq("league_id", league.id)
+        .in("player_id", playerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(league.id && roster.length),
+  });
+  const { data: durabilityRows = [] } = useQuery({
+    queryKey: ["manager-roster-durability", league.id, rosterPlayerIdsKey],
+    queryFn: async () => {
+      const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
+      if (!playerIds.length) return [];
+      const { data, error } = await supabase
+        .from("league_player_durability")
+        .select("player_id,durability")
+        .eq("league_id", league.id)
+        .in("player_id", playerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(league.id && roster.length),
+  });
+  const tierByPlayer = useMemo(() => new Map(tierRows.map((row) => [row.player_id, row])), [tierRows]);
+  const durabilityByPlayer = useMemo(() => new Map(durabilityRows.map((row) => [row.player_id, row.durability])), [durabilityRows]);
+  const scoredPointsByPlayer = useMemo(() => {
+    const totals = new Map();
+    weekResults
+      .filter((result) => result.league_member_id === manager.id)
+      .forEach((result) => {
+        (result.scoring_details || result.lineup_slots || result.slots || []).forEach((slot) => {
+          const playerId = slot.player_id;
+          if (!playerId) return;
+          totals.set(playerId, Number(totals.get(playerId) || 0) + Number(slot.scored_points || 0));
+        });
+      });
+    return totals;
+  }, [manager.id, weekResults]);
+  const rosterByPosition = useMemo(() => {
+    const groups = { QB: [], OFF: [], DEF: [], K: [] };
+    roster.forEach((slot) => {
+      const player = rosterSlotPlayer(slot, new Map());
+      const tier = tierByPlayer.get(slot.player_id);
+      const bucket = draftBucket(tier?.position || player?.position || slot.slot_type);
+      groups[bucket].push(slot);
+    });
+    return groups;
+  }, [roster, tierByPlayer]);
+  const dropMutation = useMutation({
+    mutationFn: async (slot) => {
+      const { error } = await supabase
+        .from("roster_slots")
+        .delete()
+        .eq("id", slot.id)
+        .eq("league_member_id", manager.id);
+      if (error) throw error;
+      return slot;
+    },
+    onSuccess: (slot) => {
+      const player = rosterSlotPlayer(slot, new Map());
+      toast.success(`${playerDisplayName(player, "Player")} dropped.`);
+      queryClient.invalidateQueries({ queryKey: ["manager-roster", manager.id] });
+      queryClient.invalidateQueries({ queryKey: ["free-agent-draft-tiers", league.id, manager.id] });
+    },
+    onError: (error) => toast.error(error.message || "Could not drop player."),
+  });
+
+  return (
+    <Panel title="Manage Roster" icon={Users}>
+      <div className="neo-border mb-4 grid gap-3 bg-[#EFFBFF] p-3 text-xs font-black uppercase text-black sm:grid-cols-3">
+        <span className="neo-border bg-white px-2 py-1">Roster {roster.length}/{rosterCapacity(league)}</span>
+        <span className="neo-border bg-white px-2 py-1">Used Points {formatNumber([...scoredPointsByPlayer.values()].reduce((sum, value) => sum + Number(value || 0), 0), 2)}</span>
+        <span className="neo-border bg-white px-2 py-1">Open Slots {Math.max(0, rosterCapacity(league) - roster.length)}</span>
+      </div>
+      <div className="neo-border overflow-hidden bg-white">
+        <div className="hidden grid-cols-[minmax(220px,1fr)_100px_100px_120px_110px_110px] gap-3 border-b-4 border-black bg-gray-50 p-3 text-xs font-black uppercase text-gray-500 lg:grid">
+          <span>Player</span>
+          <span>Position</span>
+          <span>Tier</span>
+          <span>Durability</span>
+          <span className="text-right">Points</span>
+          <span className="text-right">Action</span>
+        </div>
+        {FREE_AGENT_POSITIONS.map((position) => (
+          <div key={position}>
+            <div className="flex items-center justify-between border-b-2 border-black bg-black px-3 py-2 text-white">
+              <h3 className="text-sm font-black uppercase">{position}</h3>
+              <span className="text-[11px] font-black uppercase">{rosterByPosition[position].length} players</span>
+            </div>
+            {rosterByPosition[position].map((slot) => {
+              const player = rosterSlotPlayer(slot, new Map());
+              const tier = tierByPlayer.get(slot.player_id);
+              return (
+                <div key={slot.id} className="grid gap-3 border-b-2 border-black/10 p-3 lg:grid-cols-[minmax(220px,1fr)_100px_100px_120px_110px_110px] lg:items-center">
+                  <div className="min-w-0">
+                    <p className="truncate font-black">{playerDisplayName(player, "Roster Player")}</p>
+                    <p className="text-xs font-bold text-gray-500">{playerTeamText(player)}</p>
+                  </div>
+                  <span className="text-xs font-black uppercase text-gray-600">{tier?.position || player?.position || slot.slot_type}</span>
+                  <span><TierBadge tier={tier?.tier_value} /></span>
+                  <span><DurabilityBadge durability={durabilityByPlayer.get(slot.player_id)} /></span>
+                  <span className="font-black lg:text-right">{formatNumber(scoredPointsByPlayer.get(slot.player_id), 2)}</span>
+                  <span className="lg:text-right">
+                    <Button onClick={() => dropMutation.mutate(slot)} disabled={dropMutation.isPending} className="neo-btn h-8 bg-red-500 px-3 text-xs text-white">Drop</Button>
+                  </span>
+                </div>
+              );
+            })}
+            {!rosterByPosition[position].length && <div className="border-b-2 border-black/10 p-3 text-xs font-bold uppercase text-gray-400">No {position} players rostered.</div>}
+          </div>
+        ))}
+      </div>
+      {!roster.length && <EmptyState title="No roster yet" detail="Use the Free Agent Board to add players after roster setup opens." />}
+    </Panel>
+  );
+}
+
 function ManagerMessagingPanel({ messages, members }) {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   return (
@@ -1025,25 +1346,50 @@ function ManagerMessagingPanel({ messages, members }) {
 }
 
 function ManagerPortalPage({ league, season, manager, members, matchups, weekResults, messages }) {
+  const [activeTab, setActiveTab] = useState("lineup");
   const currentWeek = season?.current_week || 1;
   const nextMatchup = matchups
     .filter((item) => item.home_member_id === manager.id || item.away_member_id === manager.id)
     .sort((a, b) => Number(a.week_number || 0) - Number(b.week_number || 0))
     .find((item) => Number(item.week_number) >= Number(currentWeek) && !resultForMember(weekResults, manager.id, item.week_number));
   const lineupWeek = Number(nextMatchup?.week_number || currentWeek);
+  const unreadMessages = messages.filter((message) => !message.read_at).length;
   return (
     <>
       <CompactHeader league={league} season={season} currentMember={manager} memberCount={members.length} context="Manager Portal" />
-      <div className="grid gap-5 xl:grid-cols-3">
-        <div className="space-y-5 xl:col-span-2">
-          <ManagerMatchupPanel league={league} currentWeek={currentWeek} matchups={matchups} weekResults={weekResults} members={members} manager={manager} />
-          <ManagerLineupPanel league={league} lineupWeek={lineupWeek} manager={manager} />
-          <ManagerResultsPanel league={league} weekResults={weekResults} matchups={matchups} members={members} manager={manager} />
+      <div className="space-y-5">
+        <ManagerMatchupPanel league={league} currentWeek={currentWeek} matchups={matchups} weekResults={weekResults} members={members} manager={manager} />
+        <div className="neo-border bg-white p-2">
+          <div className="flex flex-wrap gap-2">
+            {MANAGER_PORTAL_TABS.map((tab) => {
+              const Icon = tab.icon;
+              const active = activeTab === tab.id;
+              const badge = tab.id === "messages" ? unreadMessages : 0;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`neo-border relative inline-flex items-center gap-2 px-3 py-2 text-xs font-black uppercase ${active ? "bg-[#F7B801] text-black" : "bg-white text-black hover:bg-[#EFFBFF]"}`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
+                  {badge > 0 && <span className="neo-border ml-1 bg-red-500 px-2 py-0.5 text-[10px] text-white">{badge}</span>}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <div className="space-y-5">
-          <ManagerMessagingPanel messages={messages} members={members} />
-          <FreeAgentBoard league={league} currentWeek={lineupWeek} currentMember={manager} />
-        </div>
+        {activeTab === "lineup" && <ManagerLineupPanel league={league} lineupWeek={lineupWeek} manager={manager} scheduleReady={Boolean(nextMatchup)} weekResults={weekResults} />}
+        {activeTab === "matches" && <ManagerResultsPanel league={league} weekResults={weekResults} matchups={matchups} members={members} manager={manager} />}
+        {activeTab === "messages" && <ManagerMessagingPanel messages={messages} members={members} />}
+        {activeTab === "free-agents" && <FreeAgentBoard league={league} currentMember={manager} />}
+        {activeTab === "roster" && (
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.8fr)]">
+            <ManagerRosterPanel league={league} manager={manager} weekResults={weekResults} />
+            <FreeAgentBoard league={league} currentMember={manager} compact />
+          </div>
+        )}
       </div>
     </>
   );
