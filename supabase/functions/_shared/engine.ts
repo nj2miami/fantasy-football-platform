@@ -933,6 +933,9 @@ async function buildFullSeasonMatchupRows(supabase: ReturnType<typeof createClie
 
   const regularWeeks = regularSeasonWeeksForLeague(league);
   const baseRounds = roundRobinRounds(memberIds);
+  const totalGamesNeeded = regularWeeks * (memberIds.length / 2);
+  const uniquePairCount = (memberIds.length * (memberIds.length - 1)) / 2;
+  const maxPairCount = Math.max(2, Math.ceil(totalGamesNeeded / uniquePairCount));
   const pairCounts = new Map<string, number>();
   const homeCounts = new Map<string, number>();
   const rows = [];
@@ -940,13 +943,13 @@ async function buildFullSeasonMatchupRows(supabase: ReturnType<typeof createClie
   for (let weekNumber = 1; weekNumber <= regularWeeks; weekNumber += 1) {
     const rawPairs = weekNumber <= baseRounds.length
       ? baseRounds[weekNumber - 1]
-      : findRepeatRound(memberIds, pairCounts, 2);
+      : findRepeatRound(memberIds, pairCounts, maxPairCount);
     if (!rawPairs?.length) throw new Error(`Unable to create a legal matchup set for week ${weekNumber}.`);
     const pairs = balanceHomeAway(rawPairs, homeCounts, weekNumber);
     for (const pair of pairs) {
       const key = matchupKey(pair.home_member_id, pair.away_member_id);
       pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
-      if ((pairCounts.get(key) || 0) > 2) throw new Error("Generated schedule would repeat a matchup more than twice.");
+      if ((pairCounts.get(key) || 0) > maxPairCount) throw new Error("Generated schedule exceeded the legal repeat limit.");
       rows.push({
         league_id: league.id,
         week_number: weekNumber,
