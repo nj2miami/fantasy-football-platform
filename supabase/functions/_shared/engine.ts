@@ -3988,6 +3988,16 @@ async function generateAiLineups(supabase: ReturnType<typeof createClient>, user
     .eq("is_active", true)
     .eq("is_ai", true);
   if (memberError) throw memberError;
+  const aiMemberIds = (members || []).map((member: Json) => member.id).filter(Boolean);
+  if (payload.force === true && aiMemberIds.length) {
+    const { error: deleteError } = await supabase
+      .from("lineups")
+      .delete()
+      .eq("league_id", league.id)
+      .eq("week_number", weekNumber)
+      .in("league_member_id", aiMemberIds);
+    if (deleteError) throw deleteError;
+  }
   const generated = [];
   const skipped = [];
   for (const member of members || []) {

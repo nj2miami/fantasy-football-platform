@@ -89,7 +89,7 @@ export default function LeagueScheduleSettings({ league }) {
         reveal_week_results: "Results revealed.",
         recalculate_standings: "Standings recalculated.",
         generate_schedule: "Schedule generated.",
-        generate_ai_lineups: "AI lineups generated.",
+        generate_ai_lineups: "AI lineups rebuilt.",
       };
       toast.success(labels[variables.action] || "Action complete.");
       invalidate();
@@ -263,9 +263,9 @@ export default function LeagueScheduleSettings({ league }) {
           <FastForward className="w-5 h-5 mr-2" />
           Advance Week
         </Button>
-        <Button onClick={() => run("generate_ai_lineups", { week_number: currentWeekNumber })} disabled={actionMutation.isPending || !leagueStarted} className="neo-btn bg-[#D7F8E8] text-black py-4">
+        <Button onClick={() => run("generate_ai_lineups", { week_number: currentWeekNumber, force: true })} disabled={actionMutation.isPending || !leagueStarted} className="neo-btn bg-[#D7F8E8] text-black py-4">
           <Bot className="w-5 h-5 mr-2" />
-          Generate AI Lineups
+          Rebuild AI Lineups
         </Button>
         <Button onClick={() => run("resolve_week", { week_number: currentWeekNumber })} disabled={actionMutation.isPending || !leagueStarted || !lineupReady} title={lineupReady ? "Resolve week" : "All active teams must finalize lineups first."} className="neo-btn bg-white text-black py-4">
           <ShieldCheck className="w-5 h-5 mr-2" />
