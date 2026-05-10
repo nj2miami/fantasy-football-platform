@@ -1140,7 +1140,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
       if (!playerIds.length) return [];
       const { data, error } = await supabase
         .from("league_player_durability")
-        .select("player_id,durability")
+        .select("player_id,durability,initial_durability")
         .eq("league_id", league.id)
         .in("player_id", playerIds);
       if (error) throw error;
@@ -1148,9 +1148,37 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
     },
     enabled: Boolean(league.id && roster.length),
   });
+  const { data: usageRows = [] } = useQuery({
+    queryKey: ["manager-roster-usage", league.id, manager.id, rosterPlayerIdsKey],
+    queryFn: async () => {
+      const playerIds = [...new Set(roster.map((slot) => slot.player_id).filter(Boolean))];
+      if (!playerIds.length) return [];
+      const { data, error } = await supabase
+        .from("manager_player_usage")
+        .select("player_id,usage_count")
+        .eq("league_id", league.id)
+        .eq("league_member_id", manager.id)
+        .in("player_id", playerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(league.id && manager.id && roster.length),
+  });
   const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
   const tierByPlayer = useMemo(() => new Map(tierRows.map((row) => [row.player_id, row])), [tierRows]);
-  const durabilityByPlayer = useMemo(() => new Map(durabilityRows.map((row) => [row.player_id, row.durability])), [durabilityRows]);
+  const durabilityByPlayer = useMemo(() => new Map(durabilityRows.map((row) => [row.player_id, row])), [durabilityRows]);
+  const usageByPlayer = useMemo(() => new Map(usageRows.map((row) => [row.player_id, row])), [usageRows]);
+  const treatmentEligibility = useMemo(() => {
+    const eligibility = new Map();
+    roster.forEach((slot) => {
+      const durability = durabilityByPlayer.get(slot.player_id);
+      const currentDurability = Number(durability?.durability ?? 0);
+      const initialDurability = Number(durability?.initial_durability ?? currentDurability);
+      const usageCount = Number(usageByPlayer.get(slot.player_id)?.usage_count || 0);
+      eligibility.set(slot.player_id, currentDurability <= 2 && currentDurability < initialDurability && usageCount >= 1);
+    });
+    return eligibility;
+  }, [durabilityByPlayer, roster, usageByPlayer]);
   const scoredPointsByPlayer = useMemo(() => {
     const totals = new Map();
     weekResults
@@ -1194,10 +1222,11 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
     return new Set(Object.entries(statusByPlayer).filter(([, status]) => status === "treatment").map(([playerId]) => playerId));
   }, [statusByPlayer]);
   const treatmentCount = treatmentIds.size;
-  const treatmentIsValid = treatmentCount <= 1;
-  const nextStatus = (currentStatus) => {
+  const treatmentSelectionIsEligible = [...treatmentIds].every((playerId) => treatmentEligibility.get(playerId));
+  const treatmentIsValid = treatmentCount <= 1 && treatmentSelectionIsEligible;
+  const nextStatus = (currentStatus, playerId) => {
     if (currentStatus === "bench") return "active";
-    if (currentStatus === "active") return "treatment";
+    if (currentStatus === "active" && treatmentEligibility.get(playerId)) return "treatment";
     return "bench";
   };
   const statusLabel = (status) => {
@@ -1233,7 +1262,11 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
   const finalizeDisabledReason = !scheduleReady
     ? "Schedule must be created first."
     : !lineupIsValid
-      ? treatmentIsValid ? lineupRequirementText : "Only one player can be in treatment each week."
+      ? treatmentCount > 1
+        ? "Only one player can be in treatment each week."
+        : !treatmentSelectionIsEligible
+          ? "Treatment requires prior starter use and lost durability of +2 or lower."
+          : lineupRequirementText
       : "";
 
   const finalizeLineupMutation = useMutation({
@@ -1259,9 +1292,14 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
   });
 
   const togglePlayer = (playerId) => {
+    if ((statusByPlayer[playerId] || "bench") === "active" && !treatmentEligibility.get(playerId)) {
+      toast.error("Treatment requires prior starter use and lost durability of +2 or lower.");
+      setStatusByPlayer((current) => ({ ...current, [playerId]: "bench" }));
+      return;
+    }
     setStatusByPlayer((current) => {
       const currentStatus = current[playerId] || "bench";
-      return { ...current, [playerId]: nextStatus(currentStatus) };
+      return { ...current, [playerId]: nextStatus(currentStatus, playerId) };
     });
   };
 
@@ -1315,8 +1353,10 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
               const selected = selectedIds.has(slot.player_id);
               const treating = treatmentIds.has(slot.player_id);
               const status = statusByPlayer[slot.player_id] || "bench";
+              const durability = durabilityByPlayer.get(slot.player_id);
+              const treatmentEligible = treatmentEligibility.get(slot.player_id);
               return (
-                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : treating ? "bg-[#EFFBFF]" : "bg-white hover:bg-gray-50"}`}>
+                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} title={selected && !treatmentEligible ? "Next click will bench this player. Treatment requires prior starter use and lost durability of +2 or lower." : undefined} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : treating ? "bg-[#EFFBFF]" : "bg-white hover:bg-gray-50"}`}>
                   <span className={`neo-border inline-flex w-fit items-center gap-2 px-2 py-1 text-[11px] font-black uppercase ${selected ? "bg-[#F7B801] text-black" : treating ? "bg-[#00D9FF] text-black" : "bg-gray-200 text-black"}`}>
                     {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
                     {statusLabel(status)}
@@ -1327,7 +1367,10 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
                   </span>
                   <span className="text-xs font-black uppercase text-gray-600">{tier?.position || player?.position || slot.slot_type}</span>
                   <span><TierBadge tier={tier?.tier_value} /></span>
-                  <span><DurabilityBadge durability={durabilityByPlayer.get(slot.player_id)} /></span>
+                  <span className="flex flex-wrap gap-2">
+                    <DurabilityBadge durability={durability?.durability} />
+                    {treatmentEligible && <span className="neo-border bg-[#EFFBFF] px-2 py-1 text-[11px] font-black uppercase text-black">Treat OK</span>}
+                  </span>
                   <span className="font-black lg:text-right">{formatNumber(scoredPointsByPlayer.get(slot.player_id), 2)}</span>
                 </button>
               );

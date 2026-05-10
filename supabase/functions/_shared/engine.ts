@@ -3689,6 +3689,31 @@ async function validateLineupSlots(
   const treatmentSlots = slots.filter(isTreatmentLineupSlot);
   if (treatmentSlots.length > 1) throw new Error("Only one player may be treated per week.");
   if (treatmentSlots.length && !durabilityEnabled(league)) throw new Error("Treatment is only available when durability is enabled.");
+  const treatmentPlayerId = treatmentSlots[0]?.player_id ? String(treatmentSlots[0].player_id) : null;
+  if (treatmentPlayerId) {
+    const { data: durabilityRow, error: durabilityError } = await supabase
+      .from("league_player_durability")
+      .select("durability,initial_durability")
+      .eq("league_id", league.id)
+      .eq("player_id", treatmentPlayerId)
+      .maybeSingle();
+    if (durabilityError) throw durabilityError;
+    if (!durabilityRow) throw new Error("Treatment requires a durability record for that player.");
+    const currentDurability = Number(durabilityRow.durability ?? 0);
+    const initialDurability = Number(durabilityRow.initial_durability ?? currentDurability);
+    if (currentDurability > 2) throw new Error("Players above +2 durability cannot be treated.");
+    if (currentDurability >= initialDurability) throw new Error("Players must have lost durability before treatment.");
+
+    const { data: usageRow, error: usageError } = await supabase
+      .from("manager_player_usage")
+      .select("usage_count")
+      .eq("league_id", league.id)
+      .eq("league_member_id", memberId)
+      .eq("player_id", treatmentPlayerId)
+      .maybeSingle();
+    if (usageError) throw usageError;
+    if (Number(usageRow?.usage_count || 0) < 1) throw new Error("Players must have started at least once before treatment.");
+  }
 
   for (const slot of slots) {
     if (isTreatmentLineupSlot(slot) && isStartedLineupSlot(slot)) throw new Error("A treated player cannot also be a starter.");
@@ -3708,7 +3733,7 @@ async function validateLineupSlots(
     Number(counts.DEF || 0) >= 1 &&
     Number(counts.DEF || 0) <= 2;
   if (!valid) throw new Error("Lineup must include 1 QB, 1 K, and either 2 OFF/1 DEF or 1 OFF/2 DEF.");
-  return { counts, treatmentPlayerId: treatmentSlots[0]?.player_id ? String(treatmentSlots[0].player_id) : null };
+  return { counts, treatmentPlayerId };
 }
 
 async function spendTreatmentPointsIfNeeded(
@@ -3862,7 +3887,7 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
     supabase.from("league_player_draft_tiers").select("player_id,tier_value,position,position_rank").eq("league_id", league.id).in("player_id", playerIds),
     supabase.from("league_player_scores").select("player_id,expected_avg_points,total_points,tier_value,position,position_rank").eq("league_id", league.id).in("player_id", playerIds),
     durabilityEnabled(league)
-      ? supabase.from("league_player_durability").select("player_id,durability").eq("league_id", league.id).in("player_id", playerIds)
+      ? supabase.from("league_player_durability").select("player_id,durability,initial_durability").eq("league_id", league.id).in("player_id", playerIds)
       : Promise.resolve({ data: [], error: null }),
     supabase.from("manager_player_usage").select("player_id,usage_count,released_at").eq("league_id", league.id).eq("league_member_id", memberId).in("player_id", playerIds),
   ]);
@@ -3873,7 +3898,7 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
 
   const tierByPlayer = new Map((tiers || []).map((row: Json) => [String(row.player_id), row]));
   const scoreByPlayer = new Map((scores || []).map((row: Json) => [String(row.player_id), row]));
-  const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
+  const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), row]));
   const usageByPlayer = new Map((usageRows || []).map((row: Json) => [String(row.player_id), row]));
   const threshold = limitedUseThreshold(league);
   const byBucket: Record<string, Json[]> = { QB: [], OFF: [], DEF: [], K: [] };
@@ -3884,7 +3909,9 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
     const tier = tierByPlayer.get(playerId) || {};
     const score = scoreByPlayer.get(playerId) || {};
     const bucket = lineupPositionBucket(tier.position || score.position || player?.position || slot.slot_type);
-    const durability = durabilityByPlayer.has(playerId) ? durabilityByPlayer.get(playerId) : 0;
+    const durabilityRow = durabilityByPlayer.get(playerId) || {};
+    const durability = durabilityRow.durability === undefined ? 0 : Number(durabilityRow.durability);
+    const initialDurability = durabilityRow.initial_durability === undefined ? durability : Number(durabilityRow.initial_durability);
     const usage = usageByPlayer.get(playerId) || {};
     const usageCount = Number(usage.usage_count || 0);
     const wouldRelease = threshold > 0 && !usage.released_at && usageCount + 1 >= threshold;
@@ -3897,6 +3924,8 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
       expected_avg_points: Number(score.expected_avg_points || 0),
       adjusted_points: Number(score.expected_avg_points || 0) * durabilityMultiplierFor(durability),
       durability,
+      initial_durability: initialDurability,
+      usage_count: usageCount,
       would_release: wouldRelease,
       name: String(player?.player_display_name || player?.full_name || playerId),
     });
@@ -3919,7 +3948,9 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
   if (treatmentAffordable && durabilityEnabled(league)) {
     const benchCandidates = sortLineupCandidates(Object.values(byBucket).flat())
       .filter((candidate) => !starterIds.has(String(candidate.player_id)))
-      .filter((candidate) => Number(candidate.durability ?? 0) < 3)
+      .filter((candidate) => Number(candidate.durability ?? 0) <= 2)
+      .filter((candidate) => Number(candidate.durability ?? 0) < Number(candidate.initial_durability ?? candidate.durability ?? 0))
+      .filter((candidate) => Number(candidate.usage_count || 0) >= 1)
       .filter((candidate) => league.manager_points_enabled === true
         ? Number(candidate.durability ?? 0) <= 0 && (Number(candidate.tier_value || 1) >= 3 || byBucket[String(candidate.bucket)]?.length <= 1)
         : true);
