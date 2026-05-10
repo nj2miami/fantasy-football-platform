@@ -3670,6 +3670,7 @@ async function validateLineupSlots(
   supabase: ReturnType<typeof createClient>,
   league: Json,
   memberId: string,
+  weekNumber: number,
   slots: Json[] = [],
 ) {
   const playerIds = slots.map((slot) => String(slot.player_id || "")).filter(Boolean);
@@ -3706,13 +3707,15 @@ async function validateLineupSlots(
 
     const { data: usageRow, error: usageError } = await supabase
       .from("manager_player_usage")
-      .select("usage_count")
+      .select("usage_count,last_used_week")
       .eq("league_id", league.id)
       .eq("league_member_id", memberId)
       .eq("player_id", treatmentPlayerId)
       .maybeSingle();
     if (usageError) throw usageError;
-    if (Number(usageRow?.usage_count || 0) < 1) throw new Error("Players must have started at least once before treatment.");
+    const lastUsedWeek = Number(usageRow?.last_used_week || 0);
+    const hasPriorStart = Number(usageRow?.usage_count || 0) >= 1 && lastUsedWeek > 0 && lastUsedWeek < Number(weekNumber);
+    if (!hasPriorStart) throw new Error("Players must have started in a previous week before treatment.");
   }
 
   for (const slot of slots) {
@@ -3812,7 +3815,7 @@ async function assertAllLineupsReady(
       missing.push(String(member.team_name || memberId));
       continue;
     }
-    await validateLineupSlots(supabase, league, memberId, Array.isArray(lineup.slots) ? lineup.slots as Json[] : []);
+    await validateLineupSlots(supabase, league, memberId, weekNumber, Array.isArray(lineup.slots) ? lineup.slots as Json[] : []);
   }
   if (missing.length) throw new Error(`Lineups must be finalized before resolving: ${missing.join(", ")}.`);
 }
@@ -3872,7 +3875,7 @@ async function managerPointTreatmentAffordable(supabase: ReturnType<typeof creat
   return Number(account?.current_points || 0) >= cost;
 }
 
-async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, league: Json, member: Json) {
+async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, league: Json, member: Json, weekNumber: number) {
   await ensureLeaguePlayerScores(supabase, league);
   const memberId = String(member.id || "");
   const { data: roster, error: rosterError } = await supabase
@@ -3889,7 +3892,7 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
     durabilityEnabled(league)
       ? supabase.from("league_player_durability").select("player_id,durability,initial_durability").eq("league_id", league.id).in("player_id", playerIds)
       : Promise.resolve({ data: [], error: null }),
-    supabase.from("manager_player_usage").select("player_id,usage_count,released_at").eq("league_id", league.id).eq("league_member_id", memberId).in("player_id", playerIds),
+    supabase.from("manager_player_usage").select("player_id,usage_count,last_used_week,released_at").eq("league_id", league.id).eq("league_member_id", memberId).in("player_id", playerIds),
   ]);
   if (tierError) throw tierError;
   if (scoreError) throw scoreError;
@@ -3914,6 +3917,8 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
     const initialDurability = durabilityRow.initial_durability === undefined ? durability : Number(durabilityRow.initial_durability);
     const usage = usageByPlayer.get(playerId) || {};
     const usageCount = Number(usage.usage_count || 0);
+    const lastUsedWeek = Number(usage.last_used_week || 0);
+    const previousStartCount = lastUsedWeek > 0 && lastUsedWeek < Number(weekNumber) ? usageCount : 0;
     const wouldRelease = threshold > 0 && !usage.released_at && usageCount + 1 >= threshold;
     byBucket[bucket].push({
       player_id: playerId,
@@ -3926,6 +3931,7 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
       durability,
       initial_durability: initialDurability,
       usage_count: usageCount,
+      previous_start_count: previousStartCount,
       would_release: wouldRelease,
       name: String(player?.player_display_name || player?.full_name || playerId),
     });
@@ -3950,7 +3956,7 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
       .filter((candidate) => !starterIds.has(String(candidate.player_id)))
       .filter((candidate) => Number(candidate.durability ?? 0) <= 2)
       .filter((candidate) => Number(candidate.durability ?? 0) < Number(candidate.initial_durability ?? candidate.durability ?? 0))
-      .filter((candidate) => Number(candidate.usage_count || 0) >= 1)
+      .filter((candidate) => Number(candidate.previous_start_count || 0) >= 1)
       .filter((candidate) => league.manager_points_enabled === true
         ? Number(candidate.durability ?? 0) <= 0 && (Number(candidate.tier_value || 1) >= 3 || byBucket[String(candidate.bucket)]?.length <= 1)
         : true);
@@ -4013,7 +4019,7 @@ async function generateAiLineups(supabase: ReturnType<typeof createClient>, user
       skipped.push(member.id);
       continue;
     }
-    const slots = await buildAiLineupSlots(supabase, league, member);
+    const slots = await buildAiLineupSlots(supabase, league, member, weekNumber);
     const result = await finalizeLineup(supabase, { league_id: league.id, league_member_id: member.id, week_number: weekNumber, slots });
     generated.push(result.lineup);
   }
@@ -4027,7 +4033,7 @@ async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload
   const slots = Array.isArray(payload.slots) ? payload.slots as Json[] : [];
   const memberId = String(payload.league_member_id || "");
   const weekNumber = Number(payload.week_number || 0);
-  const validation = await validateLineupSlots(supabase, league, memberId, slots);
+  const validation = await validateLineupSlots(supabase, league, memberId, weekNumber, slots);
   const { data: lineup, error } = await supabase
     .from("lineups")
     .upsert(

@@ -1155,7 +1155,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
       if (!playerIds.length) return [];
       const { data, error } = await supabase
         .from("manager_player_usage")
-        .select("player_id,usage_count")
+        .select("player_id,usage_count,last_used_week")
         .eq("league_id", league.id)
         .eq("league_member_id", manager.id)
         .in("player_id", playerIds);
@@ -1175,10 +1175,11 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
       const currentDurability = Number(durability?.durability ?? 0);
       const initialDurability = Number(durability?.initial_durability ?? currentDurability);
       const usageCount = Number(usageByPlayer.get(slot.player_id)?.usage_count || 0);
-      eligibility.set(slot.player_id, currentDurability <= 2 && currentDurability < initialDurability && usageCount >= 1);
+      const lastUsedWeek = Number(usageByPlayer.get(slot.player_id)?.last_used_week || 0);
+      eligibility.set(slot.player_id, currentDurability <= 2 && currentDurability < initialDurability && usageCount >= 1 && lastUsedWeek > 0 && lastUsedWeek < Number(lineupWeek));
     });
     return eligibility;
-  }, [durabilityByPlayer, roster, usageByPlayer]);
+  }, [durabilityByPlayer, lineupWeek, roster, usageByPlayer]);
   const scoredPointsByPlayer = useMemo(() => {
     const totals = new Map();
     weekResults

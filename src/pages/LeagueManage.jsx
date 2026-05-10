@@ -6,7 +6,7 @@ import { useLocation, useNavigate, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Trophy, Settings, Users, PenSquare, BarChart, Eye, Grid, Bot, ShieldAlert, Trash2, Megaphone, CalendarDays } from "lucide-react";
+import { ArrowLeft, Trophy, Settings, Users, PenSquare, BarChart, Eye, Grid, Bot, ShieldAlert, Trash2, Megaphone, CalendarDays, LayoutDashboard } from "lucide-react";
 import LeagueSettings from "../components/league/LeagueSettings";
 import LeagueScoring from "../components/league/LeagueScoring";
 import LeagueMembers from "../components/league/LeagueMembers";
@@ -15,6 +15,7 @@ import LeagueScheduleSettings from "../components/league/LeagueScheduleSettings"
 import LeagueRosterSettings from "../components/league/LeagueRosterSettings";
 import LeagueAITeams from "../components/league/LeagueAITeams";
 import LeagueCommunications from "../components/league/LeagueCommunications";
+import CommissionerHub from "../components/league/CommissionerHub";
 
 export default function LeagueManage() {
   const location = useLocation();
@@ -26,8 +27,12 @@ export default function LeagueManage() {
   const requestedTab = searchParams.get("tab");
 
   const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState(requestedTab || "settings");
+  const [activeTab, setActiveTab] = useState(requestedTab || "hub");
   const [isLoading, setIsLoading] = useState(true); // Added isLoading state
+
+  useEffect(() => {
+    if (requestedTab) setActiveTab(requestedTab);
+  }, [requestedTab]);
 
   useEffect(() => {
     const loadUser = async () => {
@@ -154,6 +159,7 @@ export default function LeagueManage() {
   };
 
   const tabs = [
+    { id: 'hub', label: 'Hub', icon: LayoutDashboard },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'scoring', label: 'Scoring', icon: BarChart },
     { id: 'roster', label: 'Roster', icon: Grid },
@@ -232,6 +238,7 @@ export default function LeagueManage() {
       </div>
 
       <div className="neo-card bg-white p-8">
+        {activeTab === 'hub' && <CommissionerHub league={league} />}
         {activeTab === 'settings' && <LeagueSettings league={league} setupLocked={setupLocked} />}
         {activeTab === 'scoring' && <LeagueScoring league={league} setupLocked={setupLocked} />}
         {activeTab === 'roster' && <LeagueRosterSettings league={league} />}
