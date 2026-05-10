@@ -119,6 +119,13 @@ function normalizeSlots(slots) {
   return Array.isArray(slots) ? slots : [];
 }
 
+function collectSlotPlayerIds(slots, targetSet = new Set()) {
+  normalizeSlots(slots).forEach((slot) => {
+    if (slot?.player_id) targetSet.add(slot.player_id);
+  });
+  return targetSet;
+}
+
 function lineupSlotStatus(slot) {
   return String(slot?.status || slot?.lineup_status || slot?.slot_status || slot?.role || "active").toLowerCase();
 }
@@ -938,7 +945,7 @@ function WeekMatchupsPage({ league, season, currentMember, members, matchups, we
   );
 }
 
-function TeamScoringDetail({ title, result, lineup, playerById }) {
+function TeamScoringDetail({ title, result, lineup, playerById, tierByPlayer, durabilityByPlayer }) {
   const details = normalizeSlots(result?.scoring_details).length ? normalizeSlots(result.scoring_details) : normalizeSlots(lineup?.slots);
   const groups = ["Starters", "Bench", "Treatment"];
   return (
@@ -957,13 +964,19 @@ function TeamScoringDetail({ title, result, lineup, playerById }) {
               <div className="space-y-2">
                 {rows.map((slot, index) => {
                   const player = playerById.get(slot.player_id);
+                  const tier = tierByPlayer.get(slot.player_id);
+                  const durability = durabilityByPlayer.get(slot.player_id);
                   const samples = normalizeSlots(slot.source_week_values);
                   return (
                     <div key={`${slot.player_id}-${index}`} className="neo-border bg-gray-50 p-3">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                          <p className="font-black">{player?.player_display_name || player?.full_name || slot.player_id}</p>
+                          <p className="font-black">{playerDisplayName(player, slot.player_name || slot.player_display_name || slot.full_name || slot.player_id)}</p>
                           <p className="text-xs font-bold uppercase text-gray-500">{player?.position || slot.slot || "--"} | {player?.team || "FA"} | {lineupSlotStatus(slot)}</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <TierBadge tier={slot.tier_value ?? tier?.tier_value} />
+                            <DurabilityBadge durability={slot.durability ?? durability?.durability} />
+                          </div>
                         </div>
                         <p className="text-lg font-black">{formatNumber(slot.scored_points, 2)}</p>
                       </div>
@@ -987,9 +1000,11 @@ function TeamScoringDetail({ title, result, lineup, playerById }) {
   );
 }
 
-function MatchupDetailPage({ league, season, currentMember, members, matchups, weekResults, lineups, players, weekNumber, matchId }) {
+function MatchupDetailPage({ league, season, currentMember, members, matchups, weekResults, lineups, players, tiers, durabilityRows, weekNumber, matchId }) {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
+  const tierByPlayer = useMemo(() => new Map(tiers.map((row) => [row.player_id, row])), [tiers]);
+  const durabilityByPlayer = useMemo(() => new Map(durabilityRows.map((row) => [row.player_id, row])), [durabilityRows]);
   const matchup = matchups.find((item) => item.id === matchId && Number(item.week_number) === Number(weekNumber));
   if (!matchup) {
     return (
@@ -1016,8 +1031,8 @@ function MatchupDetailPage({ league, season, currentMember, members, matchups, w
         </div>
       </Panel>
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
-        <TeamScoringDetail title={memberName(home)} result={homeResult} lineup={homeLineup} playerById={playerById} />
-        <TeamScoringDetail title={memberName(away)} result={awayResult} lineup={awayLineup} playerById={playerById} />
+        <TeamScoringDetail title={memberName(home)} result={homeResult} lineup={homeLineup} playerById={playerById} tierByPlayer={tierByPlayer} durabilityByPlayer={durabilityByPlayer} />
+        <TeamScoringDetail title={memberName(away)} result={awayResult} lineup={awayLineup} playerById={playerById} tierByPlayer={tierByPlayer} durabilityByPlayer={durabilityByPlayer} />
       </div>
     </>
   );
@@ -1753,10 +1768,54 @@ export default function League() {
     enabled: Boolean(leagueId && currentMember && isWeekView),
   });
 
+  const matchupPlayerIds = useMemo(() => {
+    if (!isWeekView) return [];
+    const ids = new Set();
+    lineups
+      .filter((lineup) => Number(lineup.week_number) === Number(routeWeekNumber))
+      .forEach((lineup) => collectSlotPlayerIds(lineup.slots, ids));
+    weekResults
+      .filter((result) => Number(result.week_number) === Number(routeWeekNumber))
+      .forEach((result) => collectSlotPlayerIds(result.scoring_details || result.lineup_slots || result.slots, ids));
+    return [...ids].sort();
+  }, [isWeekView, lineups, routeWeekNumber, weekResults]);
+
   const { data: players = [] } = useQuery({
-    queryKey: ["league-detail-players", leagueId, isWeekView],
-    queryFn: () => appClient.entities.Player.list(),
-    enabled: Boolean(leagueId && currentMember && isWeekView && requestedMatchId),
+    queryKey: ["league-detail-players", leagueId, routeWeekNumber, matchupPlayerIds.join(",")],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("players").select("*").in("id", matchupPlayerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(leagueId && currentMember && isWeekView && requestedMatchId && matchupPlayerIds.length),
+  });
+
+  const { data: matchupTiers = [] } = useQuery({
+    queryKey: ["league-detail-player-tiers", leagueId, routeWeekNumber, matchupPlayerIds.join(",")],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("league_player_draft_tiers")
+        .select("player_id,tier_value,position,position_rank")
+        .eq("league_id", leagueId)
+        .in("player_id", matchupPlayerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(leagueId && currentMember && isWeekView && requestedMatchId && matchupPlayerIds.length),
+  });
+
+  const { data: matchupDurabilityRows = [] } = useQuery({
+    queryKey: ["league-detail-player-durability", leagueId, routeWeekNumber, matchupPlayerIds.join(",")],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("league_player_durability")
+        .select("player_id,durability")
+        .eq("league_id", leagueId)
+        .in("player_id", matchupPlayerIds);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: Boolean(leagueId && currentMember && isWeekView && requestedMatchId && matchupPlayerIds.length),
   });
 
   const voteMutation = useMutation({
@@ -1789,6 +1848,8 @@ export default function League() {
             weekResults={weekResults}
             lineups={lineups}
             players={players}
+            tiers={matchupTiers}
+            durabilityRows={matchupDurabilityRows}
             weekNumber={routeWeekNumber}
             matchId={requestedMatchId}
           />
