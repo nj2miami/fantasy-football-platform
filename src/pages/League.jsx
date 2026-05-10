@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Bot,
   CalendarDays,
+  CheckCircle,
   CheckSquare,
   ClipboardList,
   Edit,
@@ -20,6 +21,7 @@ import {
   Square,
   Trophy,
   Users,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
@@ -942,6 +944,16 @@ function ManagerMatchupPanel({ league, matchups, weekResults, members, manager, 
 
 const REQUIRED_LINEUP_COUNTS = { QB: 1, K: 1, FLEX_DEF_OFF: 3 };
 
+function LineupRequirementBadge({ label, value, target, valid }) {
+  const Icon = valid ? CheckCircle : XCircle;
+  return (
+    <span className={`neo-border flex items-center justify-between gap-2 px-2 py-1 ${valid ? "bg-[#D7F8E8] text-black" : "bg-red-100 text-red-800"}`}>
+      <span>{label} {target ? `${value}/${target}` : value}</span>
+      <Icon className="h-4 w-4 shrink-0" />
+    </span>
+  );
+}
+
 function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekResults }) {
   const queryClient = useQueryClient();
   const { data: lineup } = useLineup(league.id, lineupWeek, manager.id);
@@ -1044,11 +1056,16 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
     return counts;
   }, [playerById, roster, selectedIds, tierByPlayer]);
   const offDefTotal = Number(selectedCounts.OFF || 0) + Number(selectedCounts.DEF || 0);
-  const lineupIsValid = Number(selectedCounts.QB || 0) === 1 &&
-    Number(selectedCounts.K || 0) === 1 &&
-    offDefTotal === 3 &&
+  const qbIsValid = Number(selectedCounts.QB || 0) === 1;
+  const kickerIsValid = Number(selectedCounts.K || 0) === 1;
+  const flexPositionsAreValid = offDefTotal === 3 &&
     Number(selectedCounts.OFF || 0) >= 1 &&
-    Number(selectedCounts.DEF || 0) >= 1;
+    Number(selectedCounts.OFF || 0) <= 2 &&
+    Number(selectedCounts.DEF || 0) >= 1 &&
+    Number(selectedCounts.DEF || 0) <= 2;
+  const lineupIsValid = qbIsValid &&
+    kickerIsValid &&
+    flexPositionsAreValid;
   const lineupRequirementText = "Need 1 QB, 1 K, and either 2 OFF/1 DEF or 1 OFF/2 DEF";
   const finalizeDisabledReason = !scheduleReady
     ? "Schedule must be created first."
@@ -1099,11 +1116,11 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
       )}
     >
       <div className="neo-border mb-4 grid gap-2 bg-[#EFFBFF] p-3 text-xs font-black uppercase text-black sm:grid-cols-5">
-        <span className={`neo-border px-2 py-1 ${selectedCounts.QB === 1 ? "bg-[#D7F8E8]" : "bg-white"}`}>QB {selectedCounts.QB}/1</span>
-        <span className={`neo-border px-2 py-1 ${selectedCounts.K === 1 ? "bg-[#D7F8E8]" : "bg-white"}`}>K {selectedCounts.K}/1</span>
-        <span className={`neo-border px-2 py-1 ${selectedCounts.OFF >= 1 && selectedCounts.OFF <= 2 ? "bg-[#D7F8E8]" : "bg-white"}`}>OFF {selectedCounts.OFF}/1-2</span>
-        <span className={`neo-border px-2 py-1 ${selectedCounts.DEF >= 1 && selectedCounts.DEF <= 2 ? "bg-[#D7F8E8]" : "bg-white"}`}>DEF {selectedCounts.DEF}/1-2</span>
-        <span className={`neo-border px-2 py-1 ${scheduleReady ? "bg-[#D7F8E8]" : "bg-red-100 text-red-800"}`}>{scheduleReady ? "Schedule Ready" : "No Schedule"}</span>
+        <LineupRequirementBadge label="QB" value={selectedCounts.QB} target="1" valid={qbIsValid} />
+        <LineupRequirementBadge label="K" value={selectedCounts.K} target="1" valid={kickerIsValid} />
+        <LineupRequirementBadge label="OFF" value={selectedCounts.OFF} target="1-2" valid={flexPositionsAreValid} />
+        <LineupRequirementBadge label="DEF" value={selectedCounts.DEF} target="1-2" valid={flexPositionsAreValid} />
+        <LineupRequirementBadge label="Schedule" value={scheduleReady ? "Ready" : "Missing"} valid={scheduleReady} />
       </div>
       {finalizeDisabledReason && <p className="mb-4 text-xs font-black uppercase text-red-600">{finalizeDisabledReason}</p>}
       <div className="neo-border overflow-hidden bg-white">
