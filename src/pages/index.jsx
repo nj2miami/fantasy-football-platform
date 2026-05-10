@@ -52,6 +52,7 @@ const Admin = lazyWithRetry(() => import("./Admin"), "Admin");
 const LeagueManage = lazyWithRetry(() => import("./LeagueManage"), "LeagueManage");
 const League = lazyWithRetry(() => import("./League"), "League");
 const LeagueDraft = lazyWithRetry(() => import("./LeagueDraft"), "LeagueDraft");
+const LeagueDraftRecap = lazyWithRetry(() => import("./LeagueDraftRecap"), "LeagueDraftRecap");
 const Home = lazyWithRetry(() => import("./Home"), "Home");
 const PlayerStats = lazyWithRetry(() => import("./PlayerStats"), "PlayerStats");
 const Team = lazyWithRetry(() => import("./Team"), "Team");
@@ -67,6 +68,7 @@ const PAGES = {
     LeagueManage,
     League,
     LeagueDraft,
+    LeagueDraftRecap,
     Home,
     PlayerStats,
     Team,
@@ -206,6 +208,7 @@ function PagesContent() {
                         <Route path="/league/manager" element={<League />} />
                         <Route path="/league/week/:weekNumber" element={<League />} />
                         <Route path="/league/draft" element={<LeagueDraft />} />
+                        <Route path="/league/draft-recap" element={<LeagueDraftRecap />} />
                         <Route path="/Home" element={<Home />} />
                         <Route path="/PlayerStats" element={<PlayerStats />} />
                         <Route path="/Team" element={<Team />} />

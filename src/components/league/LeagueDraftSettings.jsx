@@ -48,6 +48,8 @@ export default function LeagueDraftSettings({ league, setupLocked = false }) {
   const setupFieldsLocked = setupLocked;
   const isPaused = league.league_status === "PAUSED";
   const scheduledDraft = drafts.find((draft) => ["SCHEDULED", "OPEN"].includes(String(draft.status || "").toUpperCase())) || drafts[0];
+  const scheduledDraftStatus = String(scheduledDraft?.status || "").toUpperCase();
+  const draftIsCompleted = scheduledDraftStatus === "COMPLETED";
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["league", league.id] });
@@ -247,7 +249,9 @@ export default function LeagueDraftSettings({ league, setupLocked = false }) {
             Schedule Draft
           </Button>
           <Button asChild className="neo-btn bg-[#F7B801] text-black">
-            <a href={`/league/draft?id=${league.id}`}>Open Draft Day</a>
+            <a href={draftIsCompleted ? `/league/draft-recap?id=${league.id}` : `/league/draft?id=${league.id}`}>
+              {draftIsCompleted ? "Open Draft Recap" : "Open Draft Day"}
+            </a>
           </Button>
         </div>
         <p className="mt-3 text-sm font-bold text-gray-600">

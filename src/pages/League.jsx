@@ -284,7 +284,10 @@ function Panel({ title, icon: Icon, children, action }) {
   );
 }
 
-function LeagueNav({ league, currentMember, isCommissioner, activeArea }) {
+function LeagueNav({ league, currentMember, isCommissioner, activeArea, draftStatus }) {
+  const draftIsCompleted = String(draftStatus || "").toUpperCase() === "COMPLETED";
+  const draftHref = draftIsCompleted ? `/league/draft-recap?id=${league.id}` : `/league/draft?id=${league.id}`;
+  const draftLabel = draftIsCompleted ? "Draft Recap" : "Draft Day";
   return (
     <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <Link to={createPageUrl("Leagues")}>
@@ -308,10 +311,10 @@ function LeagueNav({ league, currentMember, isCommissioner, activeArea }) {
             </Button>
           </Link>
         )}
-        <Link to={`/league/draft?id=${league.id}`}>
+        <Link to={draftHref}>
           <Button className="neo-btn bg-white text-black">
             <PenSquare className="mr-2 h-5 w-5" />
-            Draft Day
+            {draftLabel}
           </Button>
         </Link>
         {isCommissioner && (
@@ -1446,6 +1449,12 @@ export default function League() {
     enabled: Boolean(leagueId && user),
   });
 
+  const { data: drafts = [] } = useQuery({
+    queryKey: ["league-nav-drafts", leagueId],
+    queryFn: () => appClient.entities.Draft.filter({ league_id: leagueId }, "-created_date"),
+    enabled: Boolean(leagueId && user),
+  });
+
   const currentMember = useMemo(() => (
     members.find((member) => member.is_active !== false && !member.is_ai && (
       member.user_email === user?.email || member.profile_id === user?.id
@@ -1586,10 +1595,11 @@ export default function League() {
   }
 
   const activeArea = isManagerPortal ? "manager" : "hub";
+  const latestDraft = drafts[0] || null;
 
   return (
     <LeagueShell>
-      <LeagueNav league={league} currentMember={currentMember} isCommissioner={isCommissioner} activeArea={activeArea} />
+      <LeagueNav league={league} currentMember={currentMember} isCommissioner={isCommissioner} activeArea={activeArea} draftStatus={latestDraft?.status} />
       {isWeekView ? (
         requestedMatchId ? (
           <MatchupDetailPage

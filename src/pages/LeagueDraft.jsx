@@ -361,6 +361,7 @@ export default function LeagueDraft() {
   const previousBoardRef = React.useRef(new Map());
   const notifiedPickIdsRef = React.useRef(new Set());
   const draftDaySoundRef = React.useRef(null);
+  const draftDaySoundReadyRef = React.useRef(false);
   const expiredPickRef = React.useRef(null);
 
   const { data: user, isLoading: isUserLoading } = useQuery({
@@ -468,7 +469,6 @@ export default function LeagueDraft() {
   const startMutation = useMutation({
     mutationFn: () => appClient.functions.invoke("start_draft", { league_id: leagueId, draft_id: draftId }),
     onSuccess: () => {
-      playDraftDayStartSound().catch(() => {});
       toast.success("Draft started.");
       invalidate();
     },
@@ -578,6 +578,11 @@ export default function LeagueDraft() {
 
   React.useEffect(() => {
     const soundVersion = state?.room?.state?.draft_day_sound_version || state?.draft?.started_at || null;
+    if (!draftDaySoundReadyRef.current) {
+      draftDaySoundReadyRef.current = true;
+      draftDaySoundRef.current = soundVersion;
+      return;
+    }
     if (!soundVersion || draftDaySoundRef.current === soundVersion) return;
     draftDaySoundRef.current = soundVersion;
     playDraftDayStartSound().catch(() => {
@@ -727,22 +732,26 @@ export default function LeagueDraft() {
         )}
         {isCommissioner && (
           <div className="flex flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                min="1"
-                max="240"
-                value={checkInMinutes}
-                onChange={(event) => setCheckInMinutes(event.target.value)}
-                className="neo-border h-11 w-24 bg-white font-black text-black"
-              />
-            </div>
+            {!isCompleted && (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="1"
+                  max="240"
+                  value={checkInMinutes}
+                  onChange={(event) => setCheckInMinutes(event.target.value)}
+                  className="neo-border h-11 w-24 bg-white font-black text-black"
+                />
+              </div>
+            )}
             <Button onClick={testDraftDaySound} disabled={checkInMutation.isPending} className="neo-btn bg-[#00D9FF] text-black">
               <Volume2 className="mr-2 h-5 w-5" />Test Sound
             </Button>
-            <Button onClick={runPrimaryDraftAction} disabled={primaryDraftDisabled || (!isOpen && allManagersCheckedIn && !canStart)} className="neo-btn bg-[#F7B801] text-black">
-              <PrimaryDraftIcon className="mr-2 h-5 w-5" />{primaryDraftLabel}
-            </Button>
+            {!isCompleted && (
+              <Button onClick={runPrimaryDraftAction} disabled={primaryDraftDisabled || (!isOpen && allManagersCheckedIn && !canStart)} className="neo-btn bg-[#F7B801] text-black">
+                <PrimaryDraftIcon className="mr-2 h-5 w-5" />{primaryDraftLabel}
+              </Button>
+            )}
             {isCompleted && (
               <Button
                 onClick={() => generateDraftRecapMutation.mutate()}

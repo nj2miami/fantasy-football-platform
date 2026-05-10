@@ -2778,11 +2778,18 @@ async function ensureManagerPointAccounts(supabase: ReturnType<typeof createClie
   }
 }
 
-function shuffleRows<T>(rows: T[]) {
+function shuffleRows<T extends { id?: unknown }>(rows: T[]) {
   const shuffled = [...rows];
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const swapIndex = crypto.getRandomValues(new Uint32Array(1))[0] % (index + 1);
     [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  if (
+    shuffled.length > 1 &&
+    shuffled.every((row, index) => String(row?.id || "") === String(rows[index]?.id || ""))
+  ) {
+    const offset = 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % (shuffled.length - 1));
+    return [...shuffled.slice(offset), ...shuffled.slice(0, offset)];
   }
   return shuffled;
 }
