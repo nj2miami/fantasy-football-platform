@@ -93,7 +93,7 @@ export default function LeagueRosterSettings() {
         <div>
           <p className="font-black uppercase">Durability</p>
           <p className="text-sm font-bold text-gray-700">
-            Starters lose 1 durability after use. Bench players can be treated to restore 1 durability, but treated players only contribute 25% of their weekly value.
+            Players start at 100% health, and that percentage directly scales scoring. Starters lose 5%-20%, treated players restore to 100%, wins restore 5%, and losses add 5% wear.
           </p>
         </div>
       </div>

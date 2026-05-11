@@ -3,7 +3,7 @@ import { statValue } from "@/lib/playerDisplay";
 export default function PlayerMiniStats({ player, weeksPlayed }) {
   const durability = player?.durability === null || player?.durability === undefined
     ? "--"
-    : `${Number(player.durability) > 0 ? "+" : ""}${player.durability}`;
+    : `${player.durability}%`;
 
   return (
     <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-black uppercase sm:gap-2">

@@ -121,25 +121,12 @@ const DEFAULT_LEAGUE_VISIBILITY_CONFIG = {
   manager_point_actions: DEFAULT_MANAGER_POINT_ACTIONS,
 };
 
-const DURABILITY_LABELS: Record<number, string> = {
-  3: "Perfect",
-  2: "Healthy",
-  1: "Normal",
-  0: "Worn",
-  [-1]: "Hurt",
-  [-2]: "Struggling",
-  [-3]: "Injured",
-};
-
-const DURABILITY_MULTIPLIERS: Record<number, number> = {
-  3: 1.1,
-  2: 1.05,
-  1: 1,
-  0: 0.95,
-  [-1]: 0.9,
-  [-2]: 0.85,
-  [-3]: 0.8,
-};
+const DURABILITY_MIN = 0;
+const DURABILITY_MAX = 110;
+const WEEKLY_DURABILITY_LOSS_MIN = 5;
+const WEEKLY_DURABILITY_LOSS_MAX = 20;
+const WIN_DURABILITY_RECOVERY = 5;
+const LOSS_DURABILITY_PENALTY = 5;
 
 const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
 const DRAFT_BUCKET_TARGETS: Record<string, number> = { QB: 36, OFF: 36, DEF: 36, K: 20 };
@@ -158,6 +145,26 @@ const DEFAULT_SCHEDULE_CONFIG = {
   period_days: 7,
   preset_dates: [],
 };
+
+function randomDurabilityLossPercent() {
+  const range = WEEKLY_DURABILITY_LOSS_MAX - WEEKLY_DURABILITY_LOSS_MIN + 1;
+  return WEEKLY_DURABILITY_LOSS_MIN + (crypto.getRandomValues(new Uint32Array(1))[0] % range);
+}
+
+function durabilityLossModifierFromSchedule(row: Json | null | undefined) {
+  if (!row) return 0;
+  const direct = Number(row.durability_loss_modifier ?? row.durability_loss_percent ?? 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const conditions = (row.game_conditions || row.conditions || {}) as Json;
+  const conditionValue = Number(
+    conditions.durability_loss_modifier ??
+      conditions.durability_loss_percent ??
+      conditions.durability_loss ??
+      conditions.weather_durability_loss ??
+      0,
+  );
+  return Number.isFinite(conditionValue) && conditionValue > 0 ? conditionValue : 0;
+}
 
 const DEFAULT_LEAGUE_PLAY_SETTINGS = {
   draft_mode: "season_snake",
@@ -401,12 +408,27 @@ function normalizePlayoffTeamCount(value: unknown, teamCount: unknown) {
   return count;
 }
 
+function clampDurability(value: unknown) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(DURABILITY_MAX, Math.max(DURABILITY_MIN, Number(numeric.toFixed(2))));
+}
+
+function durabilityMultiplierFor(value: unknown) {
+  return Number((clampDurability(value) / 100).toFixed(4));
+}
+
 function durabilityLabel(value: unknown) {
-  return DURABILITY_LABELS[Number(value)] || "Normal";
+  const durability = clampDurability(value);
+  if (durability >= 105) return "Surging";
+  if (durability >= 100) return "Fresh";
+  if (durability <= 50) return "Critical";
+  if (durability <= 70) return "Strained";
+  return "Worn";
 }
 
 function applyDurability(points: number, durability: unknown) {
-  const multiplier = DURABILITY_MULTIPLIERS[Number(durability)] ?? 1;
+  const multiplier = durabilityMultiplierFor(durability);
   return Number((points * multiplier).toFixed(2));
 }
 
@@ -2482,12 +2504,11 @@ async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient
   const rows = (players || [])
     .filter((player: Json) => !existingIds.has(player.player_id))
     .map((player: Json) => {
-      const durability = crypto.getRandomValues(new Uint32Array(1))[0] % 4;
       return {
         league_id: league.id,
         player_id: player.player_id,
-        durability,
-        initial_durability: durability,
+        durability: 100,
+        initial_durability: 100,
         revealed_at: String(league.durability_mode || "") === "revealed_at_draft" ? new Date().toISOString() : null,
       };
     });
@@ -3960,9 +3981,7 @@ async function validateLineupSlots(
     if (durabilityError) throw durabilityError;
     if (!durabilityRow) throw new Error("Treatment requires a durability record for that player.");
     const currentDurability = Number(durabilityRow.durability ?? 0);
-    const initialDurability = Number(durabilityRow.initial_durability ?? currentDurability);
-    if (currentDurability > 2) throw new Error("Players above +2 durability cannot be treated.");
-    if (currentDurability >= initialDurability) throw new Error("Players must have lost durability before treatment.");
+    if (currentDurability >= 100) throw new Error("Players must have durability loss before treatment.");
 
     const { data: usageRow, error: usageError } = await supabase
       .from("manager_player_usage")
@@ -4079,10 +4098,6 @@ async function assertAllLineupsReady(
   if (missing.length) throw new Error(`Lineups must be finalized before resolving: ${missing.join(", ")}.`);
 }
 
-function durabilityMultiplierFor(value: unknown) {
-  return DURABILITY_MULTIPLIERS[Number(value)] ?? 1;
-}
-
 function limitedUseThreshold(league: Json) {
   return league.draft_mode === "season_snake" && league.player_retention_mode === "limited_use"
     ? Math.max(1, Number(league.player_retention_limit || 2))
@@ -4107,10 +4122,10 @@ function sortLineupCandidates(candidates: Json[]) {
 function chooseLineupCandidates(candidates: Json[], count: number) {
   const sorted = sortLineupCandidates(candidates);
   if (sorted.length <= count) return sorted;
-  const healthier = sorted.filter((candidate) => Number(candidate.durability ?? 0) > -2);
+  const healthier = sorted.filter((candidate) => Number(candidate.durability ?? 100) >= 80);
   if (healthier.length >= count) return healthier.slice(0, count);
-  const notInjured = sorted.filter((candidate) => Number(candidate.durability ?? 0) > -3);
-  if (notInjured.length >= count) return notInjured.slice(0, count);
+  const playable = sorted.filter((candidate) => Number(candidate.durability ?? 100) >= 50);
+  if (playable.length >= count) return playable.slice(0, count);
   return sorted.slice(0, count);
 }
 
@@ -4172,8 +4187,8 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
     const score = scoreByPlayer.get(playerId) || {};
     const bucket = lineupPositionBucket(tier.position || score.position || player?.position || slot.slot_type);
     const durabilityRow = durabilityByPlayer.get(playerId) || {};
-    const durability = durabilityRow.durability === undefined ? 0 : Number(durabilityRow.durability);
-    const initialDurability = durabilityRow.initial_durability === undefined ? durability : Number(durabilityRow.initial_durability);
+    const durability = durabilityRow.durability === undefined ? 100 : Number(durabilityRow.durability);
+    const initialDurability = durabilityRow.initial_durability === undefined ? 100 : Number(durabilityRow.initial_durability);
     const usage = usageByPlayer.get(playerId) || {};
     const usageCount = Number(usage.usage_count || 0);
     const lastUsedWeek = Number(usage.last_used_week || 0);
@@ -4213,11 +4228,10 @@ async function buildAiLineupSlots(supabase: ReturnType<typeof createClient>, lea
   if (treatmentAffordable && durabilityEnabled(league)) {
     const benchCandidates = sortLineupCandidates(Object.values(byBucket).flat())
       .filter((candidate) => !starterIds.has(String(candidate.player_id)))
-      .filter((candidate) => Number(candidate.durability ?? 0) <= 2)
-      .filter((candidate) => Number(candidate.durability ?? 0) < Number(candidate.initial_durability ?? candidate.durability ?? 0))
+      .filter((candidate) => Number(candidate.durability ?? 100) < 100)
       .filter((candidate) => Number(candidate.previous_start_count || 0) >= 1)
       .filter((candidate) => league.manager_points_enabled === true
-        ? Number(candidate.durability ?? 0) <= 0 && (Number(candidate.tier_value || 1) >= 3 || byBucket[String(candidate.bucket)]?.length <= 1)
+        ? Number(candidate.durability ?? 100) <= 90 && (Number(candidate.tier_value || 1) >= 3 || byBucket[String(candidate.bucket)]?.length <= 1)
         : true);
     treatmentId = benchCandidates[0]?.player_id ? String(benchCandidates[0].player_id) : null;
   }
@@ -4413,6 +4427,13 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     : { data: [], error: null };
   if (durabilityError) throw durabilityError;
   const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
+  const { data: scheduleRows, error: scheduleError } = await supabase
+    .from("league_game_schedule")
+    .select("durability_loss_percent,game_conditions")
+    .eq("league_id", leagueId)
+    .eq("week_number", weekNumber);
+  if (scheduleError) throw scheduleError;
+  const gameConditionDurabilityLoss = Math.max(0, ...(scheduleRows || []).map((row: Json) => durabilityLossModifierFromSchedule(row)));
   const lineupTotals: Array<{ league_member_id: string; team_name: string | null; total: number; slots: Json[] }> = [];
 
   for (const lineup of lineups || []) {
@@ -4478,20 +4499,9 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
   if (existingWeekResultError) throw existingWeekResultError;
   if (!(existingWeekResults || []).length) {
     const isPlayoff = weekNumber >= Number(league.playoff_start_week || 999);
-    const durabilityUpdates = new Map<string, number>();
     for (const lineup of lineupTotals) {
       for (const slot of lineup.slots || []) {
         const playerId = String(slot.player_id || "");
-        const currentDurability = durabilityByPlayer.get(playerId);
-        if (durabilityEnabled(league) && currentDurability !== undefined) {
-          const status = lineupSlotStatus(slot);
-          const nextDurability = status === "treating" || status === "treatment" || status === "treated"
-            ? Math.min(3, currentDurability + 1)
-            : status === "bench" || status === "benched"
-              ? currentDurability
-              : Math.max(-3, currentDurability - 1);
-          durabilityUpdates.set(playerId, nextDurability);
-        }
         const isStarted = isStartedLineupSlot(slot);
         if (!isStarted) continue;
         const { data: existing, error: existingError } = await supabase
@@ -4548,14 +4558,6 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
           releases.push(release);
         }
       }
-    }
-    for (const [playerId, durability] of durabilityUpdates.entries()) {
-      const { error } = await supabase
-        .from("league_player_durability")
-        .update({ durability })
-        .eq("league_id", leagueId)
-        .eq("player_id", playerId);
-      if (error) throw error;
     }
     if (releases.length) {
       const releasePlayerIds = [...new Set(releases.map((release) => String(release.player_id || "")).filter(Boolean))];
@@ -4622,6 +4624,39 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     }
     await supabase.from("matchups").update({ home_score: home.total_points, away_score: away.total_points }).eq("id", matchup.id);
   }
+  if (!(existingWeekResults || []).length && durabilityEnabled(league)) {
+    const durabilityUpdates = new Map<string, number>();
+    for (const lineup of lineupTotals) {
+      const outcome = matchupOutcomes.get(String(lineup.league_member_id));
+      const outcomeAdjustment = outcome === "win"
+        ? WIN_DURABILITY_RECOVERY
+        : outcome === "loss"
+          ? -LOSS_DURABILITY_PENALTY
+          : 0;
+      for (const slot of lineup.slots || []) {
+        const playerId = String(slot.player_id || "");
+        const currentDurability = durabilityUpdates.has(playerId)
+          ? durabilityUpdates.get(playerId)
+          : durabilityByPlayer.get(playerId);
+        if (currentDurability === undefined) continue;
+        const status = lineupSlotStatus(slot);
+        const playAdjustment = status === "treating" || status === "treatment" || status === "treated"
+          ? 100 - Number(currentDurability)
+          : status === "bench" || status === "benched"
+            ? 0
+            : -(randomDurabilityLossPercent() + gameConditionDurabilityLoss);
+        durabilityUpdates.set(playerId, clampDurability(Number(currentDurability) + playAdjustment + outcomeAdjustment));
+      }
+    }
+    for (const [playerId, durability] of durabilityUpdates.entries()) {
+      const { error } = await supabase
+        .from("league_player_durability")
+        .update({ durability })
+        .eq("league_id", leagueId)
+        .eq("player_id", playerId);
+      if (error) throw error;
+    }
+  }
   if (!(existingWeekResults || []).length && matchupOutcomes.size) {
     const lockRowsByKey = new Map<string, Json>();
     for (const lineup of lineupTotals) {
@@ -4680,7 +4715,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     matchup_totals: lineupTotals,
     durability: Object.fromEntries([...durabilityByPlayer.entries()].map(([playerId, durability]) => [
       playerId,
-      { durability, label: durabilityLabel(durability), multiplier: DURABILITY_MULTIPLIERS[durability] ?? 1 },
+      { durability, label: durabilityLabel(durability), multiplier: durabilityMultiplierFor(durability) },
     ])),
     standings_delta: standingsResult.standings,
     player_leaderboard: playerLeaderboard,

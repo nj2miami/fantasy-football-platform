@@ -195,10 +195,9 @@ function TierBadge({ tier }) {
 
 function DurabilityBadge({ durability }) {
   if (durability === null || durability === undefined) return <span className="neo-border bg-gray-200 px-2 py-1 text-[11px] font-black uppercase text-black">Dur --</span>;
-  const value = Number(durability || 0);
-  const classes = value >= 2 ? "bg-[#D7F8E8] text-black" : value <= -2 ? "bg-red-100 text-red-800" : "bg-white text-black";
-  const prefix = value > 0 ? "+" : "";
-  return <span className={`neo-border px-2 py-1 text-[11px] font-black uppercase ${classes}`}>Dur {prefix}{value}</span>;
+  const value = Number(durability || 100);
+  const classes = value >= 100 ? "bg-[#D7F8E8] text-black" : value <= 70 ? "bg-red-100 text-red-800" : "bg-white text-black";
+  return <span className={`neo-border px-2 py-1 text-[11px] font-black uppercase ${classes}`}>Dur {value}%</span>;
 }
 
 function formatBonus(value) {
@@ -218,8 +217,8 @@ function durabilityBonusForSlot(slot) {
 
 function durabilityText(value) {
   if (value === null || value === undefined) return "Dur --";
-  const numeric = Number(value || 0);
-  return `Dur ${numeric > 0 ? "+" : ""}${numeric}`;
+  const numeric = Number(value || 100);
+  return `Dur ${numeric}%`;
 }
 
 function lineupSlotIsPlayed(slot) {
@@ -1385,11 +1384,10 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
     const eligibility = new Map();
     roster.forEach((slot) => {
       const durability = durabilityByPlayer.get(slot.player_id);
-      const currentDurability = Number(durability?.durability ?? 0);
-      const initialDurability = Number(durability?.initial_durability ?? currentDurability);
+      const currentDurability = Number(durability?.durability ?? 100);
       const usageCount = Number(usageByPlayer.get(slot.player_id)?.usage_count || 0);
       const lastUsedWeek = Number(usageByPlayer.get(slot.player_id)?.last_used_week || 0);
-      eligibility.set(slot.player_id, currentDurability <= 2 && currentDurability < initialDurability && usageCount >= 1 && lastUsedWeek > 0 && lastUsedWeek < Number(lineupWeek));
+      eligibility.set(slot.player_id, currentDurability < 100 && usageCount >= 1 && lastUsedWeek > 0 && lastUsedWeek < Number(lineupWeek));
     });
     return eligibility;
   }, [durabilityByPlayer, lineupWeek, roster, usageByPlayer]);
@@ -1479,7 +1477,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
       ? treatmentCount > 1
         ? "Only one player can be in treatment each week."
         : !treatmentSelectionIsEligible
-          ? "Treatment requires prior starter use and lost durability of +2 or lower."
+          ? "Treatment requires prior starter use and durability loss."
           : lineupRequirementText
       : "";
 
@@ -1507,7 +1505,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
 
   const togglePlayer = (playerId) => {
     if ((statusByPlayer[playerId] || "bench") === "active" && !treatmentEligibility.get(playerId)) {
-      toast.error("Treatment requires prior starter use and lost durability of +2 or lower.");
+      toast.error("Treatment requires prior starter use and durability loss.");
       setStatusByPlayer((current) => ({ ...current, [playerId]: "bench" }));
       return;
     }
@@ -1570,7 +1568,7 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
               const durability = durabilityByPlayer.get(slot.player_id);
               const treatmentEligible = treatmentEligibility.get(slot.player_id);
               return (
-                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} title={selected && !treatmentEligible ? "Next click will bench this player. Treatment requires prior starter use and lost durability of +2 or lower." : undefined} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : treating ? "bg-[#EFFBFF]" : "bg-white hover:bg-gray-50"}`}>
+                <button key={slot.id} type="button" onClick={() => togglePlayer(slot.player_id)} title={selected && !treatmentEligible ? "Next click will bench this player. Treatment requires prior starter use and durability loss." : undefined} className={`grid w-full gap-3 border-b-2 border-black/10 p-3 text-left transition-colors lg:grid-cols-[110px_minmax(220px,1fr)_120px_120px_110px_110px] lg:items-center ${selected ? "bg-[#D7F8E8]" : treating ? "bg-[#EFFBFF]" : "bg-white hover:bg-gray-50"}`}>
                   <span className={`neo-border inline-flex w-fit items-center gap-2 px-2 py-1 text-[11px] font-black uppercase ${selected ? "bg-[#F7B801] text-black" : treating ? "bg-[#00D9FF] text-black" : "bg-gray-200 text-black"}`}>
                     {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
                     {statusLabel(status)}

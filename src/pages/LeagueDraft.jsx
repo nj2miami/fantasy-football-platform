@@ -241,17 +241,14 @@ function DurabilityBadge({ player }) {
   }
   if (player?.durability === null || player?.durability === undefined) return null;
   const value = Number(player.durability);
-  const classes = value >= 2
+  const classes = value >= 100
     ? "bg-[#D7F8E8] text-black"
-    : value === 1
-      ? "bg-white text-black"
-      : value === 0
-        ? "bg-[#F7B801] text-black"
-        : "bg-red-100 text-red-800";
-  const prefix = value > 0 ? "+" : "";
+    : value <= 70
+        ? "bg-red-100 text-red-800"
+        : "bg-white text-black";
   return (
     <span className={`neo-border inline-flex items-center px-2 py-1 text-xs font-black uppercase ${classes}`}>
-      {player.durability_label || "Dur"} {prefix}{value}
+      {player.durability_label || "Dur"} {value}%
     </span>
   );
 }

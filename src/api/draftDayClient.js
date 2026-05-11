@@ -1,4 +1,4 @@
-import { DEFAULT_LEAGUE_VISIBILITY_CONFIG, DEFAULT_SCORING_RULES, DURABILITY_LABELS, DURABILITY_MULTIPLIERS } from "@/api/defaults";
+import { DEFAULT_LEAGUE_VISIBILITY_CONFIG, DEFAULT_SCORING_RULES, DURABILITY_LABELS } from "@/api/defaults";
 import { entities } from "@/api/entitiesClient";
 import { functions } from "@/api/functionsClient";
 import { countPlayerWeeks } from "@/api/playerStatsClient";
@@ -12,7 +12,18 @@ const DRAFT_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
 const DRAFT_POOL_ENGINE_VERSION = "draft-pool-low-tier-flex-v3";
 
 function durabilityLabel(value) {
-  return DURABILITY_LABELS[Number(value)] || "Normal";
+  const durability = Number(value || 100);
+  if (durability >= 105) return "Surging";
+  if (durability >= 100) return DURABILITY_LABELS[100] || "Fresh";
+  if (durability <= 50) return "Critical";
+  if (durability <= 70) return "Strained";
+  return "Worn";
+}
+
+function durabilityMultiplier(value) {
+  const durability = Number(value || 100);
+  if (!Number.isFinite(durability)) return 1;
+  return Math.max(0, Number((durability / 100).toFixed(4)));
 }
 
 function leagueVisibility(league = {}) {
@@ -243,7 +254,7 @@ function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPla
     durability: durability ? Number(durability.durability) : null,
     durability_hidden: durabilityEnabled(league) && !showDurability,
     durability_label: durability ? durabilityLabel(durability.durability) : durabilityEnabled(league) ? "Hidden" : "Off",
-    durability_multiplier: durability ? DURABILITY_MULTIPLIERS[Number(durability.durability)] ?? 1 : 1,
+    durability_multiplier: durability ? durabilityMultiplier(durability.durability) : 1,
   };
 }
 

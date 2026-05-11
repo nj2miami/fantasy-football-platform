@@ -82,23 +82,11 @@ export const DEFAULT_LEAGUE_VISIBILITY_CONFIG = {
 };
 
 export const DURABILITY_LABELS = {
-  3: "Perfect",
-  2: "Healthy",
-  1: "Normal",
-  0: "Worn",
-  [-1]: "Hurt",
-  [-2]: "Struggling",
-  [-3]: "Injured",
+  100: "Fresh",
 };
 
 export const DURABILITY_MULTIPLIERS = {
-  3: 1.1,
-  2: 1.05,
-  1: 1,
-  0: 0.95,
-  [-1]: 0.9,
-  [-2]: 0.85,
-  [-3]: 0.8,
+  100: 1,
 };
 
 export const DEFAULT_SCHEDULE_CONFIG = {

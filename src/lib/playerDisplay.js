@@ -14,8 +14,7 @@ export function normalizePlayerPosition(position) {
 
 export function durabilityText(player) {
   if (player?.durability === null || player?.durability === undefined) return "DUR --";
-  const prefix = Number(player.durability) > 0 ? "+" : "";
-  return `${player.durability_label || "Durability"} ${prefix}${player.durability}`;
+  return `${player.durability_label || "Durability"} ${player.durability}%`;
 }
 
 export function playerHeadshotUrl(player) {

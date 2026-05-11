@@ -76,7 +76,8 @@ async function requireLeagueControl(
 }
 
 function memberName(member: Json | undefined) {
-  return String(member?.team_name || member?.display_name || (member?.is_ai ? "AI Manager" : "Manager"));
+  const profile = Array.isArray(member?.profiles) ? member?.profiles[0] : member?.profiles;
+  return String(member?.team_name || profile?.display_name || profile?.profile_name || (member?.is_ai ? "AI Manager" : "Manager"));
 }
 
 function playerName(player: Json | undefined) {
@@ -176,7 +177,7 @@ async function generateMidseasonRecap(supabase: ReturnType<typeof createClient>,
     matchupsResult,
     leaderboardResult,
   ] = await Promise.all([
-    supabase.from("league_members").select("id,team_name,display_name,is_ai,ai_persona").eq("league_id", leagueId).eq("is_active", true),
+    supabase.from("league_members").select("id,team_name,is_ai,ai_persona,profiles(display_name,profile_name)").eq("league_id", leagueId).eq("is_active", true),
     supabase.from("standings").select("*").eq("league_id", leagueId),
     supabase.from("league_week_results").select("league_member_id,week_number,total_points,weekly_rank,league_points,scoring_details").eq("league_id", leagueId).lte("week_number", sourceWeekNumber),
     supabase.from("matchups").select("*").eq("league_id", leagueId).lte("week_number", sourceWeekNumber),
