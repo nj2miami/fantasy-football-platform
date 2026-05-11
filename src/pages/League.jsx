@@ -413,6 +413,61 @@ function matchupStatus(matchup, resultRows) {
   return "Scheduled";
 }
 
+function standingsWithResolvedRecords(standings, matchups, weekResults, league) {
+  if (!weekResults.length) return standings;
+  const recordByMember = new Map();
+  const ensureRecord = (memberId) => {
+    const key = String(memberId || "");
+    if (!recordByMember.has(key)) {
+      recordByMember.set(key, { wins: 0, losses: 0, ties: 0, points_against: 0 });
+    }
+    return recordByMember.get(key);
+  };
+
+  matchups.forEach((matchup) => {
+    const homeResult = resultForMember(weekResults, matchup.home_member_id, matchup.week_number);
+    const awayResult = resultForMember(weekResults, matchup.away_member_id, matchup.week_number);
+    if (!homeResult || !awayResult) return;
+
+    const home = ensureRecord(matchup.home_member_id);
+    const away = ensureRecord(matchup.away_member_id);
+    const homePoints = Number(homeResult.total_points || 0);
+    const awayPoints = Number(awayResult.total_points || 0);
+    home.points_against += awayPoints;
+    away.points_against += homePoints;
+
+    if (homePoints > awayPoints) {
+      home.wins += 1;
+      away.losses += 1;
+    } else if (homePoints < awayPoints) {
+      home.losses += 1;
+      away.wins += 1;
+    } else {
+      home.ties += 1;
+      away.ties += 1;
+    }
+  });
+
+  return standings
+    .map((standing) => {
+      const record = recordByMember.get(String(standing.league_member_id));
+      if (!record) return { ...standing, wins: 0, losses: 0, ties: 0, points_against: 0 };
+      return {
+        ...standing,
+        wins: record.wins,
+        losses: record.losses,
+        ties: record.ties,
+        points_against: Number(record.points_against.toFixed(2)),
+      };
+    })
+    .sort((a, b) =>
+      Number(b.wins || 0) - Number(a.wins || 0) ||
+      Number(b.ties || 0) - Number(a.ties || 0) ||
+      (league?.ranking_system === "offl" ? Number(b.league_points || 0) - Number(a.league_points || 0) : 0) ||
+      Number(b.points_for || 0) - Number(a.points_for || 0)
+    );
+}
+
 function CurrentMatchupsPanel({ leagueId, currentWeek, matchups, weekResults, members }) {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const currentMatchups = matchups.filter((matchup) => Number(matchup.week_number) === Number(currentWeek));
@@ -1813,6 +1868,11 @@ export default function League() {
     enabled: Boolean(leagueId && currentMember),
   });
 
+  const displayStandings = useMemo(
+    () => standingsWithResolvedRecords(standings, matchups, weekResults, league),
+    [league, matchups, standings, weekResults]
+  );
+
   const { data: newsItems = [] } = useQuery({
     queryKey: ["league-news", leagueId],
     queryFn: async () => {
@@ -1932,7 +1992,7 @@ export default function League() {
             weekResults={weekResults}
             schedule={schedule}
             weekNumber={routeWeekNumber}
-            standings={standings}
+            standings={displayStandings}
             isLoadingStandings={isLoadingStandings}
           />
         )
@@ -1946,7 +2006,7 @@ export default function League() {
           weekResults={weekResults}
           messages={managerMessages}
           activeTab={activeManagerTab}
-          standings={standings}
+          standings={displayStandings}
           isLoadingStandings={isLoadingStandings}
         />
       ) : (
@@ -1956,7 +2016,7 @@ export default function League() {
           currentMember={currentMember}
           isCommissioner={isCommissioner}
           members={members}
-          standings={standings}
+          standings={displayStandings}
           isLoadingStandings={isLoadingStandings}
           schedule={schedule}
           matchups={matchups}
