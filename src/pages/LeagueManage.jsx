@@ -244,7 +244,7 @@ export default function LeagueManage() {
         {activeTab === 'roster' && <LeagueRosterSettings league={league} />}
         {activeTab === 'members' && <LeagueMembers league={league} setupLocked={setupLocked} />}
         {activeTab === 'draft' && <LeagueDraftSettings league={league} setupLocked={setupLocked} />}
-        {activeTab === 'schedule' && <LeagueScheduleSettings league={league} setupLocked={setupLocked} />}
+        {activeTab === 'schedule' && <LeagueScheduleSettings league={league} setupLocked={setupLocked} isAdmin={isAdmin || asAdmin} />}
         {activeTab === 'ai_teams' && <LeagueAITeams league={league} setupLocked={setupLocked} />}
         {activeTab === 'communications' && <LeagueCommunications league={league} members={members} />}
       </div>

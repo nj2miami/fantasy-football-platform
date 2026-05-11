@@ -17,6 +17,13 @@ import { getLeagueEntitlements, leagueTeamLimits, PAID_LEAGUE_MIN_TEAMS, validat
 const PAID_JOIN_FEE_MIN_CENTS = 500;
 const PAID_JOIN_FEE_DEFAULT_MAX_CENTS = 5000;
 
+function recommendedPlayoffTeams(teamCount) {
+  const count = Number(teamCount || 0);
+  if (count <= 4) return 2;
+  if (count <= 10) return 4;
+  return 8;
+}
+
 function centsToDollarInput(cents) {
   const numericCents = Number(cents);
   if (!Number.isFinite(numericCents)) return "";
@@ -190,6 +197,13 @@ export default function CreateLeague() {
       }));
     }
   }, [entitlements.canCreateFreeLeague, entitlements.canCreatePaidLeague, formData.league_tier]);
+
+  useEffect(() => {
+    setFormData((current) => ({
+      ...current,
+      playoff_team_count: recommendedPlayoffTeams(current.max_members),
+    }));
+  }, [formData.max_members]);
 
   const validateJoinFee = (data) => {
     if (data.league_tier !== "PAID") return null;
@@ -554,6 +568,13 @@ export default function CreateLeague() {
               plain
               fields={["schedule_type", "advancement_mode", "playoff_mode"]}
             />
+            <div className="neo-border bg-[#FFF7D6] p-4">
+              <Label className="mb-2 block text-sm font-black uppercase">Playoff Teams</Label>
+              <p className="text-2xl font-black">{formData.playoff_team_count}</p>
+              <p className="mt-2 text-xs font-bold text-gray-600">
+                Auto-set from max teams: 4 teams use 2 playoff spots, 6-10 use 4, and 12-16 use 8.
+              </p>
+            </div>
           </div>
 
           <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">

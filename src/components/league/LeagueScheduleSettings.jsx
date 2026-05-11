@@ -5,8 +5,24 @@ import { toast } from "sonner";
 import { appClient, DEFAULT_DRAFT_CONFIG, DEFAULT_LEAGUE_PLAY_SETTINGS } from "@/api/appClient";
 import { LeaguePlayFields, ScheduleConfigFields } from "@/components/league/LeagueConfigFields";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-export default function LeagueScheduleSettings({ league }) {
+const PLAYOFF_TEAM_OPTIONS = [2, 4, 8];
+
+function recommendedPlayoffTeams(teamCount) {
+  const count = Number(teamCount || 0);
+  if (count <= 4) return 2;
+  if (count <= 10) return 4;
+  return 8;
+}
+
+function playoffFormatLabel(count) {
+  if (Number(count) === 2) return "Championship game";
+  if (Number(count) === 4) return "2 rounds";
+  return "3 rounds";
+}
+
+export default function LeagueScheduleSettings({ league, isAdmin = false }) {
   const queryClient = useQueryClient();
   const [playSettings, setPlaySettings] = useState({
     ...DEFAULT_LEAGUE_PLAY_SETTINGS,
@@ -57,6 +73,7 @@ export default function LeagueScheduleSettings({ league }) {
     queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
+    queryClient.invalidateQueries({ queryKey: ["league-news", league.id] });
   };
 
   const saveScheduleMutation = useMutation({
@@ -66,7 +83,6 @@ export default function LeagueScheduleSettings({ league }) {
       advancement_mode: playSettings.advancement_mode,
       playoff_mode: playSettings.playoff_mode,
       playoff_start_week: Number(playSettings.playoff_start_week) || 9,
-      playoff_team_count: Number(playSettings.playoff_team_count) || 4,
       schedule_config: playSettings.schedule_config,
     }),
     onSuccess: () => {
@@ -119,6 +135,24 @@ export default function LeagueScheduleSettings({ league }) {
   const activeMembers = members.filter((member) => member.is_active !== false);
   const submittedLineups = currentWeekLineups.filter((lineup) => lineup.finalized_at);
   const lineupReady = activeMembers.length > 0 && submittedLineups.length >= activeMembers.length;
+  const recommendedPlayoffTeamCount = recommendedPlayoffTeams(activeMembers.length);
+  const playoffTeamCount = Number(playSettings.playoff_team_count || recommendedPlayoffTeamCount);
+  const allTeamsMakePlayoffs = activeMembers.length > 0 && playoffTeamCount >= activeMembers.length;
+  const playoffLockedByWeek = leagueStarted && Number(currentWeekNumber || 1) >= 2 && !isAdmin;
+  const playoffLockedBySeasonEnd = String(activeSeason?.status || "").toUpperCase() === "COMPLETED" || String(league.league_status || "").toUpperCase() === "COMPLETED";
+  const playoffSettingsLocked = playoffLockedBySeasonEnd || playoffLockedByWeek;
+
+  const savePlayoffMutation = useMutation({
+    mutationFn: () => appClient.functions.invoke("update_playoff_settings", {
+      league_id: league.id,
+      playoff_team_count: playoffTeamCount,
+    }),
+    onSuccess: () => {
+      toast.success("Playoff settings saved.");
+      invalidate();
+    },
+    onError: (error) => toast.error(error.message || "Failed to save playoff settings."),
+  });
 
   return (
     <div className="space-y-6">
@@ -172,9 +206,54 @@ export default function LeagueScheduleSettings({ league }) {
             disabled={scheduleFieldsLocked}
             compactLabels
             showDescriptions
-            showPlayoffDetails
             fields={["advancement_mode", "playoff_mode"]}
           />
+        </div>
+        <div className="neo-border mb-6 bg-[#FFF7D6] p-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-black uppercase">Playoff Teams</p>
+              <p className="mt-1 text-xs font-bold text-gray-700">
+                Allowed playoff sizes are 2, 4, or 8. Recommended for {activeMembers.length || 0} active teams: {recommendedPlayoffTeamCount} ({playoffFormatLabel(recommendedPlayoffTeamCount)}).
+              </p>
+              {allTeamsMakePlayoffs && (
+                <div className="neo-border mt-3 bg-[#FFF1E8] p-3">
+                  <p className="text-xs font-black uppercase text-red-700">Every team is playoff eligible</p>
+                  <p className="mt-1 text-xs font-bold text-gray-700">
+                    This league has {activeMembers.length} active teams and {playoffTeamCount} playoff spots, so no team is eliminated before playoffs.
+                  </p>
+                </div>
+              )}
+              {playoffSettingsLocked && (
+                <p className="mt-2 text-xs font-bold uppercase text-gray-500">
+                  {playoffLockedBySeasonEnd ? "Playoff team count is locked after the season ends." : "After Week 2 begins, only a site admin can change playoff team count."}
+                </p>
+              )}
+            </div>
+            <div className="w-full lg:w-72">
+              <Select
+                value={String(playoffTeamCount)}
+                onValueChange={(value) => setPlaySettings({ ...playSettings, playoff_team_count: Number(value) })}
+                disabled={savePlayoffMutation.isPending || playoffSettingsLocked}
+              >
+                <SelectTrigger className="neo-border bg-white font-bold"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PLAYOFF_TEAM_OPTIONS.map((count) => (
+                    <SelectItem key={count} value={String(count)}>
+                      {count} teams - {playoffFormatLabel(count)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                onClick={() => savePlayoffMutation.mutate()}
+                disabled={savePlayoffMutation.isPending || playoffSettingsLocked}
+                className="neo-btn mt-3 w-full bg-[#00D9FF] text-black"
+              >
+                Save Playoff Teams
+              </Button>
+            </div>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <ScheduleConfigFields

@@ -172,6 +172,8 @@ const DEFAULT_LEAGUE_PLAY_SETTINGS = {
   schedule_config: DEFAULT_SCHEDULE_CONFIG,
 };
 
+const PLAYOFF_TEAM_COUNTS = new Set([2, 4, 8]);
+
 type Json = Record<string, unknown>;
 const PREMIUM_LEAGUE_LIMIT = 4;
 const PAID_JOIN_FEE_MIN_CENTS = 500;
@@ -384,6 +386,19 @@ function normalizeLeaguePlaySettings(payload: Json | null | undefined) {
     manager_points_starting: managerPointsEnabled ? Number(league.manager_points_starting ?? DEFAULT_MANAGER_POINTS_STARTING) : 0,
     schedule_config: { ...DEFAULT_SCHEDULE_CONFIG, ...((league.schedule_config as Json | undefined) || {}) },
   };
+}
+
+function recommendedPlayoffTeamCount(teamCount: unknown) {
+  const count = Number(teamCount || 0);
+  if (count <= 4) return 2;
+  if (count <= 10) return 4;
+  return 8;
+}
+
+function normalizePlayoffTeamCount(value: unknown, teamCount: unknown) {
+  const count = Number(value || recommendedPlayoffTeamCount(teamCount));
+  if (!PLAYOFF_TEAM_COUNTS.has(count)) throw new Error("Playoff teams must be 2, 4, or 8.");
+  return count;
 }
 
 function durabilityLabel(value: unknown) {
@@ -1267,6 +1282,7 @@ async function createLeague(supabase: ReturnType<typeof createClient>, user: { i
   }
 
   const playSettings = normalizeLeaguePlaySettings(payload);
+  playSettings.playoff_team_count = normalizePlayoffTeamCount(playSettings.playoff_team_count, maxMembers);
   const { data: league, error: leagueError } = await supabase
     .from("leagues")
     .insert({
@@ -1706,6 +1722,59 @@ async function setLeagueStatus(supabase: ReturnType<typeof createClient>, user: 
   const { data, error } = await supabase.from("leagues").update(update).eq("id", league.id).select("*").single();
   if (error) throw error;
   return { league: data };
+}
+
+async function updatePlayoffSettings(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league, isAdmin } = await requireLeagueControl(supabase, user, payload.league_id);
+  const { count: activeTeamCount, error: memberError } = await supabase
+    .from("league_members")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (memberError) throw memberError;
+
+  const { data: seasons, error: seasonError } = await supabase
+    .from("league_seasons")
+    .select("id,current_week,status")
+    .eq("league_id", league.id)
+    .order("created_date", { ascending: false })
+    .limit(1);
+  if (seasonError) throw seasonError;
+  const activeSeason = seasons?.[0] || null;
+  const currentWeek = Number(activeSeason?.current_week || 1);
+  const seasonEnded = String(activeSeason?.status || league.league_status || "").toUpperCase() === "COMPLETED";
+  if (seasonEnded) throw new Error("Playoff team count is locked after the season ends.");
+  if (currentWeek >= 2 && !isAdmin) throw new Error("After Week 2 begins, only a site admin can change playoff team count.");
+
+  const playoffTeamCount = normalizePlayoffTeamCount(payload.playoff_team_count, activeTeamCount || league.max_members);
+  const previousPlayoffTeamCount = Number(league.playoff_team_count || recommendedPlayoffTeamCount(activeTeamCount || league.max_members));
+  if (playoffTeamCount === previousPlayoffTeamCount) return { league, changed_keys: [] };
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("leagues")
+    .update({ playoff_team_count: playoffTeamCount, updated_date: now })
+    .eq("id", league.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+
+  const allTeamsEligible = Number(activeTeamCount || 0) > 0 && playoffTeamCount >= Number(activeTeamCount || 0);
+  const title = allTeamsEligible ? "All teams eligible for playoffs" : "Playoff field updated";
+  const body = allTeamsEligible
+    ? `The commissioner set the playoff field to ${playoffTeamCount} teams while the league has ${activeTeamCount} active teams. Every team is currently eligible for playoffs.`
+    : `The playoff field changed from ${previousPlayoffTeamCount} to ${playoffTeamCount} teams.`;
+  const { error: newsError } = await supabase.from("league_news_items").insert({
+    league_id: league.id,
+    title,
+    body,
+    news_type: "SYSTEM",
+    status: "PUBLISHED",
+    published_at: now,
+  });
+  if (newsError) throw newsError;
+
+  return { league: data, changed_keys: ["playoff_team_count"], news: { title, body } };
 }
 
 const LEAGUE_SETTINGS_UPDATE_KEYS = [
@@ -4639,8 +4708,10 @@ export async function handleAction(action: string, request: Request) {
                                   ? await createOfficialLeague(supabase, user, payload)
                                   : action === "update_league_settings"
                                     ? await updateLeagueSettings(supabase, user, payload)
-                                    : action === "update_league_scoring"
-                                      ? await updateLeagueScoring(supabase, user, payload)
+                                    : action === "update_playoff_settings"
+                                      ? await updatePlayoffSettings(supabase, user, payload)
+                                      : action === "update_league_scoring"
+                                        ? await updateLeagueScoring(supabase, user, payload)
                                       : action === "lock_scoring_rules"
                                         ? await lockLeagueScoringForCommissioner(supabase, user, payload)
                                         : action === "vote_league_audit"
