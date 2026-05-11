@@ -54,7 +54,7 @@ export default function CommissionerHub({ league }) {
   const queryClient = useQueryClient();
   const { data: seasons = [] } = useQuery({
     queryKey: ["commissioner-hub-seasons", league.id],
-    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }),
+    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }, "-created_date"),
   });
   const { data: weeks = [] } = useQuery({
     queryKey: ["commissioner-hub-weeks", league.id],
@@ -112,14 +112,27 @@ export default function CommissionerHub({ league }) {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["league", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-season", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-card-seasons", league.id] });
     queryClient.invalidateQueries({ queryKey: ["commissioner-hub-seasons", league.id] });
     queryClient.invalidateQueries({ queryKey: ["commissioner-hub-weeks", league.id] });
     queryClient.invalidateQueries({ queryKey: ["commissioner-hub-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["commissioner-hub-matchups", league.id] });
     queryClient.invalidateQueries({ queryKey: ["commissioner-hub-results", league.id] });
     queryClient.invalidateQueries({ queryKey: ["commissioner-hub-lineups", league.id, currentWeekNumber] });
+    queryClient.invalidateQueries({ queryKey: ["league-seasons", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-weeks", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-game-schedule", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-schedule", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-week-results", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
+    queryClient.invalidateQueries({
+      predicate: (query) => Array.isArray(query.queryKey)
+        && query.queryKey[0] === "league-lineups"
+        && query.queryKey[1] === league.id,
+    });
   };
 
   const actionMutation = useMutation({

@@ -1896,7 +1896,7 @@ export default function League() {
   const { data: season = null } = useQuery({
     queryKey: ["league-season", leagueId],
     queryFn: async () => {
-      const seasons = await appClient.entities.Season.filter({ league_id: leagueId });
+      const seasons = await appClient.entities.Season.filter({ league_id: leagueId }, "-created_date");
       return seasons[0] || null;
     },
     enabled: Boolean(leagueId && currentMember),

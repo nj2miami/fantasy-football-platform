@@ -32,7 +32,7 @@ export default function LeagueScheduleSettings({ league, isAdmin = false }) {
 
   const { data: seasons = [] } = useQuery({
     queryKey: ["league-seasons", league.id],
-    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }),
+    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }, "-created_date"),
   });
   const { data: weeks = [] } = useQuery({
     queryKey: ["league-weeks", league.id],
@@ -66,14 +66,22 @@ export default function LeagueScheduleSettings({ league, isAdmin = false }) {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["league", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-season", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-card-seasons", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-seasons", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-weeks", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-game-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-week-results", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
     queryClient.invalidateQueries({ queryKey: ["league-news", league.id] });
+    queryClient.invalidateQueries({
+      predicate: (query) => Array.isArray(query.queryKey)
+        && query.queryKey[0] === "league-lineups"
+        && query.queryKey[1] === league.id,
+    });
   };
 
   const saveScheduleMutation = useMutation({

@@ -91,7 +91,7 @@ export default function LeagueSettings({ league, setupLocked = false }) {
 
   const { data: seasons = [] } = useQuery({
     queryKey: ["league-seasons", league.id],
-    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }),
+    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }, "-created_date"),
   });
 
   const { data: members = [] } = useQuery({

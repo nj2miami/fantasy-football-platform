@@ -35,8 +35,8 @@ export default function LeagueCard({ league, index = 0, user, myLeagueIds = [], 
 
   // Get season to check status
   const { data: seasons = [] } = useQuery({
-    queryKey: ['league-season', league.id],
-    queryFn: () => appClient.entities.Season.filter({ league_id: league.id })
+    queryKey: ['league-card-seasons', league.id],
+    queryFn: () => appClient.entities.Season.filter({ league_id: league.id }, "-created_date")
   });
 
   // Check if it's an official league

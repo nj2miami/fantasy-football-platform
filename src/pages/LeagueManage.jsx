@@ -71,7 +71,7 @@ export default function LeagueManage() {
 
   const { data: seasons = [] } = useQuery({
     queryKey: ["league-manage-seasons", leagueId],
-    queryFn: () => appClient.entities.Season.filter({ league_id: leagueId }),
+    queryFn: () => appClient.entities.Season.filter({ league_id: leagueId }, "-created_date"),
     enabled: !!leagueId && !!user,
   });
 
