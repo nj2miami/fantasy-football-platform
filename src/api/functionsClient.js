@@ -62,6 +62,7 @@ export const functions = {
   updateDraftCheckIn: (payload = {}) => invokeFunction("update_draft_check_in", payload),
   resetDraft: (payload = {}) => invokeFunction("reset_draft", payload),
   generateDraftRecap: (payload = {}) => invokeFunction("generate_draft_recap", payload),
+  generateMidseasonRecap: (payload = {}) => invokeFunction("generate_midseason_recap", payload),
   fillLeagueWithAI: (payload = {}) => invokeFunction("fill_league_with_ai", payload),
   importHistoricalStats: (payload = {}) => invokeFunction("processImportJobs", { job_type: "HISTORICAL_STATS", ...payload }),
 };

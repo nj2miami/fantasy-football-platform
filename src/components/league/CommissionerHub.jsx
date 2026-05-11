@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CalendarDays, Eye, FastForward, Lock, Play, RefreshCw, ShieldCheck, Trophy, Unlock, Users } from "lucide-react";
+import { Bot, CalendarDays, Eye, FastForward, Lock, Newspaper, Play, RefreshCw, ShieldCheck, Trophy, Unlock, Users } from "lucide-react";
 import { toast } from "sonner";
 import { appClient } from "@/api/appClient";
 import { Button } from "@/components/ui/button";
@@ -104,6 +104,7 @@ export default function CommissionerHub({ league }) {
   const currentWeek = weeks.find((week) => Number(week.week_number) === currentWeekNumber) || null;
   const weekStatus = String(currentWeek?.status || "LINEUPS_OPEN").toUpperCase();
   const currentWeekResults = weekResults.filter((result) => Number(result.week_number) === currentWeekNumber);
+  const weekFourComplete = weekResults.some((result) => Number(result.week_number) === 4);
   const weekResolved = currentWeekResults.length > 0 || weekStatus === "RESOLVED";
   const resultsRevealed = String(currentWeek?.reveal_state || "").toLowerCase() === "revealed";
   const scheduleGenerated = schedules.length > 0 && matchups.length > 0;
@@ -127,6 +128,7 @@ export default function CommissionerHub({ league }) {
     queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-week-results", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-player-leaderboard", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-news", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
     queryClient.invalidateQueries({
@@ -148,6 +150,7 @@ export default function CommissionerHub({ league }) {
         resolve_week: "Week resolved.",
         reveal_week_results: "Results revealed.",
         advance_week: "Advanced to next week.",
+        generate_midseason_recap: "Midseason recap published.",
         recalculate_standings: "Standings recalculated.",
         update_week_status: "Week status updated.",
       };
@@ -283,6 +286,12 @@ export default function CommissionerHub({ league }) {
           <RefreshCw className="mr-2 h-5 w-5" />
           Recalculate Standings
         </Button>
+        {weekFourComplete && (
+          <Button onClick={() => run("generate_midseason_recap", { week_number: 4 })} disabled={actionBusy} className="neo-btn bg-[#F7B801] text-black">
+            <Newspaper className="mr-2 h-5 w-5" />
+            Midseason Recap
+          </Button>
+        )}
         <Button asChild className="neo-btn bg-white text-black">
           <Link to={`/LeagueManage?id=${league.id}&tab=schedule`}>Schedule Details</Link>
         </Button>

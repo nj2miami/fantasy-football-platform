@@ -83,6 +83,7 @@ export default function LeagueCommunications({ league, members = [] }) {
     mutationFn: () => appClient.entities.LeagueNewsItem.create({
       league_id: league.id,
       title: newsForm.title.trim(),
+      summary: newsForm.body.trim().replace(/\s+/g, " ").slice(0, 180),
       body: newsForm.body.trim(),
       news_type: "COMMISSIONER",
       status: "PUBLISHED",

@@ -272,6 +272,14 @@ function StyledNewsBody({ body }) {
   return <div className="mt-2">{elements}</div>;
 }
 
+function newsSummary(item) {
+  const summary = String(item?.summary || "").trim();
+  if (summary) return summary;
+  const body = String(item?.body || "").replace(/\s+/g, " ").trim();
+  const match = body.match(/^(.{40,180}?[.!?])(\s|$)/);
+  return (match?.[1] || body.slice(0, 160) || "Open the full story for details.").trim();
+}
+
 function EmptyState({ icon: Icon = Inbox, title, detail }) {
   return (
     <div className="neo-border bg-gray-50 p-5 text-center">
@@ -564,7 +572,22 @@ function CommissionerMessagePanel({ league }) {
   );
 }
 
-function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId }) {
+function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId, selectedNewsId }) {
+  const { data: selectedNews = null, isLoading: isLoadingSelected, error: selectedError } = useQuery({
+    queryKey: ["league-news-story", leagueId, selectedNewsId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("league_news_items")
+        .select("*")
+        .eq("league_id", leagueId)
+        .eq("id", selectedNewsId)
+        .eq("status", "PUBLISHED")
+        .maybeSingle();
+      if (error) throw error;
+      return data || null;
+    },
+    enabled: Boolean(leagueId && selectedNewsId),
+  });
   const currentRevealState = leagueWeekData?.randomization?.reveal_state || season?.reveal_state || "hidden";
   const generatedItems = [
     {
@@ -581,15 +604,41 @@ function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId })
     })),
   ];
   const items = newsItems.length ? newsItems : generatedItems;
+  if (selectedNewsId) {
+    return (
+      <div className="grid gap-5 lg:grid-cols-3">
+        <Panel
+          title="League News"
+          icon={Newspaper}
+          action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/news?id=${leagueId}`}>Back to Headlines</Link>}
+        >
+          {selectedError && <div className="neo-border mb-4 bg-red-50 p-3 text-sm font-bold text-red-700">{selectedError.message || "Unable to load story."}</div>}
+          {isLoadingSelected ? (
+            <p className="p-3 text-center font-bold">Loading story...</p>
+          ) : selectedNews ? (
+            <article>
+              <p className="text-xs font-black uppercase text-gray-500">{formatDate(selectedNews.published_at || selectedNews.created_date)}</p>
+              <h2 className="mt-1 text-2xl font-black uppercase text-orange-600">{selectedNews.title}</h2>
+              {newsSummary(selectedNews) && <p className="mt-2 text-sm font-black uppercase text-gray-500">{newsSummary(selectedNews)}</p>}
+              <StyledNewsBody body={selectedNews.body} />
+            </article>
+          ) : (
+            <EmptyState title="Story not found" detail="This news item is unavailable or has been archived." />
+          )}
+        </Panel>
+        <ReleasedPlayersPanel leagueId={leagueId} />
+      </div>
+    );
+  }
   return (
     <div className="grid gap-5 lg:grid-cols-3">
       <div className="space-y-3 lg:col-span-2">
         {items.map((item) => (
-          <article key={item.id} className="neo-border bg-white p-4">
+          <Link key={item.id} to={item.id === "week-status" ? `/league/news?id=${leagueId}` : `/league/news?id=${leagueId}&newsId=${item.id}`} className="neo-border block bg-white p-4 hover:bg-[#FFF7D6]">
             <p className="text-xs font-black uppercase text-gray-500">{formatDate(item.published_at || item.created_date)}</p>
             <h2 className="mt-1 text-xl font-black uppercase text-orange-600">{item.title}</h2>
-            <StyledNewsBody body={item.body} />
-          </article>
+            <p className="mt-2 text-sm font-bold leading-6 text-gray-700">{newsSummary(item)}</p>
+          </Link>
         ))}
       </div>
       <ReleasedPlayersPanel leagueId={leagueId} />
@@ -1015,6 +1064,7 @@ function LeagueHubPage(props) {
     leagueWeekData,
     newsItems,
     activeTab,
+    selectedNewsId,
   } = props;
   const currentWeek = season?.current_week || 1;
   return (
@@ -1040,7 +1090,7 @@ function LeagueHubPage(props) {
           <StandingsPanel league={league} standings={standings} members={members} isLoading={isLoadingStandings} compact />
         </div>
       )}
-      {activeTab === "news" && <NewsPanel newsItems={newsItems} auditEvents={auditEvents} season={season} leagueWeekData={leagueWeekData} leagueId={league.id} />}
+      {activeTab === "news" && <NewsPanel newsItems={newsItems} auditEvents={auditEvents} season={season} leagueWeekData={leagueWeekData} leagueId={league.id} selectedNewsId={selectedNewsId} />}
       {activeTab === "player-leaders" && <PlayerLeaderboardPanel leagueId={league.id} />}
       {activeTab === "free-agents" && <FreeAgentBoard league={league} currentMember={currentMember} />}
       {activeTab === "rules" && (
@@ -1806,6 +1856,7 @@ export default function League() {
   const leagueId = searchParams.get("id") || searchParams.get("leagueId");
   const requestedManagerId = searchParams.get("managerId") || searchParams.get("memberId") || searchParams.get("teamId");
   const requestedMatchId = searchParams.get("matchId");
+  const selectedNewsId = searchParams.get("newsId");
   const routeWeekNumber = Number(params.weekNumber || 0);
   const routeHubSection = params.hubSection;
   const routeManagerSection = params.managerSection;
@@ -1959,8 +2010,14 @@ export default function League() {
   const { data: newsItems = [] } = useQuery({
     queryKey: ["league-news", leagueId],
     queryFn: async () => {
-      const rows = await appClient.entities.LeagueNewsItem.filter({ league_id: leagueId, status: "PUBLISHED" }, "-published_at");
-      return rows.sort((a, b) => new Date(b.published_at || b.created_date).getTime() - new Date(a.published_at || a.created_date).getTime());
+      const { data, error } = await supabase
+        .from("league_news_items")
+        .select("id,league_id,title,summary,news_type,status,published_at,created_date,source_week_number,source_draft_id")
+        .eq("league_id", leagueId)
+        .eq("status", "PUBLISHED")
+        .order("published_at", { ascending: false });
+      if (error) throw error;
+      return data || [];
     },
     enabled: Boolean(leagueId && currentMember),
   });
@@ -2110,6 +2167,7 @@ export default function League() {
           leagueWeekData={leagueWeekData}
           newsItems={newsItems}
           activeTab={activeTab}
+          selectedNewsId={selectedNewsId}
         />
       )}
     </LeagueShell>

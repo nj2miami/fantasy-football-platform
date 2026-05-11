@@ -94,30 +94,38 @@ function firstSentence(text: string) {
   return (match?.[1] || cleaned.slice(0, 180)).trim();
 }
 
-function buildPrompt(recapData: Json) {
-  return `You are Alti Verse, the signature fantasy fantasy football analyst for Retro Fantasy Football.
+function lineupSlotStatus(slot: Json) {
+  return String(slot.status || slot.lineup_status || slot.slot_status || slot.role || "active").toLowerCase();
+}
 
-Write a polished post-draft newsletter titled "Draft Recap".
+function isStartedLineupSlot(slot: Json) {
+  const status = lineupSlotStatus(slot);
+  return !["bench", "benched", "treating", "treatment", "treated"].includes(status);
+}
+
+function buildPrompt(recapData: Json) {
+  return `You are Alti Verse, the signature fantasy football analyst for Retro Fantasy Football.
+
+Write a polished midseason league update after Week 4.
 
 Style:
-- Write in Alti Verse's voice: sharp, playful, cosmic-sports-energy, confident, and fair.
-- Sound like an analyst, not a generic commissioner announcement.
-- Fair but opinionated.
-- Grade every team.
-- Use expected season numbers only as summarized support, not as a raw stat dump.
-- Do not reveal any hidden source weeks or raw player stat lines.
-- Target 900 to 1300 words.
-- Return clean newsletter copy with clear section headings and bullet lists where useful.
+- Sharp, playful, confident, and fair.
+- Sound like a fantasy analyst, not a generic system announcement.
+- Do not reveal hidden source weeks or raw stat-line internals.
+- Explain how players were expected to perform versus how they are performing.
+- Call out underperformers and sleepers.
+- Include team-level league context.
+- Target 800 to 1200 words.
+- Return clean newsletter copy with a headline-friendly opening and clear section headings.
 
 Required sections:
-1. Opening league-wide recap.
-2. Team-by-team draft grades.
-3. Best value picks.
-4. Riskiest builds.
-5. Projected strongest teams by expected numbers.
-6. Closing note.
+1. League state after Week 4.
+2. Expected stars versus actual performance.
+3. Underperforming players and teams.
+4. Sleepers and surprise contributors.
+5. Second-half storylines.
 
-Draft data:
+Midseason data:
 ${JSON.stringify(recapData, null, 2)}`;
 }
 
@@ -143,91 +151,110 @@ async function callGemini(prompt: string) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(errorMessage(body) || `Gemini request failed with status ${response.status}`);
   const text = body?.candidates?.[0]?.content?.parts?.map((part: Json) => part.text || "").join("").trim();
-  if (!text) throw new Error("Gemini returned an empty Draft Recap.");
+  if (!text) throw new Error("Gemini returned an empty Midseason Recap.");
   return { text, model, usageMetadata: body?.usageMetadata || null, responseId: body?.responseId || null };
 }
 
-async function generateDraftRecap(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+async function generateMidseasonRecap(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const leagueId = String(payload.league_id || "");
-  const draftId = String(payload.draft_id || "");
-  if (!leagueId || !draftId) throw new Error("league_id and draft_id are required");
+  const sourceWeekNumber = Number(payload.week_number || 4);
+  if (!leagueId) throw new Error("league_id is required");
   const { league } = await requireLeagueControl(supabase, user, leagueId);
-  const { data: draft, error: draftError } = await supabase
-    .from("drafts")
-    .select("*")
-    .eq("id", draftId)
-    .eq("league_id", leagueId)
-    .single();
-  if (draftError) throw draftError;
-  if (String(draft.status || "").toUpperCase() !== "COMPLETED") throw new Error("Draft Recap can only be generated after the draft is completed.");
 
-  const [membersResult, turnsResult, picksResult] = await Promise.all([
-    supabase.from("league_members").select("*").eq("league_id", leagueId).eq("is_active", true),
-    supabase.from("draft_turns").select("*").eq("draft_id", draftId).order("overall_pick", { ascending: true }),
-    supabase.from("draft_picks").select("*").eq("draft_id", draftId).order("overall_pick", { ascending: true }),
+  const { count: weekFourResults, error: countError } = await supabase
+    .from("league_week_results")
+    .select("id", { count: "exact", head: true })
+    .eq("league_id", leagueId)
+    .eq("week_number", sourceWeekNumber);
+  if (countError) throw countError;
+  if (!weekFourResults) throw new Error("Midseason Recap is available after Week 4 has been resolved.");
+
+  const [
+    membersResult,
+    standingsResult,
+    resultsResult,
+    matchupsResult,
+    leaderboardResult,
+  ] = await Promise.all([
+    supabase.from("league_members").select("id,team_name,display_name,is_ai,ai_persona").eq("league_id", leagueId).eq("is_active", true),
+    supabase.from("standings").select("*").eq("league_id", leagueId),
+    supabase.from("league_week_results").select("league_member_id,week_number,total_points,weekly_rank,league_points,scoring_details").eq("league_id", leagueId).lte("week_number", sourceWeekNumber),
+    supabase.from("matchups").select("*").eq("league_id", leagueId).lte("week_number", sourceWeekNumber),
+    supabase.from("league_player_leaderboards").select("leaders,generated_through_week").eq("league_id", leagueId).maybeSingle(),
   ]);
   if (membersResult.error) throw membersResult.error;
-  if (turnsResult.error) throw turnsResult.error;
-  if (picksResult.error) throw picksResult.error;
+  if (standingsResult.error) throw standingsResult.error;
+  if (resultsResult.error) throw resultsResult.error;
+  if (matchupsResult.error) throw matchupsResult.error;
+  if (leaderboardResult.error) throw leaderboardResult.error;
 
   const members = membersResult.data || [];
-  const picks = picksResult.data || [];
-  if (!picks.length) throw new Error("Draft has no picks to recap.");
+  const membersById = new Map(members.map((member: Json) => [String(member.id), member]));
+  const resultRows = resultsResult.data || [];
+  const playerTotals = new Map<string, { points: number; starts: number; games: number; ownerId: string }>();
+  for (const result of resultRows) {
+    const ownerId = String(result.league_member_id || "");
+    const details = Array.isArray(result.scoring_details) ? result.scoring_details as Json[] : [];
+    for (const slot of details) {
+      const playerId = String(slot.player_id || "");
+      if (!playerId) continue;
+      const current = playerTotals.get(playerId) || { points: 0, starts: 0, games: 0, ownerId };
+      current.points += Number(slot.scored_points || 0);
+      current.games += 1;
+      if (isStartedLineupSlot(slot)) current.starts += 1;
+      current.ownerId = ownerId || current.ownerId;
+      playerTotals.set(playerId, current);
+    }
+  }
 
-  const playerIds = [...new Set(picks.map((pick: Json) => String(pick.player_id || "")).filter(Boolean))];
-  const [playersResult, scoresResult] = await Promise.all([
-    supabase.from("players").select("id,full_name,player_display_name,position,team").in("id", playerIds),
-    supabase
-      .from("league_player_scores")
-      .select("player_id,position,position_rank,tier_value,expected_avg_points,total_points,weeks_played")
-      .eq("league_id", leagueId)
-      .in("player_id", playerIds),
-  ]);
+  const playerIds = [...playerTotals.keys()];
+  const [playersResult, scoresResult] = playerIds.length ? await Promise.all([
+    supabase.from("players").select("id,player_display_name,full_name,position,team").in("id", playerIds),
+    supabase.from("league_player_scores").select("player_id,position,position_rank,tier_value,expected_avg_points,total_points,weeks_played").eq("league_id", leagueId).in("player_id", playerIds),
+  ]) : [{ data: [], error: null }, { data: [], error: null }];
   if (playersResult.error) throw playersResult.error;
   if (scoresResult.error) throw scoresResult.error;
 
   const playersById = new Map((playersResult.data || []).map((player: Json) => [String(player.id), player]));
   const scoresByPlayer = new Map((scoresResult.data || []).map((score: Json) => [String(score.player_id), score]));
-  const membersById = new Map(members.map((member: Json) => [String(member.id), member]));
-  const teamTierCap = Number(league.team_tier_cap || 25);
-  const picksWithContext = picks.map((pick: Json) => {
-    const player = playersById.get(String(pick.player_id));
-    const score = scoresByPlayer.get(String(pick.player_id));
-    const member = membersById.get(String(pick.league_member_id));
+  const playerComparison = playerIds.map((playerId) => {
+    const actual = playerTotals.get(playerId) || { points: 0, starts: 0, games: 0, ownerId: "" };
+    const player = playersById.get(playerId);
+    const score = scoresByPlayer.get(playerId);
+    const expectedThroughGames = Number(score?.expected_avg_points || 0) * Math.max(Number(actual.games || 0), 1);
+    const delta = Number(actual.points || 0) - expectedThroughGames;
     return {
-      league_member_id: String(pick.league_member_id || ""),
-      overall_pick: Number(pick.overall_pick || 0),
-      round: Number(pick.round || 0),
-      team: memberName(member),
+      player_id: playerId,
       player: playerName(player),
-      nfl_team: player?.team || null,
+      owner: memberName(membersById.get(actual.ownerId)),
       position: score?.position || player?.position || null,
-      tier: Number(score?.tier_value || 1),
+      tier: Number(score?.tier_value || 0),
       position_rank: Number(score?.position_rank || 0),
-      expected_avg_points: formatNumber(score?.expected_avg_points, 2),
-      expected_total_points: formatNumber(score?.total_points, 2),
-      weeks_played: Number(score?.weeks_played || 0),
+      starts: actual.starts,
+      games_played: actual.games,
+      expected_points_to_date: formatNumber(expectedThroughGames, 2),
+      actual_points_to_date: formatNumber(actual.points, 2),
+      points_delta: formatNumber(delta, 2),
     };
   });
+
   const teamSummaries = members.map((member: Json) => {
-    const teamPicks = picksWithContext.filter((pick) => pick.league_member_id === String(member.id || ""));
-    const tierTotal = teamPicks.reduce((sum, pick) => sum + Number(pick.tier || 1), 0);
-    const expectedTotal = teamPicks.reduce((sum, pick) => sum + Number(pick.expected_total_points || 0), 0);
-    const expectedAverage = teamPicks.reduce((sum, pick) => sum + Number(pick.expected_avg_points || 0), 0);
-    const composition = teamPicks.reduce((counts: Record<string, number>, pick) => {
-      const position = String(pick.position || "UNK").toUpperCase();
-      counts[position] = (counts[position] || 0) + 1;
-      return counts;
-    }, {});
+    const memberResults = resultRows.filter((row: Json) => row.league_member_id === member.id);
+    const standing = (standingsResult.data || []).find((row: Json) => row.league_member_id === member.id) || {};
     return {
       team: memberName(member),
       ai_persona: member.is_ai ? member.ai_persona || "BALANCED" : null,
-      picks: teamPicks,
-      tier_spend: tierTotal,
-      remaining_tier_cap: teamTierCap - tierTotal,
-      expected_total_points: formatNumber(expectedTotal, 2),
-      expected_avg_points_sum: formatNumber(expectedAverage, 2),
-      roster_composition: composition,
+      wins: Number(standing.wins || 0),
+      losses: Number(standing.losses || 0),
+      ties: Number(standing.ties || 0),
+      points_for: formatNumber(standing.points_for, 2),
+      points_against: formatNumber(standing.points_against, 2),
+      weekly_scores: memberResults.map((row: Json) => ({
+        week: Number(row.week_number || 0),
+        points: formatNumber(row.total_points, 2),
+        rank: row.weekly_rank || null,
+        league_points: formatNumber(row.league_points, 2),
+      })),
     };
   });
 
@@ -235,31 +262,32 @@ async function generateDraftRecap(supabase: ReturnType<typeof createClient>, use
     league: {
       name: league.name,
       source_season_year: league.source_season_year,
-      team_tier_cap: teamTierCap,
-      scoring_rules: league.scoring_rules || {},
+      ranking_system: league.ranking_system,
       scoring_rules_locked_at: league.scoring_rules_locked_at || null,
-      scoring_rules_lock_source: league.scoring_rules_lock_source || null,
-      draft_config: league.draft_config || {},
-      roster_rules: league.roster_rules || {},
     },
-    draft: {
-      id: draft.id,
-      type: draft.type,
-      completed_at: draft.completed_at,
-      total_picks: picksWithContext.length,
-      order: (turnsResult.data || []).map((turn: Json) => ({
-        overall_pick: turn.overall_pick,
-        round: turn.round,
-        team: memberName(membersById.get(String(turn.league_member_id))),
-      })),
-      picks: picksWithContext,
+    standings: teamSummaries,
+    matchups: (matchupsResult.data || []).map((matchup: Json) => ({
+      week: Number(matchup.week_number || 0),
+      home: memberName(membersById.get(String(matchup.home_member_id))),
+      away: memberName(membersById.get(String(matchup.away_member_id))),
+      home_score: formatNumber(matchup.home_score, 2),
+      away_score: formatNumber(matchup.away_score, 2),
+    })),
+    leaderboard: leaderboardResult.data || null,
+    expected_vs_actual_players: {
+      overperformers: [...playerComparison].sort((a, b) => Number(b.points_delta) - Number(a.points_delta)).slice(0, 12),
+      underperformers: [...playerComparison].sort((a, b) => Number(a.points_delta) - Number(b.points_delta)).slice(0, 12),
+      sleepers: playerComparison
+        .filter((row) => Number(row.tier || 0) <= 2 || Number(row.position_rank || 999) > 20)
+        .sort((a, b) => Number(b.points_delta) - Number(a.points_delta))
+        .slice(0, 12),
     },
-    teams: teamSummaries,
   };
 
   const generated = await callGemini(buildPrompt(recapData));
+  const summary = firstSentence(generated.text);
   const storageBucket = "league-news";
-  const storagePath = `draft-recaps/${leagueId}/${draftId}.txt`;
+  const storagePath = `midseason-recaps/${leagueId}/week-${sourceWeekNumber}.txt`;
   const { error: uploadError } = await supabase.storage
     .from(storageBucket)
     .upload(storagePath, new Blob([generated.text], { type: "text/plain;charset=utf-8" }), {
@@ -268,34 +296,34 @@ async function generateDraftRecap(supabase: ReturnType<typeof createClient>, use
     });
   if (uploadError) throw uploadError;
 
-  const generationMetadata = {
-    provider: "google_gemini",
-    model: generated.model,
-    response_id: generated.responseId,
-    usage_metadata: generated.usageMetadata,
-    generated_at: new Date().toISOString(),
-    pick_count: picksWithContext.length,
-  };
   const newsPayload = {
     league_id: leagueId,
-    title: "Draft Recap",
-    summary: firstSentence(generated.text),
+    title: `Midseason AI Update: Week ${sourceWeekNumber}`,
+    summary,
     body: generated.text,
-    news_type: "AI_DRAFT_RECAP",
+    news_type: "AI_MIDSEASON_RECAP",
     status: "PUBLISHED",
     published_at: new Date().toISOString(),
     storage_bucket: storageBucket,
     storage_path: storagePath,
-    source_draft_id: draftId,
-    generation_metadata: generationMetadata,
+    source_week_number: sourceWeekNumber,
+    generation_metadata: {
+      provider: "google_gemini",
+      model: generated.model,
+      response_id: generated.responseId,
+      usage_metadata: generated.usageMetadata,
+      generated_at: new Date().toISOString(),
+      result_weeks_included: sourceWeekNumber,
+    },
     updated_date: new Date().toISOString(),
   };
+
   const { data: existing, error: existingError } = await supabase
     .from("league_news_items")
     .select("id")
     .eq("league_id", leagueId)
-    .eq("source_draft_id", draftId)
-    .eq("news_type", "AI_DRAFT_RECAP")
+    .eq("news_type", "AI_MIDSEASON_RECAP")
+    .eq("source_week_number", sourceWeekNumber)
     .maybeSingle();
   if (existingError) throw existingError;
   const { data: newsItem, error: newsError } = existing
@@ -312,7 +340,7 @@ Deno.serve(async (request) => {
     const payload = await request.json().catch(() => ({}));
     const supabase = adminClient();
     const user = await getUser(request, supabase);
-    return json(await generateDraftRecap(supabase, user, payload));
+    return json(await generateMidseasonRecap(supabase, user, payload));
   } catch (error) {
     return json({ error: errorMessage(error) }, 400);
   }
