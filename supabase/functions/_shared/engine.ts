@@ -1788,6 +1788,8 @@ async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, u
   if (resultError) throw resultError;
 
   const totalsByPlayer = new Map<string, number>();
+  const startsByPlayer = new Map<string, number>();
+  const gamesPlayedByPlayer = new Map<string, number>();
   const scoringOwnerByPlayer = new Map<string, string>();
   for (const result of resultRows || []) {
     const resultMemberId = String(result.league_member_id || "");
@@ -1796,6 +1798,10 @@ async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, u
       const playerId = String(slot.player_id || "");
       if (!playerId) continue;
       totalsByPlayer.set(playerId, Number((totalsByPlayer.get(playerId) || 0) + Number(slot.scored_points || 0)));
+      gamesPlayedByPlayer.set(playerId, Number(gamesPlayedByPlayer.get(playerId) || 0) + 1);
+      if (isStartedLineupSlot(slot)) {
+        startsByPlayer.set(playerId, Number(startsByPlayer.get(playerId) || 0) + 1);
+      }
       if (resultMemberId) scoringOwnerByPlayer.set(playerId, resultMemberId);
     }
   }
@@ -1868,6 +1874,8 @@ async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, u
         position_rank: score.position_rank,
         tier_value: score.tier_value,
         durability: durabilityByPlayer.get(playerId) ?? null,
+        starts: startsByPlayer.get(playerId) || 0,
+        games_played: gamesPlayedByPlayer.get(playerId) || 0,
         total_points: Number((totalsByPlayer.get(playerId) || 0).toFixed(2)),
       };
     })

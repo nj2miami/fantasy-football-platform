@@ -621,17 +621,27 @@ function PlayerLeaderboardPanel({ leagueId }) {
                 <div className="border-b-4 border-black bg-black p-3 text-white">
                   <p className="text-center text-lg font-black uppercase">{position}</p>
                 </div>
-                <div className="divide-y-2 divide-black/10">
+                <div className="overflow-x-auto divide-y-2 divide-black/10">
+                  <div className="grid min-w-[520px] grid-cols-[minmax(300px,1fr)_64px_64px_88px] gap-3 bg-white px-3 py-2 text-[10px] font-black uppercase text-gray-500">
+                    <span>Player</span>
+                    <span className="text-center">Starts</span>
+                    <span className="text-center">GP</span>
+                    <span className="text-right">Points</span>
+                  </div>
                   {rows.map((row, index) => (
                     <Link
                       key={row.player_id}
                       to={createPageUrl(`PlayerStats?id=${row.player_id}`)}
-                      className="block overflow-x-auto whitespace-nowrap p-3 text-sm font-bold hover:bg-[#FFF7D6]"
+                      className="grid min-w-[520px] grid-cols-[minmax(300px,1fr)_64px_64px_88px] gap-3 whitespace-nowrap p-3 text-sm font-bold hover:bg-[#FFF7D6]"
                     >
-                      <span className="font-black">{index + 1}</span>
-                      <span> - {row.player_name} ({row.team || "FA"} / {row.fantasy_team_owner || "FA"}) </span>
-                      <span>[T{row.tier_value || "--"} / {durabilityText(row.durability)}] </span>
-                      <span className="font-black">{formatNumber(row.total_points, 2)}</span>
+                      <span className="overflow-hidden text-ellipsis">
+                        <span className="font-black">{index + 1}</span>
+                        <span> - {row.player_name} ({row.team || "FA"} / {row.fantasy_team_owner || "FA"}) </span>
+                        <span>[T{row.tier_value || "--"} / {durabilityText(row.durability)}]</span>
+                      </span>
+                      <span className="text-center font-black">{row.starts || 0}</span>
+                      <span className="text-center font-black">{row.games_played || 0}</span>
+                      <span className="text-right font-black">{formatNumber(row.total_points, 2)}</span>
                     </Link>
                   ))}
                   {!rows.length && <p className="p-3 text-center text-sm font-bold text-gray-500">No leaders yet.</p>}
