@@ -1777,6 +1777,61 @@ async function updatePlayoffSettings(supabase: ReturnType<typeof createClient>, 
   return { league: data, changed_keys: ["playoff_team_count"], news: { title, body } };
 }
 
+async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueAccess(supabase, user, payload.league_id);
+  const positions = ["QB", "OFF", "DEF", "K"];
+  const leaders: Record<string, Json[]> = {};
+
+  for (const position of positions) {
+    const { data: scoreRows, error: scoreError } = await supabase
+      .from("league_player_scores")
+      .select("player_id,position,position_rank,tier_value,total_points,expected_avg_points")
+      .eq("league_id", league.id)
+      .eq("position", position)
+      .order("total_points", { ascending: false })
+      .order("expected_avg_points", { ascending: false })
+      .limit(5);
+    if (scoreError) throw scoreError;
+
+    const playerIds = (scoreRows || []).map((row: Json) => String(row.player_id)).filter(Boolean);
+    const [{ data: players, error: playerError }, { data: durabilityRows, error: durabilityError }] = await Promise.all([
+      playerIds.length
+        ? supabase
+          .from("players")
+          .select("id,player_display_name,full_name,name,team,position")
+          .in("id", playerIds)
+        : Promise.resolve({ data: [], error: null }),
+      playerIds.length && durabilityEnabled(league)
+        ? supabase
+          .from("league_player_durability")
+          .select("player_id,durability")
+          .eq("league_id", league.id)
+          .in("player_id", playerIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (playerError) throw playerError;
+    if (durabilityError) throw durabilityError;
+
+    const playerById = new Map((players || []).map((player: Json) => [String(player.id), player]));
+    const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
+    leaders[position] = (scoreRows || []).map((row: Json) => {
+      const player = playerById.get(String(row.player_id)) || {};
+      return {
+        player_id: row.player_id,
+        player_name: player.player_display_name || player.full_name || player.name || row.player_id,
+        team: player.team || null,
+        position: row.position,
+        position_rank: row.position_rank,
+        tier_value: row.tier_value,
+        durability: durabilityByPlayer.get(String(row.player_id)) ?? null,
+        total_points: Number(row.total_points || 0),
+      };
+    });
+  }
+
+  return { league_id: league.id, leaders };
+}
+
 const LEAGUE_SETTINGS_UPDATE_KEYS = [
   "name",
   "description",
@@ -4710,6 +4765,8 @@ export async function handleAction(action: string, request: Request) {
                                     ? await updateLeagueSettings(supabase, user, payload)
                                     : action === "update_playoff_settings"
                                       ? await updatePlayoffSettings(supabase, user, payload)
+                                      : action === "get_player_leaderboard"
+                                        ? await getPlayerLeaderboard(supabase, user, payload)
                                       : action === "update_league_scoring"
                                         ? await updateLeagueScoring(supabase, user, payload)
                                       : action === "lock_scoring_rules"

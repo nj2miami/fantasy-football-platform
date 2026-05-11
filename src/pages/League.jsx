@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  BarChart3,
   Bot,
   CalendarDays,
   CheckCircle,
@@ -33,6 +34,7 @@ import { Button } from "@/components/ui/button";
 const HUB_TABS = [
   { id: "overview", path: "", label: "Overview", icon: Trophy },
   { id: "news", path: "news", label: "League News", icon: Newspaper },
+  { id: "player-leaders", path: "player-leaders", label: "Player Leaders", icon: BarChart3 },
   { id: "free-agents", path: "free-agents", label: "Free Agent Board", icon: Shuffle },
   { id: "rules", path: "rules", label: "League Rules", icon: ClipboardList },
   { id: "schedule", path: "schedule", label: "Full Schedule", icon: CalendarDays },
@@ -592,6 +594,60 @@ function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId })
   );
 }
 
+function PlayerLeaderboardPanel({ leagueId }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["league-player-leaderboard", leagueId],
+    queryFn: () => appClient.functions.invoke("get_player_leaderboard", { league_id: leagueId }),
+    enabled: Boolean(leagueId),
+  });
+  const leadersByPosition = data?.leaders || {};
+  return (
+    <Panel title="Player Leaders" icon={BarChart3}>
+      {error && <div className="neo-border mb-4 bg-red-50 p-3 text-sm font-bold text-red-700">{error.message || "Unable to load player leaders."}</div>}
+      {isLoading ? (
+        <p className="p-3 text-center font-bold">Loading player leaders...</p>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-4">
+          {FREE_AGENT_POSITIONS.map((position) => {
+            const rows = leadersByPosition[position] || [];
+            return (
+              <div key={position} className="neo-border bg-gray-50">
+                <div className="border-b-4 border-black bg-black p-3 text-white">
+                  <p className="text-center text-lg font-black uppercase">{position}</p>
+                </div>
+                <div className="divide-y-2 divide-black/10">
+                  {rows.map((row, index) => (
+                    <Link
+                      key={row.player_id}
+                      to={createPageUrl(`PlayerStats?id=${row.player_id}`)}
+                      className="grid grid-cols-[28px_minmax(0,1fr)_auto] gap-2 p-3 text-sm hover:bg-[#FFF7D6]"
+                    >
+                      <span className="font-black text-gray-500">#{index + 1}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate font-black">{row.player_name}</span>
+                        <span className="block text-xs font-bold uppercase text-gray-500">{row.team || "FA"}</span>
+                        <span className="mt-2 flex flex-wrap gap-2">
+                          <TierBadge tier={row.tier_value} />
+                          <DurabilityBadge durability={row.durability} />
+                        </span>
+                      </span>
+                      <span className="text-right">
+                        <span className="block text-[10px] font-black uppercase text-gray-500">Fantasy</span>
+                        <span className="block text-lg font-black">{formatNumber(row.total_points, 2)}</span>
+                      </span>
+                    </Link>
+                  ))}
+                  {!rows.length && <p className="p-3 text-center text-sm font-bold text-gray-500">No leaders yet.</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function RulesPanel({ league, auditEvents, auditFeedback, onVote, isVoting }) {
   const feedbackCounts = (eventId) => {
     const rows = auditFeedback.filter((item) => item.audit_event_id === eventId);
@@ -959,6 +1015,7 @@ function LeagueHubPage(props) {
         </div>
       )}
       {activeTab === "news" && <NewsPanel newsItems={newsItems} auditEvents={auditEvents} season={season} leagueWeekData={leagueWeekData} leagueId={league.id} />}
+      {activeTab === "player-leaders" && <PlayerLeaderboardPanel leagueId={league.id} />}
       {activeTab === "free-agents" && <FreeAgentBoard league={league} currentMember={currentMember} />}
       {activeTab === "rules" && (
         <RulesPanel
