@@ -1780,53 +1780,109 @@ async function updatePlayoffSettings(supabase: ReturnType<typeof createClient>, 
 async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
   const { league } = await requireLeagueAccess(supabase, user, payload.league_id);
   const positions = ["QB", "OFF", "DEF", "K"];
-  const leaders: Record<string, Json[]> = {};
+  const emptyLeaders = Object.fromEntries(positions.map((position) => [position, []]));
+  const { data: resultRows, error: resultError } = await supabase
+    .from("league_week_results")
+    .select("league_member_id,scoring_details")
+    .eq("league_id", league.id);
+  if (resultError) throw resultError;
 
-  for (const position of positions) {
-    const { data: scoreRows, error: scoreError } = await supabase
+  const totalsByPlayer = new Map<string, number>();
+  const scoringOwnerByPlayer = new Map<string, string>();
+  for (const result of resultRows || []) {
+    const resultMemberId = String(result.league_member_id || "");
+    const details = Array.isArray(result.scoring_details) ? result.scoring_details as Json[] : [];
+    for (const slot of details) {
+      const playerId = String(slot.player_id || "");
+      if (!playerId) continue;
+      totalsByPlayer.set(playerId, Number((totalsByPlayer.get(playerId) || 0) + Number(slot.scored_points || 0)));
+      if (resultMemberId) scoringOwnerByPlayer.set(playerId, resultMemberId);
+    }
+  }
+
+  const playerIds = [...totalsByPlayer.entries()]
+    .filter(([, total]) => Number.isFinite(total))
+    .map(([playerId]) => playerId);
+  if (!playerIds.length) return { league_id: league.id, leaders: emptyLeaders };
+
+  const { data: leagueMembers, error: leagueMemberError } = await supabase
+    .from("league_members")
+    .select("id,team_name")
+    .eq("league_id", league.id)
+    .eq("is_active", true);
+  if (leagueMemberError) throw leagueMemberError;
+  const leagueMemberIds = (leagueMembers || []).map((member: Json) => String(member.id)).filter(Boolean);
+
+  const [
+    { data: scoreRows, error: scoreError },
+    { data: players, error: playerError },
+    { data: durabilityRows, error: durabilityError },
+    { data: rosterRows, error: rosterError },
+  ] = await Promise.all([
+    supabase
       .from("league_player_scores")
-      .select("player_id,position,position_rank,tier_value,total_points,expected_avg_points")
+      .select("player_id,position,position_rank,tier_value")
       .eq("league_id", league.id)
-      .eq("position", position)
-      .order("total_points", { ascending: false })
-      .order("expected_avg_points", { ascending: false })
-      .limit(5);
-    if (scoreError) throw scoreError;
+      .in("player_id", playerIds),
+    supabase
+      .from("players")
+      .select("id,player_display_name,full_name,team,position")
+      .in("id", playerIds),
+    durabilityEnabled(league)
+      ? supabase
+        .from("league_player_durability")
+        .select("player_id,durability")
+        .eq("league_id", league.id)
+        .in("player_id", playerIds)
+      : Promise.resolve({ data: [], error: null }),
+    leagueMemberIds.length
+      ? supabase
+        .from("roster_slots")
+        .select("player_id,league_member_id")
+        .in("league_member_id", leagueMemberIds)
+        .in("player_id", playerIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (scoreError) throw scoreError;
+  if (playerError) throw playerError;
+  if (durabilityError) throw durabilityError;
+  if (rosterError) throw rosterError;
 
-    const playerIds = (scoreRows || []).map((row: Json) => String(row.player_id)).filter(Boolean);
-    const [{ data: players, error: playerError }, { data: durabilityRows, error: durabilityError }] = await Promise.all([
-      playerIds.length
-        ? supabase
-          .from("players")
-          .select("id,player_display_name,full_name,team,position")
-          .in("id", playerIds)
-        : Promise.resolve({ data: [], error: null }),
-      playerIds.length && durabilityEnabled(league)
-        ? supabase
-          .from("league_player_durability")
-          .select("player_id,durability")
-          .eq("league_id", league.id)
-          .in("player_id", playerIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-    if (playerError) throw playerError;
-    if (durabilityError) throw durabilityError;
-
-    const playerById = new Map((players || []).map((player: Json) => [String(player.id), player]));
-    const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
-    leaders[position] = (scoreRows || []).map((row: Json) => {
-      const player = playerById.get(String(row.player_id)) || {};
+  const currentOwnerIdByPlayer = new Map((rosterRows || []).map((row: Json) => [String(row.player_id), String(row.league_member_id)]));
+  const scoreByPlayer = new Map((scoreRows || []).map((row: Json) => [String(row.player_id), row]));
+  const playerById = new Map((players || []).map((player: Json) => [String(player.id), player]));
+  const durabilityByPlayer = new Map((durabilityRows || []).map((row: Json) => [String(row.player_id), Number(row.durability)]));
+  const ownerNameById = new Map((leagueMembers || []).map((row: Json) => [String(row.id), String(row.team_name || "Manager")]));
+  const allRows = playerIds
+    .map((playerId) => {
+      const score = scoreByPlayer.get(playerId);
+      if (!score || !positions.includes(String(score.position || "").toUpperCase())) return null;
+      const player = playerById.get(playerId) || {};
+      const ownerId = currentOwnerIdByPlayer.get(playerId) || scoringOwnerByPlayer.get(playerId);
       return {
-        player_id: row.player_id,
-        player_name: player.player_display_name || player.full_name || row.player_id,
+        player_id: playerId,
+        player_name: player.player_display_name || player.full_name || playerId,
         team: player.team || null,
-        position: row.position,
-        position_rank: row.position_rank,
-        tier_value: row.tier_value,
-        durability: durabilityByPlayer.get(String(row.player_id)) ?? null,
-        total_points: Number(row.total_points || 0),
+        fantasy_team_owner: ownerNameById.get(String(ownerId || "")) || "FA",
+        position: String(score.position || "").toUpperCase(),
+        position_rank: score.position_rank,
+        tier_value: score.tier_value,
+        durability: durabilityByPlayer.get(playerId) ?? null,
+        total_points: Number((totalsByPlayer.get(playerId) || 0).toFixed(2)),
       };
-    });
+    })
+    .filter(Boolean) as Json[];
+
+  const leaders: Record<string, Json[]> = { ...emptyLeaders };
+  for (const position of positions) {
+    leaders[position] = allRows
+      .filter((row) => row.position === position)
+      .sort((a, b) =>
+        Number(b.total_points || 0) - Number(a.total_points || 0) ||
+        Number(a.position_rank || 9999) - Number(b.position_rank || 9999) ||
+        String(a.player_name || "").localeCompare(String(b.player_name || ""))
+      )
+      .slice(0, 5);
   }
 
   return { league_id: league.id, leaders };

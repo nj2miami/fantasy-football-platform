@@ -216,6 +216,12 @@ function durabilityBonusForSlot(slot) {
   return Number(slot.scored_points || 0) - average * multiplier;
 }
 
+function durabilityText(value) {
+  if (value === null || value === undefined) return "Dur --";
+  const numeric = Number(value || 0);
+  return `Dur ${numeric > 0 ? "+" : ""}${numeric}`;
+}
+
 function lineupSlotIsPlayed(slot) {
   const status = lineupSlotStatus(slot);
   return !["bench", "benched", "treating", "treatment", "treated"].includes(status);
@@ -620,21 +626,12 @@ function PlayerLeaderboardPanel({ leagueId }) {
                     <Link
                       key={row.player_id}
                       to={createPageUrl(`PlayerStats?id=${row.player_id}`)}
-                      className="grid grid-cols-[28px_minmax(0,1fr)_auto] gap-2 p-3 text-sm hover:bg-[#FFF7D6]"
+                      className="block overflow-x-auto whitespace-nowrap p-3 text-sm font-bold hover:bg-[#FFF7D6]"
                     >
-                      <span className="font-black text-gray-500">#{index + 1}</span>
-                      <span className="min-w-0">
-                        <span className="block truncate font-black">{row.player_name}</span>
-                        <span className="block text-xs font-bold uppercase text-gray-500">{row.team || "FA"}</span>
-                        <span className="mt-2 flex flex-wrap gap-2">
-                          <TierBadge tier={row.tier_value} />
-                          <DurabilityBadge durability={row.durability} />
-                        </span>
-                      </span>
-                      <span className="text-right">
-                        <span className="block text-[10px] font-black uppercase text-gray-500">Fantasy</span>
-                        <span className="block text-lg font-black">{formatNumber(row.total_points, 2)}</span>
-                      </span>
+                      <span className="font-black">{index + 1}</span>
+                      <span> - {row.player_name} ({row.team || "FA"} / {row.fantasy_team_owner || "FA"}) </span>
+                      <span>[T{row.tier_value || "--"} / {durabilityText(row.durability)}] </span>
+                      <span className="font-black">{formatNumber(row.total_points, 2)}</span>
                     </Link>
                   ))}
                   {!rows.length && <p className="p-3 text-center text-sm font-bold text-gray-500">No leaders yet.</p>}
