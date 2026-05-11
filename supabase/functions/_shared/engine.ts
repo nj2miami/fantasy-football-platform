@@ -1798,7 +1798,7 @@ async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, u
       playerIds.length
         ? supabase
           .from("players")
-          .select("id,player_display_name,full_name,name,team,position")
+          .select("id,player_display_name,full_name,team,position")
           .in("id", playerIds)
         : Promise.resolve({ data: [], error: null }),
       playerIds.length && durabilityEnabled(league)
@@ -1818,7 +1818,7 @@ async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, u
       const player = playerById.get(String(row.player_id)) || {};
       return {
         player_id: row.player_id,
-        player_name: player.player_display_name || player.full_name || player.name || row.player_id,
+        player_name: player.player_display_name || player.full_name || row.player_id,
         team: player.team || null,
         position: row.position,
         position_rank: row.position_rank,
