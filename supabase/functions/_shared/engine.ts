@@ -1777,8 +1777,7 @@ async function updatePlayoffSettings(supabase: ReturnType<typeof createClient>, 
   return { league: data, changed_keys: ["playoff_team_count"], news: { title, body } };
 }
 
-async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
-  const { league } = await requireLeagueAccess(supabase, user, payload.league_id);
+async function buildPlayerLeaderboard(supabase: ReturnType<typeof createClient>, league: Json) {
   const positions = ["QB", "OFF", "DEF", "K"];
   const emptyLeaders = Object.fromEntries(positions.map((position) => [position, []]));
   const { data: resultRows, error: resultError } = await supabase
@@ -1894,6 +1893,44 @@ async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, u
   }
 
   return { league_id: league.id, leaders };
+}
+
+async function refreshPlayerLeaderboardCache(supabase: ReturnType<typeof createClient>, league: Json) {
+  const leaderboard = await buildPlayerLeaderboard(supabase, league);
+  const { data: latestResultRows, error: latestResultError } = await supabase
+    .from("league_week_results")
+    .select("week_number")
+    .eq("league_id", league.id)
+    .order("week_number", { ascending: false })
+    .limit(1);
+  if (latestResultError) throw latestResultError;
+  const generatedThroughWeek = Number(latestResultRows?.[0]?.week_number || 0);
+  const { data, error } = await supabase
+    .from("league_player_leaderboards")
+    .upsert(
+      {
+        league_id: league.id,
+        leaders: leaderboard.leaders || {},
+        generated_through_week: generatedThroughWeek,
+        generated_at: new Date().toISOString(),
+      },
+      { onConflict: "league_id" },
+    )
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function getPlayerLeaderboard(supabase: ReturnType<typeof createClient>, user: { id: string; email?: string | null }, payload: Json) {
+  const { league } = await requireLeagueAccess(supabase, user, payload.league_id);
+  const { data: cached, error } = await supabase
+    .from("league_player_leaderboards")
+    .select("*")
+    .eq("league_id", league.id)
+    .maybeSingle();
+  if (error) throw error;
+  return cached || await refreshPlayerLeaderboardCache(supabase, league);
 }
 
 const LEAGUE_SETTINGS_UPDATE_KEYS = [
@@ -4624,6 +4661,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
   }
 
   const standingsResult = await recalculateStandings(supabase, { league_id: leagueId });
+  const playerLeaderboard = await refreshPlayerLeaderboardCache(supabase, league);
 
   await supabase
     .from("league_weeks")
@@ -4645,6 +4683,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
       { durability, label: durabilityLabel(durability), multiplier: DURABILITY_MULTIPLIERS[durability] ?? 1 },
     ])),
     standings_delta: standingsResult.standings,
+    player_leaderboard: playerLeaderboard,
     releases,
     reveal_state: randomization?.reveal_state || "hidden",
   };
@@ -4688,8 +4727,9 @@ async function advanceWeek(supabase: ReturnType<typeof createClient>, payload: J
   if (weekError) throw weekError;
   await ensureWeekRandomization(supabase, league, nextWeek, Number(season.source_season_year || league.source_season_year || new Date().getFullYear() - 1));
   await generateMatchups(supabase, league, nextWeek);
+  const playerLeaderboard = await refreshPlayerLeaderboardCache(supabase, league);
 
-  return { current_week: nextWeek, season: updatedSeason, week };
+  return { current_week: nextWeek, season: updatedSeason, week, player_leaderboard: playerLeaderboard };
 }
 
 async function revealWeekResults(supabase: ReturnType<typeof createClient>, payload: Json) {

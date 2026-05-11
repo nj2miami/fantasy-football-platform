@@ -554,15 +554,12 @@ function StandingsPanel({ league, standings, members, isLoading, compact = false
   );
 }
 
-function CommissionerMessagePanel({ league, isCommissioner }) {
-  const note = league.commissioner_message_of_day || league.commissioner_notes || league.notes || league.manager_message || "";
+function CommissionerMessagePanel({ league }) {
+  const note = String(league.commissioner_message_of_day || league.commissioner_notes || league.notes || league.manager_message || "").trim();
+  if (!note) return null;
   return (
     <Panel title="Commissioner Message" icon={MessageSquare}>
-      {note ? (
-        <div className="neo-border bg-[#FFF7D6] p-4 font-bold leading-relaxed text-black">{note}</div>
-      ) : (
-        <EmptyState title="No message posted" detail={isCommissioner ? "Commissioner tools can publish the next update." : "No priority note is posted."} />
-      )}
+      <div className="neo-border bg-[#FFF7D6] p-4 font-bold leading-relaxed text-black">{note}</div>
     </Panel>
   );
 }
@@ -603,7 +600,10 @@ function NewsPanel({ newsItems, auditEvents, season, leagueWeekData, leagueId })
 function PlayerLeaderboardPanel({ leagueId }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["league-player-leaderboard", leagueId],
-    queryFn: () => appClient.functions.invoke("get_player_leaderboard", { league_id: leagueId }),
+    queryFn: async () => {
+      const rows = await appClient.entities.LeaguePlayerLeaderboard.filter({ league_id: leagueId });
+      return rows[0] || await appClient.functions.invoke("get_player_leaderboard", { league_id: leagueId });
+    },
     enabled: Boolean(leagueId),
   });
   const leadersByPosition = data?.leaders || {};
@@ -621,9 +621,11 @@ function PlayerLeaderboardPanel({ leagueId }) {
                 <div className="border-b-4 border-black bg-black p-3 text-white">
                   <p className="text-center text-lg font-black uppercase">{position}</p>
                 </div>
-                <div className="overflow-x-auto divide-y-2 divide-black/10">
-                  <div className="grid min-w-[520px] grid-cols-[minmax(300px,1fr)_64px_64px_88px] gap-3 bg-white px-3 py-2 text-[10px] font-black uppercase text-gray-500">
+                <div className="divide-y-2 divide-black/10">
+                  <div className="hidden grid-cols-[minmax(150px,1fr)_68px_76px_56px_48px_78px] gap-2 bg-white px-3 py-2 text-[10px] font-black uppercase text-gray-500 sm:grid">
                     <span>Player</span>
+                    <span className="text-center">Tier</span>
+                    <span className="text-center">Durability</span>
                     <span className="text-center">Starts</span>
                     <span className="text-center">GP</span>
                     <span className="text-right">Points</span>
@@ -632,16 +634,33 @@ function PlayerLeaderboardPanel({ leagueId }) {
                     <Link
                       key={row.player_id}
                       to={createPageUrl(`PlayerStats?id=${row.player_id}`)}
-                      className="grid min-w-[520px] grid-cols-[minmax(300px,1fr)_64px_64px_88px] gap-3 whitespace-nowrap p-3 text-sm font-bold hover:bg-[#FFF7D6]"
+                      className="block p-3 text-sm font-bold hover:bg-[#FFF7D6] sm:grid sm:grid-cols-[minmax(150px,1fr)_68px_76px_56px_48px_78px] sm:items-center sm:gap-2"
                     >
-                      <span className="overflow-hidden text-ellipsis">
+                      <span className="min-w-0">
                         <span className="font-black">{index + 1}</span>
-                        <span> - {row.player_name} ({row.team || "FA"} / {row.fantasy_team_owner || "FA"}) </span>
-                        <span>[T{row.tier_value || "--"} / {durabilityText(row.durability)}]</span>
+                        <span className="break-words"> - {row.player_name}</span>
+                        <span className="mt-1 block text-xs font-black uppercase text-gray-500">{row.fantasy_team_owner || "FA"}</span>
                       </span>
-                      <span className="text-center font-black">{row.starts || 0}</span>
-                      <span className="text-center font-black">{row.games_played || 0}</span>
-                      <span className="text-right font-black">{formatNumber(row.total_points, 2)}</span>
+                      <span className="mt-3 flex items-center justify-between gap-3 sm:mt-0 sm:block sm:text-center">
+                        <span className="text-[10px] font-black uppercase text-gray-500 sm:hidden">Tier</span>
+                        <span className="font-black">T{row.tier_value || "--"}</span>
+                      </span>
+                      <span className="mt-2 flex items-center justify-between gap-3 sm:mt-0 sm:block sm:text-center">
+                        <span className="text-[10px] font-black uppercase text-gray-500 sm:hidden">Durability</span>
+                        <span className="font-black">{durabilityText(row.durability)}</span>
+                      </span>
+                      <span className="mt-2 flex items-center justify-between gap-3 sm:mt-0 sm:block sm:text-center">
+                        <span className="text-[10px] font-black uppercase text-gray-500 sm:hidden">Starts</span>
+                        <span className="font-black">{row.starts || 0}</span>
+                      </span>
+                      <span className="mt-2 flex items-center justify-between gap-3 sm:mt-0 sm:block sm:text-center">
+                        <span className="text-[10px] font-black uppercase text-gray-500 sm:hidden">GP</span>
+                        <span className="font-black">{row.games_played || 0}</span>
+                      </span>
+                      <span className="mt-2 flex items-center justify-between gap-3 sm:mt-0 sm:block sm:text-right">
+                        <span className="text-[10px] font-black uppercase text-gray-500 sm:hidden">Points</span>
+                        <span className="font-black">{formatNumber(row.total_points, 2)}</span>
+                      </span>
                     </Link>
                   ))}
                   {!rows.length && <p className="p-3 text-center text-sm font-bold text-gray-500">No leaders yet.</p>}

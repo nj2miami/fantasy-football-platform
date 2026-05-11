@@ -126,6 +126,7 @@ export default function CommissionerHub({ league }) {
     queryClient.invalidateQueries({ queryKey: ["league-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-week-results", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-player-leaderboard", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
     queryClient.invalidateQueries({

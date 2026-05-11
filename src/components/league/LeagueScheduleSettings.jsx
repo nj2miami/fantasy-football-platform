@@ -74,6 +74,7 @@ export default function LeagueScheduleSettings({ league, isAdmin = false }) {
     queryClient.invalidateQueries({ queryKey: ["league-game-schedule", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-matchups", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-week-results", league.id] });
+    queryClient.invalidateQueries({ queryKey: ["league-player-leaderboard", league.id] });
     queryClient.invalidateQueries({ queryKey: ["league-lineups", league.id, currentWeekNumber] });
     queryClient.invalidateQueries({ queryKey: ["league-standings", league.id, league.ranking_system] });
     queryClient.invalidateQueries({ queryKey: ["league-news", league.id] });

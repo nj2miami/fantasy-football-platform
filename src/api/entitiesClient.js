@@ -44,6 +44,7 @@ export const entityTableMap = {
   ManagerPointTransaction: "manager_point_transactions",
   LeagueNewsItem: "league_news_items",
   ManagerMessage: "manager_messages",
+  LeaguePlayerLeaderboard: "league_player_leaderboards",
 };
 
 function makeSupabaseEntityApi(entityName) {
