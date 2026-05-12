@@ -127,6 +127,8 @@ const WEEKLY_DURABILITY_LOSS_MIN = 5;
 const WEEKLY_DURABILITY_LOSS_MAX = 20;
 const WIN_DURABILITY_RECOVERY = 5;
 const LOSS_DURABILITY_PENALTY = 5;
+const DEFAULT_GAME_PLAN_TYPE = "balanced";
+const GAME_PLAN_TYPES = new Set(["balanced", "aggressive", "conservative", "counter"]);
 
 const REQUIRED_DRAFT_BUCKETS = ["QB", "OFF", "DEF", "K"];
 const DRAFT_BUCKET_TARGETS: Record<string, number> = { QB: 36, OFF: 36, DEF: 36, K: 20 };
@@ -448,6 +450,11 @@ function isStartedLineupSlot(slot: Json) {
 function isTreatmentLineupSlot(slot: Json) {
   const status = lineupSlotStatus(slot);
   return status === "treating" || status === "treatment" || status === "treated";
+}
+
+function normalizeGamePlanType(value: unknown) {
+  const gamePlanType = String(value || DEFAULT_GAME_PLAN_TYPE).trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  return GAME_PLAN_TYPES.has(gamePlanType) ? gamePlanType : DEFAULT_GAME_PLAN_TYPE;
 }
 
 function lineupSlotMultiplier(slot: Json) {
@@ -4306,6 +4313,8 @@ async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload
   const slots = Array.isArray(payload.slots) ? payload.slots as Json[] : [];
   const memberId = String(payload.league_member_id || "");
   const weekNumber = Number(payload.week_number || 0);
+  const gamePlanType = normalizeGamePlanType(payload.game_plan_type || payload.game_plan?.type);
+  const gamePlanDetails = ((payload.game_plan || {}) as Json).details || ((payload.game_plan || {}) as Json).metadata || {};
   const validation = await validateLineupSlots(supabase, league, memberId, weekNumber, slots);
   const { data: lineup, error } = await supabase
     .from("lineups")
@@ -4315,6 +4324,8 @@ async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload
         league_member_id: payload.league_member_id,
         week_number: payload.week_number,
         slots,
+        game_plan_type: gamePlanType,
+        game_plan: { type: gamePlanType, details: gamePlanDetails },
         finalized_at: new Date().toISOString(),
       },
       { onConflict: "league_id,league_member_id,week_number" },
@@ -4322,6 +4333,21 @@ async function finalizeLineup(supabase: ReturnType<typeof createClient>, payload
     .select("*")
     .single();
   if (error) throw error;
+  const { error: gamePlanError } = await supabase
+    .from("league_game_plans")
+    .upsert(
+      {
+        league_id: payload.league_id,
+        league_member_id: payload.league_member_id,
+        lineup_id: lineup.id,
+        week_number: payload.week_number,
+        game_plan_type: gamePlanType,
+        game_plan: { type: gamePlanType, details: gamePlanDetails },
+        submitted_at: new Date().toISOString(),
+      },
+      { onConflict: "league_id,league_member_id,week_number" },
+    );
+  if (gamePlanError) throw gamePlanError;
   await spendTreatmentPointsIfNeeded(supabase, league, memberId, weekNumber, validation.treatmentPlayerId);
   return { lineup };
 }
@@ -4635,17 +4661,17 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
           : 0;
       for (const slot of lineup.slots || []) {
         const playerId = String(slot.player_id || "");
+        const status = lineupSlotStatus(slot);
+        if (status === "bench" || status === "benched") continue;
         const currentDurability = durabilityUpdates.has(playerId)
           ? durabilityUpdates.get(playerId)
           : durabilityByPlayer.get(playerId);
         if (currentDurability === undefined) continue;
-        const status = lineupSlotStatus(slot);
         const playAdjustment = status === "treating" || status === "treatment" || status === "treated"
           ? 100 - Number(currentDurability)
-          : status === "bench" || status === "benched"
-            ? 0
-            : -(randomDurabilityLossPercent() + gameConditionDurabilityLoss);
-        durabilityUpdates.set(playerId, clampDurability(Number(currentDurability) + playAdjustment + outcomeAdjustment));
+          : -(randomDurabilityLossPercent() + gameConditionDurabilityLoss);
+        const resolvedOutcomeAdjustment = status === "treating" || status === "treatment" || status === "treated" ? 0 : outcomeAdjustment;
+        durabilityUpdates.set(playerId, clampDurability(Number(currentDurability) + playAdjustment + resolvedOutcomeAdjustment));
       }
     }
     for (const [playerId, durability] of durabilityUpdates.entries()) {

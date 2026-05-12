@@ -42,6 +42,12 @@ const HUB_TABS = [
 
 const FREE_AGENT_POSITIONS = ["QB", "OFF", "DEF", "K"];
 const FREE_AGENT_TIERS = [5, 4, 3, 2, 1];
+const GAME_PLAN_OPTIONS = [
+  { value: "balanced", label: "Balanced" },
+  { value: "aggressive", label: "Aggressive" },
+  { value: "conservative", label: "Conservative" },
+  { value: "counter", label: "Counter" },
+];
 const MANAGER_PORTAL_TABS = [
   { id: "lineup", path: "lineup", label: "Set Lineup", icon: ClipboardList },
   { id: "matches", path: "matches", label: "Previous Matches", icon: Trophy },
@@ -1427,6 +1433,8 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
   }, [lineup?.slots, roster]);
   const [statusByPlayer, setStatusByPlayer] = useState(initialStatusByPlayer);
   useEffect(() => setStatusByPlayer(initialStatusByPlayer), [initialStatusByPlayer]);
+  const [gamePlanType, setGamePlanType] = useState(lineup?.game_plan_type || lineup?.game_plan?.type || "balanced");
+  useEffect(() => setGamePlanType(lineup?.game_plan_type || lineup?.game_plan?.type || "balanced"), [lineup?.game_plan, lineup?.game_plan_type]);
   const selectedIds = useMemo(() => {
     return new Set(Object.entries(statusByPlayer).filter(([, status]) => status === "active").map(([playerId]) => playerId));
   }, [statusByPlayer]);
@@ -1494,6 +1502,8 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
         league_member_id: manager.id,
         week_number: lineupWeek,
         slots,
+        game_plan_type: gamePlanType,
+        game_plan: { type: gamePlanType },
       });
     },
     onSuccess: () => {
@@ -1533,6 +1543,19 @@ function ManagerLineupPanel({ league, lineupWeek, manager, scheduleReady, weekRe
         <LineupRequirementBadge label="DEF" value={selectedCounts.DEF} target="1-2" valid={flexPositionsAreValid} />
         <LineupRequirementBadge label="Treatment" value={treatmentCount} target="0-1" valid={treatmentIsValid} />
         <LineupRequirementBadge label="Schedule" value={scheduleReady ? "Ready" : "Missing"} valid={scheduleReady} />
+      </div>
+      <div className="neo-border mb-4 grid gap-3 bg-white p-3 md:grid-cols-[180px_1fr] md:items-center">
+        <label className="text-xs font-black uppercase text-gray-500" htmlFor={`game-plan-${manager.id}-${lineupWeek}`}>Game Plan</label>
+        <select
+          id={`game-plan-${manager.id}-${lineupWeek}`}
+          value={gamePlanType}
+          onChange={(event) => setGamePlanType(event.target.value)}
+          className="neo-border h-10 bg-white px-3 text-sm font-black uppercase text-black"
+        >
+          {GAME_PLAN_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
       </div>
       {finalizeDisabledReason && <p className="mb-4 text-xs font-black uppercase text-red-600">{finalizeDisabledReason}</p>}
       <div className="neo-border overflow-hidden bg-white">
