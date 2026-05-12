@@ -904,6 +904,10 @@ function regularSeasonWeeksForLeague(league: Json) {
   return Math.max(1, Number(league.playoff_start_week || Number(league.season_length_weeks || 8) + 1) - 1);
 }
 
+function playoffStartWeekForLeague(league: Json) {
+  return regularSeasonWeeksForLeague(league) + 1;
+}
+
 function scheduleLocked(league: Json) {
   const config = (league.schedule_config || {}) as Json;
   return config.schedule_locked === true;
@@ -1131,7 +1135,133 @@ function higherValuedSample(samples: Array<{ week: number; points: number }>) {
   return [...samples].sort((a, b) => b.points - a.points || a.week - b.week)[0];
 }
 
+function comparePlayoffSeeds(a: Json, b: Json) {
+  return Number(a.playoff_seed || 9999) - Number(b.playoff_seed || 9999) ||
+    Number(b.wins || 0) - Number(a.wins || 0) ||
+    Number(b.ties || 0) - Number(a.ties || 0) ||
+    Number(b.league_points || 0) - Number(a.league_points || 0) ||
+    Number(b.points_for || 0) - Number(a.points_for || 0);
+}
+
+async function playoffSeedRows(supabase: ReturnType<typeof createClient>, league: Json) {
+  const teamCount = Math.max(2, Number(league.playoff_team_count || 4));
+  const { data: standings, error } = await supabase
+    .from("standings")
+    .select("*")
+    .eq("league_id", league.id)
+    .order("wins", { ascending: false })
+    .order("ties", { ascending: false })
+    .order("league_points", { ascending: false })
+    .order("points_for", { ascending: false });
+  if (error) throw error;
+  const seeded = (standings || []).slice(0, teamCount).map((row: Json, index: number) => ({
+    ...row,
+    playoff_seed: index + 1,
+  }));
+  for (const row of seeded) {
+    const { error: updateError } = await supabase
+      .from("standings")
+      .update({ playoff_seed: row.playoff_seed })
+      .eq("league_id", league.id)
+      .eq("league_member_id", row.league_member_id);
+    if (updateError) throw updateError;
+  }
+  return seeded;
+}
+
+async function previousPlayoffWinnerRows(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number) {
+  const previousWeek = weekNumber - 1;
+  const { data: previousMatchups, error: matchupError } = await supabase
+    .from("matchups")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("week_number", previousWeek);
+  if (matchupError) throw matchupError;
+  if (!(previousMatchups || []).length) return [];
+
+  const { data: standings, error: standingsError } = await supabase
+    .from("standings")
+    .select("*")
+    .eq("league_id", league.id);
+  if (standingsError) throw standingsError;
+  const standingByMember = new Map((standings || []).map((row: Json) => [String(row.league_member_id), row]));
+  const winners: Json[] = [];
+  for (const matchup of previousMatchups || []) {
+    const homeScore = Number(matchup.home_score || 0);
+    const awayScore = Number(matchup.away_score || 0);
+    const homeStanding = standingByMember.get(String(matchup.home_member_id)) || {};
+    const awayStanding = standingByMember.get(String(matchup.away_member_id)) || {};
+    const winnerId = homeScore > awayScore
+      ? matchup.home_member_id
+      : awayScore > homeScore
+        ? matchup.away_member_id
+        : comparePlayoffSeeds(homeStanding, awayStanding) <= 0
+          ? matchup.home_member_id
+          : matchup.away_member_id;
+    winners.push(standingByMember.get(String(winnerId)) || { league_member_id: winnerId, playoff_seed: 9999 });
+  }
+  return winners.sort(comparePlayoffSeeds);
+}
+
+async function generatePlayoffMatchups(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number) {
+  if (league.schedule_type !== "head_to_head" && league.ranking_system !== "offl") return [];
+  const { data: existing, error: existingError } = await supabase
+    .from("matchups")
+    .select("*")
+    .eq("league_id", league.id)
+    .eq("week_number", weekNumber);
+  if (existingError) throw existingError;
+  if (existing?.length) return existing;
+
+  const playoffStartWeek = playoffStartWeekForLeague(league);
+  const remaining = weekNumber === playoffStartWeek
+    ? await playoffSeedRows(supabase, league)
+    : await previousPlayoffWinnerRows(supabase, league, weekNumber);
+  const sorted = remaining.sort(comparePlayoffSeeds);
+  if (sorted.length <= 1) {
+    const now = new Date().toISOString();
+    await supabase.from("leagues").update({ league_status: "COMPLETED", updated_date: now }).eq("id", league.id);
+    await supabase.from("league_seasons").update({ status: "COMPLETED", updated_date: now }).eq("league_id", league.id);
+    return [];
+  }
+  if (sorted.length % 2 !== 0) throw new Error("Playoff scheduling requires an even number of remaining teams.");
+
+  await supabase
+    .from("league_game_schedule")
+    .upsert(
+      {
+        league_id: league.id,
+        week_number: weekNumber,
+        game_number: 1,
+        phase: "playoff",
+        advancement_mode: league.advancement_mode || "manual",
+        status: "SCHEDULED",
+      },
+      { onConflict: "league_id,week_number,game_number" },
+    );
+
+  const rows = [];
+  for (let index = 0; index < sorted.length / 2; index += 1) {
+    rows.push({
+      league_id: league.id,
+      week_number: weekNumber,
+      home_member_id: sorted[index].league_member_id,
+      away_member_id: sorted[sorted.length - 1 - index].league_member_id,
+      home_score: 0,
+      away_score: 0,
+    });
+  }
+  const { data, error } = await supabase.from("matchups").insert(rows).select("*");
+  if (error) throw error;
+  await supabase.from("leagues").update({ league_status: "PLAYOFFS", updated_date: new Date().toISOString() }).eq("id", league.id);
+  await supabase.from("league_seasons").update({ status: "PLAYOFFS", updated_date: new Date().toISOString() }).eq("league_id", league.id);
+  return data || [];
+}
+
 async function generateMatchups(supabase: ReturnType<typeof createClient>, league: Json, weekNumber: number) {
+  if (weekNumber >= playoffStartWeekForLeague(league)) {
+    return await generatePlayoffMatchups(supabase, league, weekNumber);
+  }
   if (league.schedule_type !== "head_to_head" && league.ranking_system !== "offl") return [];
   const { data: existing, error: existingError } = await supabase
     .from("matchups")
@@ -4361,6 +4491,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
   await ensureLeaguePlayerScores(supabase, league);
   const config = await positionConfig(supabase);
   const randomization = await ensureWeekRandomization(supabase, league, weekNumber, Number(league.source_season_year || new Date().getFullYear() - 1));
+  const isPlayoffWeek = weekNumber >= playoffStartWeekForLeague(league);
 
   const { data: lineups } = await supabase
     .from("lineups")
@@ -4373,13 +4504,25 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     .eq("league_id", leagueId)
     .eq("is_active", true);
   if (activeMembersError) throw activeMembersError;
-  await assertAllLineupsReady(supabase, league, weekNumber, activeMembers || [], lineups || []);
+  let resolvedLineups = lineups || [];
+  let resolvedActiveMembers = activeMembers || [];
+  const { data: weekMatchups, error: weekMatchupError } = await supabase.from("matchups").select("*").eq("league_id", leagueId).eq("week_number", weekNumber);
+  if (weekMatchupError) throw weekMatchupError;
+  if (isPlayoffWeek) {
+    const playoffMemberIds = new Set((weekMatchups || []).flatMap((matchup: Json) => [
+      String(matchup.home_member_id || ""),
+      String(matchup.away_member_id || ""),
+    ]).filter(Boolean));
+    resolvedLineups = resolvedLineups.filter((lineup: Json) => playoffMemberIds.has(String(lineup.league_member_id || "")));
+    resolvedActiveMembers = resolvedActiveMembers.filter((member: Json) => playoffMemberIds.has(String(member.id || "")));
+  }
+  await assertAllLineupsReady(supabase, league, weekNumber, resolvedActiveMembers || [], resolvedLineups || []);
 
   const assignments = { ...((randomization?.assignments || {}) as Record<string, Json>) };
   const sourceSeasonYear = Number(randomization?.source_season_year || league.source_season_year || new Date().getFullYear() - 1);
   const scoringRules = await effectiveLeagueScoringRules(supabase, league);
   const lockSegment = sourceWeekLockSegment(league, weekNumber);
-  const lineupEntries = (lineups || []).flatMap((lineup: Json) =>
+  const lineupEntries = (resolvedLineups || []).flatMap((lineup: Json) =>
     Array.isArray(lineup.slots)
       ? lineup.slots
         .map((slot: Json) => ({
@@ -4462,7 +4605,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
   const gameConditionDurabilityLoss = Math.max(0, ...(scheduleRows || []).map((row: Json) => durabilityLossModifierFromSchedule(row)));
   const lineupTotals: Array<{ league_member_id: string; team_name: string | null; total: number; slots: Json[] }> = [];
 
-  for (const lineup of lineups || []) {
+  for (const lineup of resolvedLineups || []) {
     let total = 0;
     const scoredSlots: Json[] = [];
     for (const slot of lineup.slots || []) {
@@ -4506,7 +4649,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     });
   }
   const lineupMemberIds = new Set(lineupTotals.map((row) => row.league_member_id));
-  for (const member of activeMembers || []) {
+  for (const member of resolvedActiveMembers || []) {
     if (lineupMemberIds.has(member.id)) continue;
     lineupTotals.push({
       league_member_id: member.id,
@@ -4524,7 +4667,7 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     .eq("week_number", weekNumber);
   if (existingWeekResultError) throw existingWeekResultError;
   if (!(existingWeekResults || []).length) {
-    const isPlayoff = weekNumber >= Number(league.playoff_start_week || 999);
+    const isPlayoff = isPlayoffWeek;
     for (const lineup of lineupTotals) {
       for (const slot of lineup.slots || []) {
         const playerId = String(slot.player_id || "");
@@ -4632,9 +4775,8 @@ async function resolveWeek(supabase: ReturnType<typeof createClient>, payload: J
     scoring_details: row.slots || [],
   }));
 
-  const { data: matchups } = await supabase.from("matchups").select("*").eq("league_id", leagueId).eq("week_number", weekNumber);
   const matchupOutcomes = new Map<string, "win" | "loss" | "tie">();
-  for (const matchup of matchups || []) {
+  for (const matchup of weekMatchups || []) {
     const home = resultRows.find((row) => row.league_member_id === matchup.home_member_id);
     const away = resultRows.find((row) => row.league_member_id === matchup.away_member_id);
     if (!home || !away) continue;
@@ -4764,9 +4906,28 @@ async function advanceWeek(supabase: ReturnType<typeof createClient>, payload: J
   if (seasonError) throw seasonError;
 
   const nextWeek = Number(season.current_week || 1) + 1;
+  if (nextWeek > playoffStartWeekForLeague(league)) {
+    const remaining = await previousPlayoffWinnerRows(supabase, league, nextWeek);
+    if (remaining.length <= 1) {
+      const now = new Date().toISOString();
+      const champion = remaining[0] || null;
+      const { data: completedSeason, error: completedSeasonError } = await supabase
+        .from("league_seasons")
+        .update({ status: "COMPLETED", updated_date: now })
+        .eq("id", season.id)
+        .select("*")
+        .single();
+      if (completedSeasonError) throw completedSeasonError;
+      await supabase.from("leagues").update({ league_status: "COMPLETED", updated_date: now }).eq("id", league.id);
+      return { current_week: Number(season.current_week || 1), season: completedSeason, week: null, champion };
+    }
+  }
   const { data: updatedSeason, error: updateError } = await supabase
     .from("league_seasons")
-    .update({ current_week: nextWeek })
+    .update({
+      current_week: nextWeek,
+      status: nextWeek >= playoffStartWeekForLeague(league) ? "PLAYOFFS" : season.status,
+    })
     .eq("id", season.id)
     .select("*")
     .single();
@@ -4787,10 +4948,13 @@ async function advanceWeek(supabase: ReturnType<typeof createClient>, payload: J
     .single();
   if (weekError) throw weekError;
   await ensureWeekRandomization(supabase, league, nextWeek, Number(season.source_season_year || league.source_season_year || new Date().getFullYear() - 1));
-  await generateMatchups(supabase, league, nextWeek);
+  const matchups = await generateMatchups(supabase, league, nextWeek);
+  if (nextWeek >= playoffStartWeekForLeague(league)) {
+    await supabase.from("leagues").update({ league_status: "PLAYOFFS", updated_date: new Date().toISOString() }).eq("id", league.id);
+  }
   const playerLeaderboard = await refreshPlayerLeaderboardCache(supabase, league);
 
-  return { current_week: nextWeek, season: updatedSeason, week, player_leaderboard: playerLeaderboard };
+  return { current_week: nextWeek, season: updatedSeason, week, matchups, player_leaderboard: playerLeaderboard };
 }
 
 async function revealWeekResults(supabase: ReturnType<typeof createClient>, payload: Json) {
