@@ -123,6 +123,20 @@ function formatDate(value) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function regularSeasonWeeksForLeague(league) {
+  return Math.max(1, Number(league?.playoff_start_week || Number(league?.season_length_weeks || 8) + 1) - 1);
+}
+
+function isPlayoffWeek(league, weekNumber, weekSchedule = null) {
+  return String(weekSchedule?.phase || "").toLowerCase() === "playoff" || Number(weekNumber || 0) > regularSeasonWeeksForLeague(league);
+}
+
+function playoffRoundLabel(league, weekNumber, weekMatchups, weekSchedule = null) {
+  if (!isPlayoffWeek(league, weekNumber, weekSchedule)) return `Week ${weekNumber}`;
+  if (weekMatchups.length === 1) return "Championship Game";
+  return `Playoffs - Week ${weekNumber}`;
+}
+
 function normalizeSlots(slots) {
   return Array.isArray(slots) ? slots : [];
 }
@@ -436,6 +450,8 @@ function matchupStatus(matchup, resultRows) {
 
 function standingsWithResolvedRecords(standings, matchups, weekResults, league) {
   if (!weekResults.length) return standings;
+  const regularSeasonWeeks = regularSeasonWeeksForLeague(league);
+  const regularSeasonMatchups = matchups.filter((matchup) => Number(matchup.week_number || 0) <= regularSeasonWeeks);
   const recordByMember = new Map();
   const ensureRecord = (memberId) => {
     const key = String(memberId || "");
@@ -445,7 +461,7 @@ function standingsWithResolvedRecords(standings, matchups, weekResults, league) 
     return recordByMember.get(key);
   };
 
-  matchups.forEach((matchup) => {
+  regularSeasonMatchups.forEach((matchup) => {
     const homeResult = resultForMember(weekResults, matchup.home_member_id, matchup.week_number);
     const awayResult = resultForMember(weekResults, matchup.away_member_id, matchup.week_number);
     if (!homeResult || !awayResult) return;
@@ -489,21 +505,30 @@ function standingsWithResolvedRecords(standings, matchups, weekResults, league) 
     );
 }
 
-function CurrentMatchupsPanel({ leagueId, currentWeek, matchups, weekResults, members }) {
+function CurrentMatchupsPanel({ league, currentWeek, matchups, weekResults, members, schedule }) {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const currentMatchups = matchups.filter((matchup) => Number(matchup.week_number) === Number(currentWeek));
+  const currentWeekSchedule = schedule.find((item) => Number(item.week_number) === Number(currentWeek));
+  const title = playoffRoundLabel(league, currentWeek, currentMatchups, currentWeekSchedule);
+  const isChampionship = isPlayoffWeek(league, currentWeek, currentWeekSchedule) && currentMatchups.length === 1;
   return (
     <Panel
-      title={`Week ${currentWeek} Matchups`}
-      icon={ShieldCheck}
-      action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/week/${currentWeek}?id=${leagueId}`}>Full Week</Link>}
+      title={title}
+      icon={isChampionship ? Trophy : ShieldCheck}
+      action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/week/${currentWeek}?id=${league.id}`}>Full Week</Link>}
     >
+      {isChampionship && (
+        <div className="neo-border mb-3 bg-black p-4 text-white">
+          <p className="text-xs font-black uppercase text-[#F7B801]">Final Round</p>
+          <p className="mt-1 text-2xl font-black uppercase">League Championship</p>
+        </div>
+      )}
       <div className="grid gap-3 lg:grid-cols-2">
         {currentMatchups.map((matchup) => {
           const homeResult = weekResults.find((result) => result.league_member_id === matchup.home_member_id && Number(result.week_number) === Number(currentWeek));
           const awayResult = weekResults.find((result) => result.league_member_id === matchup.away_member_id && Number(result.week_number) === Number(currentWeek));
           return (
-            <Link key={matchup.id} to={`/league/week/${currentWeek}?id=${leagueId}&matchId=${matchup.id}`} className="neo-border block bg-gray-50 p-3 hover:bg-[#FFF7D6]">
+            <Link key={matchup.id} to={`/league/week/${currentWeek}?id=${league.id}&matchId=${matchup.id}`} className={`neo-border block p-3 hover:bg-[#FFF7D6] ${isChampionship ? "bg-[#FFF7D6]" : "bg-gray-50"}`}>
               <div className="flex items-center justify-between gap-3 text-sm font-black uppercase text-gray-500">
                 <span>{matchupStatus(matchup, [homeResult, awayResult].filter(Boolean))}</span>
                 <span>Week {currentWeek}</span>
@@ -1018,11 +1043,12 @@ function FullSchedulePanel({ league, schedule, matchups, weekResults, members, s
           {weeks.map((week) => {
             const weekNumber = Number(week.week_number);
             const weekMatchups = matchups.filter((matchup) => Number(matchup.week_number) === weekNumber);
+            const roundLabel = playoffRoundLabel(league, weekNumber, weekMatchups, week);
             return (
               <div key={week.id || weekNumber} className="neo-border bg-gray-50 p-4">
                 <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <Link to={`/league/week/${weekNumber}?id=${league.id}`} className="font-black uppercase text-orange-600">Week {weekNumber}</Link>
+                    <Link to={`/league/week/${weekNumber}?id=${league.id}`} className="font-black uppercase text-orange-600">{roundLabel}</Link>
                     <p className="text-xs font-bold uppercase text-gray-500">{formatDate(week.scheduled_at)} | {week.status || "Scheduled"}</p>
                   </div>
                 </div>
@@ -1090,7 +1116,7 @@ function LeagueHubPage(props) {
         <div className="grid gap-5 xl:grid-cols-3">
           <div className="space-y-5 xl:col-span-2">
             <CommissionerMessagePanel league={league} isCommissioner={isCommissioner} />
-            <CurrentMatchupsPanel leagueId={league.id} currentWeek={currentWeek} matchups={matchups} weekResults={weekResults} members={members} />
+            <CurrentMatchupsPanel league={league} currentWeek={currentWeek} matchups={matchups} weekResults={weekResults} members={members} schedule={schedule} />
           </div>
           <StandingsPanel league={league} standings={standings} members={members} isLoading={isLoadingStandings} compact />
         </div>
@@ -1120,11 +1146,19 @@ function WeekMatchupsPage({ league, season, currentMember, members, matchups, we
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const weekMatchups = matchups.filter((matchup) => Number(matchup.week_number) === Number(weekNumber));
   const weekSchedule = schedule.find((item) => Number(item.week_number) === Number(weekNumber));
+  const roundLabel = playoffRoundLabel(league, weekNumber, weekMatchups, weekSchedule);
+  const isChampionship = isPlayoffWeek(league, weekNumber, weekSchedule) && weekMatchups.length === 1;
   return (
     <>
-      <CompactHeader league={league} season={season} currentMember={currentMember} memberCount={members.length} context={`Week ${weekNumber}`} />
+      <CompactHeader league={league} season={season} currentMember={currentMember} memberCount={members.length} context={roundLabel} />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        <Panel title={`Week ${weekNumber}`} icon={CalendarDays} action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/schedule?id=${league.id}`}>Schedule</Link>}>
+        <Panel title={roundLabel} icon={isChampionship ? Trophy : CalendarDays} action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/schedule?id=${league.id}`}>Schedule</Link>}>
+          {isChampionship && (
+            <div className="neo-border mb-4 bg-black p-4 text-white">
+              <p className="text-xs font-black uppercase text-[#F7B801]">Final Round</p>
+              <p className="mt-1 text-2xl font-black uppercase">League Championship</p>
+            </div>
+          )}
           <p className="mb-4 text-sm font-bold uppercase text-gray-500">{formatDate(weekSchedule?.scheduled_at)} | {weekSchedule?.status || "Scheduled"}</p>
           <div className="grid gap-3 lg:grid-cols-2">
             {weekMatchups.map((matchup) => {
@@ -1238,10 +1272,18 @@ function MatchupDetailPage({ league, season, currentMember, members, matchups, w
   const awayResult = resultForMember(weekResults, matchup.away_member_id, weekNumber);
   const homeLineup = lineups.find((lineup) => lineup.league_member_id === matchup.home_member_id && Number(lineup.week_number) === Number(weekNumber));
   const awayLineup = lineups.find((lineup) => lineup.league_member_id === matchup.away_member_id && Number(lineup.week_number) === Number(weekNumber));
+  const weekMatchups = matchups.filter((item) => Number(item.week_number) === Number(weekNumber));
+  const isChampionship = isPlayoffWeek(league, weekNumber) && weekMatchups.length === 1;
   return (
     <>
-      <CompactHeader league={league} season={season} currentMember={currentMember} memberCount={members.length} context={`Week ${weekNumber} Matchup`} />
-      <Panel title={`${memberName(home)} vs ${memberName(away)}`} icon={ShieldCheck} action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/week/${weekNumber}?id=${league.id}`}>Week {weekNumber}</Link>}>
+      <CompactHeader league={league} season={season} currentMember={currentMember} memberCount={members.length} context={isChampionship ? "Championship Game" : `Week ${weekNumber} Matchup`} />
+      <Panel title={isChampionship ? `Championship: ${memberName(home)} vs ${memberName(away)}` : `${memberName(home)} vs ${memberName(away)}`} icon={isChampionship ? Trophy : ShieldCheck} action={<Link className="text-sm font-black uppercase text-orange-600" to={`/league/week/${weekNumber}?id=${league.id}`}>Week {weekNumber}</Link>}>
+        {isChampionship && (
+          <div className="neo-border mb-4 bg-black p-4 text-white">
+            <p className="text-xs font-black uppercase text-[#F7B801]">Final Round</p>
+            <p className="mt-1 text-2xl font-black uppercase">League Championship</p>
+          </div>
+        )}
         <div className="grid gap-3 sm:grid-cols-3">
           <StatTile label={memberName(home)} value={formatNumber(matchupScore(matchup, homeResult, "home"), 2)} tone="bg-[#EFFBFF]" />
           <div className="neo-border flex items-center justify-center bg-black p-3 text-2xl font-black text-white">VS</div>

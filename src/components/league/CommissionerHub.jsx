@@ -93,14 +93,19 @@ export default function CommissionerHub({ league }) {
   const draftStatus = String(latestDraft?.status || "").toUpperCase();
   const draftComplete = draftStatus === "COMPLETED";
   const leagueStarted = seasons.length > 0;
+  const currentWeekMatchups = matchups.filter((matchup) => Number(matchup.week_number) === currentWeekNumber);
+  const currentWeekMemberIds = new Set(currentWeekMatchups.flatMap((matchup) => [matchup.home_member_id, matchup.away_member_id]).filter(Boolean));
   const activeMembers = members.filter((member) => member.is_active !== false);
-  const aiMembers = activeMembers.filter((member) => member.is_ai);
-  const humanMembers = activeMembers.filter((member) => !member.is_ai);
-  const submittedLineups = currentWeekLineups.filter((lineup) => lineup.finalized_at);
+  const lineupEligibleMembers = currentWeekMemberIds.size
+    ? activeMembers.filter((member) => currentWeekMemberIds.has(member.id))
+    : activeMembers;
+  const aiMembers = lineupEligibleMembers.filter((member) => member.is_ai);
+  const humanMembers = lineupEligibleMembers.filter((member) => !member.is_ai);
+  const submittedLineups = currentWeekLineups.filter((lineup) => lineup.finalized_at && (!currentWeekMemberIds.size || currentWeekMemberIds.has(lineup.league_member_id)));
   const lineupByMember = useMemo(() => new Set(submittedLineups.map((lineup) => lineup.league_member_id)), [submittedLineups]);
   const missingHumans = humanMembers.filter((member) => !lineupByMember.has(member.id));
   const missingAi = aiMembers.filter((member) => !lineupByMember.has(member.id));
-  const lineupReady = activeMembers.length > 0 && submittedLineups.length >= activeMembers.length;
+  const lineupReady = lineupEligibleMembers.length > 0 && submittedLineups.length >= lineupEligibleMembers.length;
   const currentWeek = weeks.find((week) => Number(week.week_number) === currentWeekNumber) || null;
   const weekStatus = String(currentWeek?.status || "LINEUPS_OPEN").toUpperCase();
   const currentWeekResults = weekResults.filter((result) => Number(result.week_number) === currentWeekNumber);
@@ -210,7 +215,7 @@ export default function CommissionerHub({ league }) {
       <div className="grid gap-4 md:grid-cols-4">
         <StatBlock label="Draft" value={draftComplete ? "Complete" : latestDraft?.status || "Needed"} detail={latestDraft?.start ? new Date(latestDraft.start).toLocaleString() : "Draft Day controls"} tone={draftComplete ? "bg-[#D7F8E8]" : "bg-white"} />
         <StatBlock label="Schedule" value={scheduleGenerated ? `${matchups.length} games` : "Missing"} detail={scheduleLocked ? "Locked" : "Unlocked"} tone={scheduleGenerated ? "bg-[#FFF7D6]" : "bg-white"} />
-        <StatBlock label="Lineups" value={`${submittedLineups.length}/${activeMembers.length || 0}`} detail={lineupReady ? "All submitted" : `${missingHumans.length} human / ${missingAi.length} AI waiting`} tone={lineupReady ? "bg-[#D7F8E8]" : "bg-white"} />
+        <StatBlock label="Lineups" value={`${submittedLineups.length}/${lineupEligibleMembers.length || 0}`} detail={lineupReady ? "All submitted" : `${missingHumans.length} human / ${missingAi.length} AI waiting`} tone={lineupReady ? "bg-[#D7F8E8]" : "bg-white"} />
         <StatBlock label="Results" value={weekResolved ? "Resolved" : "Open"} detail={resultsRevealed ? "Revealed" : "Hidden"} tone={weekResolved ? "bg-[#EFFBFF]" : "bg-white"} />
       </div>
 

@@ -4992,13 +4992,16 @@ async function recalculateStandings(supabase: ReturnType<typeof createClient>, p
   if (resultError) throw resultError;
   const { data: matchups, error: matchupError } = await supabase.from("matchups").select("*").eq("league_id", leagueId);
   if (matchupError) throw matchupError;
+  const regularSeasonWeeks = regularSeasonWeeksForLeague(league);
+  const regularResults = (results || []).filter((row) => Number(row.week_number || 0) <= regularSeasonWeeks);
+  const regularMatchups = (matchups || []).filter((matchup) => Number(matchup.week_number || 0) <= regularSeasonWeeks);
   const resultByMemberWeek = new Map(
-    (results || []).map((row) => [`${row.league_member_id}:${row.week_number}`, row]),
+    regularResults.map((row) => [`${row.league_member_id}:${row.week_number}`, row]),
   );
 
   const rows = (members || []).map((member) => {
-    const memberResults = (results || []).filter((row) => row.league_member_id === member.id);
-    const memberMatchups = (matchups || []).filter((matchup) => matchup.home_member_id === member.id || matchup.away_member_id === member.id);
+    const memberResults = regularResults.filter((row) => row.league_member_id === member.id);
+    const memberMatchups = regularMatchups.filter((matchup) => matchup.home_member_id === member.id || matchup.away_member_id === member.id);
     let wins = 0;
     let losses = 0;
     let ties = 0;

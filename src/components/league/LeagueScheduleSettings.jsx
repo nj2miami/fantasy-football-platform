@@ -141,9 +141,13 @@ export default function LeagueScheduleSettings({ league, isAdmin = false }) {
 
   const run = (action, payload = {}) => actionMutation.mutate({ action, payload: { league_id: league.id, ...payload } });
   const currentWeekMatchups = matchups.filter((matchup) => Number(matchup.week_number) === Number(currentWeekNumber));
+  const currentWeekMemberIds = new Set(currentWeekMatchups.flatMap((matchup) => [matchup.home_member_id, matchup.away_member_id]).filter(Boolean));
   const activeMembers = members.filter((member) => member.is_active !== false);
-  const submittedLineups = currentWeekLineups.filter((lineup) => lineup.finalized_at);
-  const lineupReady = activeMembers.length > 0 && submittedLineups.length >= activeMembers.length;
+  const lineupEligibleMembers = currentWeekMemberIds.size
+    ? activeMembers.filter((member) => currentWeekMemberIds.has(member.id))
+    : activeMembers;
+  const submittedLineups = currentWeekLineups.filter((lineup) => lineup.finalized_at && (!currentWeekMemberIds.size || currentWeekMemberIds.has(lineup.league_member_id)));
+  const lineupReady = lineupEligibleMembers.length > 0 && submittedLineups.length >= lineupEligibleMembers.length;
   const recommendedPlayoffTeamCount = recommendedPlayoffTeams(activeMembers.length);
   const playoffTeamCount = Number(playSettings.playoff_team_count || recommendedPlayoffTeamCount);
   const allTeamsMakePlayoffs = activeMembers.length > 0 && playoffTeamCount >= activeMembers.length;
@@ -191,7 +195,7 @@ export default function LeagueScheduleSettings({ league, isAdmin = false }) {
         </div>
         <div className="neo-border p-4 bg-white md:col-span-4">
           <p className="text-xs font-black uppercase text-gray-500 mb-1">Lineups Ready</p>
-          <p className="text-lg font-black">{submittedLineups.length} / {activeMembers.length || 0}</p>
+          <p className="text-lg font-black">{submittedLineups.length} / {lineupEligibleMembers.length || 0}</p>
           <p className="mt-1 text-xs font-bold uppercase text-gray-500">{lineupReady ? "Ready to resolve" : "Resolve Week stays locked until every active team finalizes."}</p>
         </div>
       </div>
