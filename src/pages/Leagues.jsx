@@ -95,11 +95,12 @@ export default function Leagues() {
   // Calculate derived states based on fetched data
   const activeLeagues = leagues.filter((l) => !l.archived_at);
   const activeLeagueIds = new Set(activeLeagues.map((league) => league.id));
+  const recruitingLeagues = activeLeagues.filter((league) => String(league.league_status || "RECRUITING").toUpperCase() === "RECRUITING");
   const activeMemberships = myMemberships.filter((membership) =>
     membership.is_active !== false && activeLeagueIds.has(membership.league_id)
   );
   const myLeagueIds = activeMemberships.map((m) => m.league_id);
-  const publicLeagues = activeLeagues.filter((l) => l.is_public);
+  const publicLeagues = recruitingLeagues.filter((l) => l.is_public);
   const entitlements = getLeagueEntitlements(user, activeMemberships, activeLeagues);
 
   // Wait for initial data to load before rendering the main content
@@ -151,7 +152,7 @@ export default function Leagues() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="neo-card bg-[#00D9FF] p-6 rotate-[0.5deg]">
           <p className="text-orange-600 mb-1 text-sm font-black uppercase">TOTAL LEAGUES</p>
-          <p className="text-4xl font-black">{activeLeagues.length}</p>
+          <p className="text-4xl font-black">{recruitingLeagues.length}</p>
         </div>
         <div className="neo-card bg-[#6A4C93] text-white p-6 rotate-[-0.3deg]">
           <p className="text-orange-600 mb-1 text-sm font-black uppercase">PUBLIC</p>
@@ -164,7 +165,7 @@ export default function Leagues() {
       </div>
 
       {/* Leagues Grid */}
-      {activeLeagues.length === 0 ? (
+      {recruitingLeagues.length === 0 ? (
         <div className="neo-card bg-white p-12 text-center">
           {/* Trophy icon removed as per outline's code_outline */}
           <h3 className="text-2xl font-black uppercase mb-2">No Leagues Yet</h3>
@@ -180,7 +181,7 @@ export default function Leagues() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {activeLeagues.map((league, idx) => (
+          {recruitingLeagues.map((league, idx) => (
             <LeagueCard
               key={league.id}
               league={league}

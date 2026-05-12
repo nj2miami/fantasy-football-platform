@@ -98,7 +98,9 @@ const FeaturedLeague = ({ user }) => {
       return <div className="neo-border bg-white/70 h-full min-h-64 animate-pulse" />;
     }
 
-    const activeSponsoredLeagues = (leagues || []).filter((item) => !item.archived_at);
+    const activeSponsoredLeagues = (leagues || []).filter((item) =>
+      !item.archived_at && String(item.league_status || "RECRUITING").toUpperCase() === "RECRUITING"
+    );
     const league = activeSponsoredLeagues[0];
     if (!league) {
       return (
@@ -123,7 +125,9 @@ const SponsoredLeagues = () => {
         queryFn: () => appClient.entities.League.filter({ is_sponsored: true }),
     });
 
-    const activeSponsoredLeagues = (leagues || []).filter((item) => !item.archived_at);
+    const activeSponsoredLeagues = (leagues || []).filter((item) =>
+      !item.archived_at && String(item.league_status || "RECRUITING").toUpperCase() === "RECRUITING"
+    );
     if (isLoading || activeSponsoredLeagues.length <= 1) return null;
     const remainingLeagues = activeSponsoredLeagues.slice(1);
     return (

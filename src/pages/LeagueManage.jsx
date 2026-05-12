@@ -150,6 +150,26 @@ export default function LeagueManage() {
 
   if (leagueError || !league) return <div className="text-center font-bold text-2xl text-red-500">Error: League not found.</div>;
 
+  if (String(league.league_status || seasons[0]?.status || "").toUpperCase() === "COMPLETED") {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="neo-card bg-white p-8 text-center">
+          <Trophy className="mx-auto mb-4 h-12 w-12 text-[#F7B801]" />
+          <h1 className="text-3xl font-black uppercase text-black">Season Complete</h1>
+          <p className="mx-auto mt-2 max-w-2xl text-sm font-bold text-gray-600">
+            Commissioner controls are disabled after the season ends. The League Hub remains available for standings, news, awards, and the season recap.
+          </p>
+          <Link to={createPageUrl(`League?id=${league.id}`)} className="mt-5 inline-block">
+            <Button className="neo-btn bg-black text-[#F7B801]">
+              <Eye className="mr-2 h-5 w-5" />
+              League Hub
+            </Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const commissionerPrimary = commissionerProfile?.theme_primary || "#000000";
   const commissionerSecondary = commissionerProfile?.theme_secondary || "#FFFFFF";
   const commissionerControlStyle = {

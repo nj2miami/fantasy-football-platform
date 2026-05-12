@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -373,6 +373,7 @@ function LeagueNav({ league, currentMember, isCommissioner, activeArea, draftSta
   const draftIsCompleted = String(draftStatus || "").toUpperCase() === "COMPLETED";
   const draftHref = draftIsCompleted ? `/league/draft-recap?id=${league.id}` : `/league/draft?id=${league.id}`;
   const draftLabel = draftIsCompleted ? "Draft Recap" : "Draft Day";
+  const seasonComplete = String(league?.league_status || "").toUpperCase() === "COMPLETED";
   return (
     <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <Link to={createPageUrl("Leagues")}>
@@ -388,7 +389,7 @@ function LeagueNav({ league, currentMember, isCommissioner, activeArea, draftSta
             League Hub
           </Button>
         </Link>
-        {currentMember && (
+        {currentMember && !seasonComplete && (
           <Link to={`/league/manager/lineup?id=${league.id}&managerId=${currentMember.id}`}>
             <Button className={`neo-btn ${activeArea === "manager" ? "bg-[#00D9FF] text-black" : "bg-white text-black"}`}>
               <LayoutDashboard className="mr-2 h-5 w-5" />
@@ -396,13 +397,15 @@ function LeagueNav({ league, currentMember, isCommissioner, activeArea, draftSta
             </Button>
           </Link>
         )}
-        <Link to={draftHref}>
-          <Button className="neo-btn bg-white text-black">
-            <PenSquare className="mr-2 h-5 w-5" />
-            {draftLabel}
-          </Button>
-        </Link>
-        {isCommissioner && (
+        {!seasonComplete && (
+          <Link to={draftHref}>
+            <Button className="neo-btn bg-white text-black">
+              <PenSquare className="mr-2 h-5 w-5" />
+              {draftLabel}
+            </Button>
+          </Link>
+        )}
+        {isCommissioner && !seasonComplete && (
           <Link to={createPageUrl(`LeagueManage?id=${league.id}`)}>
             <Button className="neo-btn bg-[#6A4C93] text-white">
               <Edit className="mr-2 h-5 w-5" />
@@ -1031,6 +1034,31 @@ function ReleasedPlayersPanel({ leagueId }) {
   );
 }
 
+function SeasonAwardsPanel({ leagueId, members }) {
+  const { data: awards = [] } = useQuery({
+    queryKey: ["league-player-awards", leagueId],
+    queryFn: () => appClient.entities.LeaguePlayerAward.filter({ league_id: leagueId }, "position_group"),
+    enabled: Boolean(leagueId),
+  });
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  if (!awards.length) return null;
+  return (
+    <Panel title="Season Awards" icon={Trophy}>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {awards.map((award) => (
+          <div key={award.id} className="neo-border bg-[#FFF7D6] p-3">
+            <p className="text-xs font-black uppercase text-gray-500">{award.award_name}</p>
+            <p className="mt-1 font-black uppercase text-black">{award.metadata?.player_name || "Award Winner"}</p>
+            <p className="mt-1 text-sm font-bold text-gray-600">
+              {formatNumber(award.total_points, 2)} pts for {award.metadata?.manager_name || memberName(memberById.get(award.league_member_id))}
+            </p>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 function FullSchedulePanel({ league, schedule, matchups, weekResults, members, standings, isLoadingStandings }) {
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const weeks = schedule.length
@@ -1098,6 +1126,7 @@ function LeagueHubPage(props) {
     selectedNewsId,
   } = props;
   const currentWeek = season?.current_week || 1;
+  const seasonComplete = String(league?.league_status || season?.status || "").toUpperCase() === "COMPLETED";
   return (
     <>
       <CompactHeader league={league} season={season} currentMember={currentMember} memberCount={members.length} />
@@ -1115,6 +1144,7 @@ function LeagueHubPage(props) {
       {activeTab === "overview" && (
         <div className="grid gap-5 xl:grid-cols-3">
           <div className="space-y-5 xl:col-span-2">
+            {seasonComplete && <SeasonAwardsPanel leagueId={league.id} members={members} />}
             <CommissionerMessagePanel league={league} isCommissioner={isCommissioner} />
             <CurrentMatchupsPanel league={league} currentWeek={currentWeek} matchups={matchups} weekResults={weekResults} members={members} schedule={schedule} />
           </div>
@@ -2165,6 +2195,11 @@ export default function League() {
 
   const activeArea = isManagerPortal ? "manager" : "hub";
   const latestDraft = drafts[0] || null;
+  const seasonComplete = String(league?.league_status || season?.status || "").toUpperCase() === "COMPLETED";
+
+  if (seasonComplete && isManagerPortal) {
+    return <Navigate to={createPageUrl(`League?id=${league.id}`)} replace />;
+  }
 
   return (
     <LeagueShell>

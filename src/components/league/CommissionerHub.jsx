@@ -115,6 +115,12 @@ export default function CommissionerHub({ league }) {
   const scheduleGenerated = schedules.length > 0 && matchups.length > 0;
   const scheduleLocked = league.schedule_config?.schedule_locked === true;
   const isPaused = league.league_status === "PAUSED";
+  const seasonStatus = String(activeSeason?.status || league.league_status || "").toUpperCase();
+  const isSeasonComplete = seasonStatus === "COMPLETED" || String(league.league_status || "").toUpperCase() === "COMPLETED";
+  const currentWeekSchedule = schedules.find((schedule) => Number(schedule.week_number) === currentWeekNumber) || null;
+  const isPlayoffWeek = String(currentWeekSchedule?.phase || "").toLowerCase() === "playoff" || seasonStatus === "PLAYOFFS";
+  const isChampionshipGame = isPlayoffWeek && currentWeekMatchups.length === 1;
+  const canEndSeason = isChampionshipGame && weekResolved && resultsRevealed && !isSeasonComplete;
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["league", league.id] });
@@ -155,6 +161,7 @@ export default function CommissionerHub({ league }) {
         resolve_week: "Week resolved.",
         reveal_week_results: "Results revealed.",
         advance_week: "Advanced to next week.",
+        end_season: "Season ended. Awards, badges, and recap are published.",
         generate_midseason_recap: "Midseason recap published.",
         recalculate_standings: "Standings recalculated.",
         update_week_status: "Week status updated.",
@@ -193,7 +200,11 @@ export default function CommissionerHub({ league }) {
                 ? "Resolve the week."
                 : !resultsRevealed
                   ? "Reveal results."
-                  : "Advance to the next week when ready.";
+                  : canEndSeason
+                    ? "End the season and publish awards."
+                    : isSeasonComplete
+                      ? "Season complete. League Hub remains open."
+                      : "Advance to the next week when ready.";
 
   const actionBusy = actionMutation.isPending || toggleScheduleLockMutation.isPending;
 
@@ -207,8 +218,8 @@ export default function CommissionerHub({ league }) {
         </div>
         <div className="neo-border bg-black p-5 text-white">
           <p className="text-xs font-black uppercase text-gray-300">Current State</p>
-          <p className="mt-1 text-2xl font-black uppercase">{leagueStarted ? `Week ${currentWeekNumber}` : "Preseason"}</p>
-          <p className="mt-1 text-sm font-bold uppercase text-gray-300">{isPaused ? "League Paused" : weekResolved ? "Week Resolved" : weekStatus.replace(/_/g, " ")}</p>
+          <p className="mt-1 text-2xl font-black uppercase">{isSeasonComplete ? "Season Complete" : leagueStarted ? `Week ${currentWeekNumber}` : "Preseason"}</p>
+          <p className="mt-1 text-sm font-bold uppercase text-gray-300">{isSeasonComplete ? "League Hub Only" : isPaused ? "League Paused" : weekResolved ? "Week Resolved" : weekStatus.replace(/_/g, " ")}</p>
         </div>
       </div>
 
@@ -271,23 +282,43 @@ export default function CommissionerHub({ league }) {
           </Button>
         </WorkflowStep>
 
-        <WorkflowStep number="6" title="Reveal And Advance" status={!weekResolved ? "blocked" : resultsRevealed ? "active" : "waiting"} detail={resultsRevealed ? "Results are public. Advance when commissioner review is done." : "Reveal results after checking scoring and standings."}>
+        <WorkflowStep
+          number="6"
+          title={canEndSeason || isSeasonComplete ? "Reveal And End Season" : "Reveal And Advance"}
+          status={isSeasonComplete ? "done" : !weekResolved ? "blocked" : resultsRevealed ? "active" : "waiting"}
+          detail={
+            isSeasonComplete
+              ? "Awards, badges, and the end-of-season recap are published."
+              : canEndSeason
+                ? "The championship is final. End Season publishes badges, player awards, and the AI recap."
+                : resultsRevealed
+                  ? "Results are public. Advance when commissioner review is done."
+                  : "Reveal results after checking scoring and standings."
+          }
+        >
           <Button onClick={() => run("reveal_week_results", { week_number: currentWeekNumber })} disabled={actionBusy || !weekResolved || resultsRevealed} className="neo-btn bg-white text-black">
             <Eye className="mr-2 h-5 w-5" />
             Reveal
           </Button>
-          <Button onClick={() => run("advance_week")} disabled={actionBusy || !weekResolved || !resultsRevealed} className="neo-btn bg-black text-white">
-            <FastForward className="mr-2 h-5 w-5" />
-            Advance
-          </Button>
+          {canEndSeason || isSeasonComplete ? (
+            <Button onClick={() => run("end_season", { week_number: currentWeekNumber })} disabled={actionBusy || !canEndSeason} className="neo-btn bg-black text-white">
+              <Trophy className="mr-2 h-5 w-5" />
+              End Season
+            </Button>
+          ) : (
+            <Button onClick={() => run("advance_week")} disabled={actionBusy || !weekResolved || !resultsRevealed} className="neo-btn bg-black text-white">
+              <FastForward className="mr-2 h-5 w-5" />
+              Advance
+            </Button>
+          )}
         </WorkflowStep>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => run(isPaused ? "resume_league" : "pause_league")} disabled={actionBusy || !leagueStarted} className="neo-btn bg-[#6A4C93] text-white">
+        <Button onClick={() => run(isPaused ? "resume_league" : "pause_league")} disabled={actionBusy || !leagueStarted || isSeasonComplete} className="neo-btn bg-[#6A4C93] text-white">
           {isPaused ? "Resume League" : "Pause League"}
         </Button>
-        <Button onClick={() => run("recalculate_standings")} disabled={actionBusy || !leagueStarted} className="neo-btn bg-white text-black">
+        <Button onClick={() => run("recalculate_standings")} disabled={actionBusy || !leagueStarted || isSeasonComplete} className="neo-btn bg-white text-black">
           <RefreshCw className="mr-2 h-5 w-5" />
           Recalculate Standings
         </Button>

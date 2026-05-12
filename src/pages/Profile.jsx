@@ -4,7 +4,7 @@ import { useLocation } from "react-router-dom";
 import { appClient } from "@/api/appClient";
 import { supabase } from "@/lib/supabase";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { User, Save, Palette } from "lucide-react";
+import { User, Save, Palette, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,6 +56,12 @@ export default function Profile() {
 
   const profile = publicProfileName ? publicProfile : ownProfile;
   const isPublicView = !!publicProfileName;
+
+  const { data: badges = [] } = useQuery({
+    queryKey: ["manager-profile-badges", profile?.id],
+    queryFn: () => appClient.entities.ManagerProfileBadge.filter({ profile_id: profile.id }, "-awarded_at"),
+    enabled: Boolean(profile?.id),
+  });
 
   const [formData, setFormData] = useState({
     first_name: "",
@@ -166,6 +172,23 @@ export default function Profile() {
     saveProfileMutation.mutate(formData);
   };
 
+  const badgeWall = badges.length ? (
+    <div className="neo-card mt-6 bg-white p-6">
+      <h2 className="mb-4 flex items-center gap-2 text-xl font-black uppercase text-orange-600">
+        <Trophy className="h-5 w-5" />
+        Badges
+      </h2>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {badges.map((badge) => (
+          <div key={badge.id} className="neo-border bg-[#FFF7D6] p-3">
+            <p className="font-black uppercase text-black">{badge.badge_name}</p>
+            {badge.description && <p className="mt-1 text-sm font-bold text-gray-600">{badge.description}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
   if (isPublicView && isLoadingPublicProfile) {
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 text-center">
@@ -208,6 +231,7 @@ export default function Profile() {
             </div>
           </div>
         </div>
+        {badgeWall}
       </div>
     );
   }
@@ -229,6 +253,8 @@ export default function Profile() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {badgeWall}
+
         <div className="neo-card bg-white p-8">
           <h2 className="text-2xl font-black uppercase mb-6 flex items-center gap-2">
             <User className="w-6 h-6" />

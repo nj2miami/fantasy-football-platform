@@ -49,6 +49,8 @@ export const entityTableMap = {
   LeagueNewsItem: "league_news_items",
   ManagerMessage: "manager_messages",
   LeaguePlayerLeaderboard: "league_player_leaderboards",
+  ManagerProfileBadge: "manager_profile_badges",
+  LeaguePlayerAward: "league_player_awards",
 };
 
 function makeSupabaseEntityApi(entityName) {
