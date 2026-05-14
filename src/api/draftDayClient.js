@@ -9,7 +9,7 @@ const DRAFT_POSITION_SET = new Set(DRAFT_POSITION_ORDER);
 const DRAFT_BUCKET_TARGETS = { QB: 36, OFF: 36, DEF: 36, K: 20 };
 const DRAFT_BUCKET_MINIMUMS = { QB: 36, OFF: 36, DEF: 36, K: 20 };
 const DRAFT_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
-const DRAFT_POOL_ENGINE_VERSION = "draft-pool-low-tier-flex-v3";
+const DRAFT_POOL_ENGINE_VERSION = "draft-pool-traits-v1";
 
 function durabilityLabel(value) {
   const durability = Number(value || 100);
@@ -234,6 +234,7 @@ function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPla
   const showName = canShowName(league, options.isDrafted);
   const durability = showDurability ? durabilityByPlayer.get(player.id) : null;
   const hiddenName = `${draftPosition || "Player"} Tier ${tierValue}`;
+  const traits = Array.isArray(tier?.traits) ? tier.traits : [];
   return {
     ...player,
     player_display_name: showName ? player.player_display_name : hiddenName,
@@ -255,6 +256,9 @@ function decoratePlayerWithLeagueMetadata(player, tiersByPlayer, durabilityByPla
     durability_hidden: durabilityEnabled(league) && !showDurability,
     durability_label: durability ? durabilityLabel(durability.durability) : durabilityEnabled(league) ? "Hidden" : "Off",
     durability_multiplier: durability ? durabilityMultiplier(durability.durability) : 1,
+    traits,
+    trait_effects: tier?.trait_effects || {},
+    trait_assignment_version: tier?.trait_assignment_version || null,
   };
 }
 

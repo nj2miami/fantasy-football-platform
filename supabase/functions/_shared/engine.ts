@@ -137,8 +137,74 @@ const DRAFT_MAX_BUCKET_TARGET = Math.max(...Object.values(DRAFT_BUCKET_TARGETS))
 const MIN_DRAFT_STAT_WEEKS = 8;
 const PLAYER_TWO_WEEK_ASSIGNMENT = "per_lineup_player_two_week_average_v1";
 const LEAGUE_PLAYER_SCORE_METHOD = "league-qb-skill-positive-production-stat-weeks-v7";
-const DRAFT_POOL_ENGINE_VERSION = "draft-pool-low-tier-flex-v3";
+const DRAFT_POOL_ENGINE_VERSION = "draft-pool-traits-v1";
 const DRAFT_POOL_CHUNK_SIZE = 200;
+const TRAIT_ASSIGNMENT_VERSION = "draft-traits-v1";
+const TRAIT_ASSIGNMENT_CHANCE = 0.28;
+const MAX_TRAITED_PLAYERS_PER_LEAGUE = 28;
+const MAX_TRAITS_PER_PLAYER = 1;
+const DRAFT_TRAITS = [
+  {
+    code: "clutch_finisher",
+    name: "Clutch Finisher",
+    category: "momentum",
+    description: "Late-game scoring and momentum hook.",
+    weight: 12,
+    maxPerLeague: 4,
+    positions: ["QB", "OFF", "K"],
+    effects: { scoring: { clutch_modifier: 0.05 }, momentum: { late_game_boost: 1 } },
+  },
+  {
+    code: "volatile_spark",
+    name: "Volatile Spark",
+    category: "variance",
+    description: "Higher scoring ceiling with wider weekly swings.",
+    weight: 16,
+    maxPerLeague: 6,
+    positions: ["QB", "OFF", "DEF", "K"],
+    effects: { scoringVariance: { variance_modifier: 0.12 }, consistency: { floor_modifier: -0.04 } },
+  },
+  {
+    code: "steady_hand",
+    name: "Steady Hand",
+    category: "consistency",
+    description: "Lower variance and more predictable output.",
+    weight: 18,
+    maxPerLeague: 6,
+    positions: ["QB", "OFF", "DEF", "K"],
+    effects: { scoringVariance: { variance_modifier: -0.1 }, consistency: { consistency_modifier: 0.1 } },
+  },
+  {
+    code: "iron_lungs",
+    name: "Iron Lungs",
+    category: "fatigue",
+    description: "Reduced fatigue pressure during heavy usage.",
+    weight: 10,
+    maxPerLeague: 4,
+    positions: ["QB", "OFF", "DEF"],
+    effects: { fatigue: { weekly_loss_modifier: -0.08 }, durability: { recovery_modifier: 0.03 } },
+  },
+  {
+    code: "quick_recovery",
+    name: "Quick Recovery",
+    category: "fatigue",
+    description: "Improved recovery hook after durability hits.",
+    weight: 8,
+    maxPerLeague: 3,
+    positions: ["QB", "OFF", "DEF", "K"],
+    effects: { fatigue: { recovery_modifier: 0.1 }, durability: { rebound_modifier: 0.05 } },
+  },
+  {
+    code: "streak_engine",
+    name: "Streak Engine",
+    category: "momentum",
+    description: "Momentum can compound after strong weeks.",
+    weight: 9,
+    maxPerLeague: 3,
+    positions: ["QB", "OFF", "DEF"],
+    effects: { momentum: { positive_streak_modifier: 0.12 }, consistency: { cold_streak_modifier: -0.05 } },
+  },
+];
 
 const DEFAULT_SCHEDULE_CONFIG = {
   type: "interval",
@@ -151,6 +217,93 @@ const DEFAULT_SCHEDULE_CONFIG = {
 function randomDurabilityLossPercent() {
   const range = WEEKLY_DURABILITY_LOSS_MAX - WEEKLY_DURABILITY_LOSS_MIN + 1;
   return WEEKLY_DURABILITY_LOSS_MIN + (crypto.getRandomValues(new Uint32Array(1))[0] % range);
+}
+
+function randomUnit() {
+  return crypto.getRandomValues(new Uint32Array(1))[0] / 0xffffffff;
+}
+
+function shuffledRows<T>(rows: T[]) {
+  const copy = [...rows];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(randomUnit() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
+  }
+  return copy;
+}
+
+function weightedTraitChoice(traits: Json[]) {
+  const totalWeight = traits.reduce((sum, trait) => sum + Math.max(0, Number(trait.weight || 0)), 0);
+  if (totalWeight <= 0) return null;
+  let roll = randomUnit() * totalWeight;
+  for (const trait of traits) {
+    roll -= Math.max(0, Number(trait.weight || 0));
+    if (roll <= 0) return trait;
+  }
+  return traits[traits.length - 1] || null;
+}
+
+function traitAppliesToPosition(trait: Json, position: string) {
+  const positions = Array.isArray(trait.positions) ? trait.positions.map((value) => String(value).toUpperCase()) : [];
+  return !positions.length || positions.includes(position.toUpperCase());
+}
+
+function materializeTrait(trait: Json) {
+  return {
+    code: trait.code,
+    name: trait.name,
+    category: trait.category,
+    description: trait.description,
+    effects: trait.effects || {},
+  };
+}
+
+function traitEffectsByCode(traits: Json[]) {
+  return traits.reduce((effects: Json, trait: Json) => {
+    effects[String(trait.code)] = trait.effects || {};
+    return effects;
+  }, {});
+}
+
+function assignDraftPoolTraits(rows: Json[]) {
+  const assignedCounts = new Map(DRAFT_TRAITS.map((trait) => [trait.code, 0]));
+  const traitsByPlayer = new Map<string, Json[]>();
+  let traitedPlayers = 0;
+
+  for (const row of shuffledRows(rows)) {
+    if (traitedPlayers >= MAX_TRAITED_PLAYERS_PER_LEAGUE) break;
+    if (randomUnit() > TRAIT_ASSIGNMENT_CHANCE) continue;
+
+    const playerTraits: Json[] = [];
+    for (let slot = 0; slot < MAX_TRAITS_PER_PLAYER; slot += 1) {
+      const availableTraits = DRAFT_TRAITS.filter((trait) => {
+        const assigned = Number(assignedCounts.get(trait.code) || 0);
+        const alreadyAssigned = playerTraits.some((existing) => existing.code === trait.code);
+        return !alreadyAssigned &&
+          assigned < Number(trait.maxPerLeague || 0) &&
+          traitAppliesToPosition(trait, String(row.position || ""));
+      });
+      const trait = weightedTraitChoice(availableTraits);
+      if (!trait) break;
+      assignedCounts.set(String(trait.code), Number(assignedCounts.get(trait.code) || 0) + 1);
+      playerTraits.push(materializeTrait(trait));
+    }
+
+    if (playerTraits.length) {
+      traitsByPlayer.set(String(row.player_id), playerTraits);
+      traitedPlayers += 1;
+    }
+  }
+
+  return rows.map((row) => {
+    const traits = traitsByPlayer.get(String(row.player_id)) || [];
+    return {
+      ...row,
+      traits,
+      trait_effects: traitEffectsByCode(traits),
+      trait_assignment_version: TRAIT_ASSIGNMENT_VERSION,
+    };
+  });
 }
 
 function durabilityLossModifierFromSchedule(row: Json | null | undefined) {
@@ -2502,13 +2655,14 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 
   const { data: existing, error: existingError } = await supabase
     .from("league_player_scores")
-    .select("id,position,weeks_played,scoring_rules_hash")
+    .select("id,position,weeks_played,scoring_rules_hash,trait_assignment_version")
     .eq("league_id", leagueId)
     .lte("position_rank", DRAFT_MAX_BUCKET_TARGET);
   if (existingError) throw existingError;
   const existingHashMatches = Boolean(existing?.length) && existing.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
   const existingWeeksEligible = Boolean(existing?.length) && existing.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
-  if (existingHashMatches && existingWeeksEligible && hasCompleteDraftBuckets(existing || [])) return;
+  const existingTraitsCurrent = Boolean(existing?.length) && existing.every((row: Json) => row.trait_assignment_version === TRAIT_ASSIGNMENT_VERSION);
+  if (existingHashMatches && existingWeeksEligible && existingTraitsCurrent && hasCompleteDraftBuckets(existing || [])) return;
   if (existing?.length) {
     const { error: deleteError } = await supabase.from("league_player_scores").delete().eq("league_id", leagueId);
     if (deleteError) throw deleteError;
@@ -2574,10 +2728,11 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
       });
   }
 
-  assertCompleteDraftPool(rows);
+  const rowsWithTraits = assignDraftPoolTraits(rows);
+  assertCompleteDraftPool(rowsWithTraits);
 
-  if (rows.length) {
-    const { error } = await supabase.from("league_player_scores").upsert(rows, { onConflict: "league_id,player_id" });
+  if (rowsWithTraits.length) {
+    const { error } = await supabase.from("league_player_scores").upsert(rowsWithTraits, { onConflict: "league_id,player_id" });
     if (error) throw error;
   }
   if (!league.scoring_rules_locked_at && sourceUpdatedAt) {
@@ -2597,7 +2752,7 @@ async function ensureLeaguePlayerScores(supabase: ReturnType<typeof createClient
 async function existingLeaguePlayerScoresComplete(supabase: ReturnType<typeof createClient>, league: Json, scoringRulesHash: string) {
   const { data: existing, error } = await supabase
     .from("league_player_scores")
-    .select("id,position,weeks_played,scoring_rules_hash")
+    .select("id,position,weeks_played,scoring_rules_hash,trait_assignment_version")
     .eq("league_id", league.id)
     .lte("position_rank", DRAFT_MAX_BUCKET_TARGET);
   if (error) throw error;
@@ -2605,7 +2760,8 @@ async function existingLeaguePlayerScoresComplete(supabase: ReturnType<typeof cr
   if (!rows.length) return false;
   const hashMatches = rows.every((row: Json) => row.scoring_rules_hash === scoringRulesHash);
   const weeksEligible = rows.every((row: Json) => Number(row.weeks_played || 0) >= MIN_DRAFT_STAT_WEEKS);
-  return hashMatches && weeksEligible && hasCompleteDraftBuckets(rows);
+  const traitsCurrent = rows.every((row: Json) => row.trait_assignment_version === TRAIT_ASSIGNMENT_VERSION);
+  return hashMatches && weeksEligible && traitsCurrent && hasCompleteDraftBuckets(rows);
 }
 
 async function syncLeagueDurabilityRows(supabase: ReturnType<typeof createClient>, league: Json) {
@@ -2899,29 +3055,31 @@ async function finalizeLeagueDraftPoolJob(
       });
   }
 
-  assertCompleteDraftPool(rows, {
+  const rowsWithTraits = assignDraftPoolTraits(rows);
+  assertCompleteDraftPool(rowsWithTraits, {
     engine: DRAFT_POOL_ENGINE_VERSION,
     source_season_year: Number(league.source_season_year || new Date().getFullYear() - 1),
     candidate_total: candidates.length,
     candidate_counts: candidateCounts,
-    finalist_counts: draftBucketCounts(rows),
+    finalist_counts: draftBucketCounts(rowsWithTraits),
     scoring_hash: scoringRulesHash,
   });
   await supabase.from("league_player_scores").delete().eq("league_id", league.id);
   const { error: upsertError } = await supabase
     .from("league_player_scores")
-    .upsert(rows, { onConflict: "league_id,player_id" });
+    .upsert(rowsWithTraits, { onConflict: "league_id,player_id" });
   if (upsertError) throw upsertError;
   await syncLeagueDurabilityRows(supabase, league);
   await supabase.from("league_draft_pool_candidates").delete().eq("league_id", league.id);
 
-  const counts = draftBucketCounts(rows);
+  const counts = draftBucketCounts(rowsWithTraits);
+  const traitCount = rowsWithTraits.reduce((sum, row) => sum + (Array.isArray(row.traits) ? row.traits.length : 0), 0);
   const { data: completedJob, error: updateError } = await supabase
     .from("league_draft_pool_jobs")
     .update({
       status: "COMPLETED",
       progress: 100,
-      summary: `Draft pool ready: ${rows.length} players.`,
+      summary: `Draft pool ready: ${rowsWithTraits.length} players, ${traitCount} traits assigned.`,
       scoring_rules_snapshot: scoringRules,
       scoring_rules_source_updated_at: sourceUpdatedAt || null,
       error_details: null,
@@ -2931,7 +3089,7 @@ async function finalizeLeagueDraftPoolJob(
     .select("*")
     .single();
   if (updateError) throw updateError;
-  return { job: completedJob, buckets: counts, eligible_count: rows.length };
+  return { job: completedJob, buckets: counts, eligible_count: rowsWithTraits.length, trait_count: traitCount };
 }
 
 async function processLeagueDraftPoolJob(supabase: ReturnType<typeof createClient>, league: Json, forceRebuild = false) {

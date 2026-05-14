@@ -253,6 +253,16 @@ function DurabilityBadge({ player }) {
   );
 }
 
+function TraitBadges({ player }) {
+  const traits = Array.isArray(player?.traits) ? player.traits : [];
+  if (!traits.length) return null;
+  return traits.map((trait) => (
+    <span key={trait.code || trait.name} className="neo-border inline-flex items-center bg-[#EFFBFF] px-2 py-1 text-xs font-black uppercase text-black" title={trait.description || "Player trait"}>
+      {trait.name || trait.code}
+    </span>
+  ));
+}
+
 function playerTeamText(player) {
   if (player?.team_hidden) return "Team hidden";
   return player?.team || "FA";
@@ -284,6 +294,7 @@ function DraftPlayerRow({ player, canDraft, onAdd, onRemove, onDraft, onStats, i
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
           <DurabilityBadge player={player} />
+          <TraitBadges player={player} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-gray-500">
           <button
@@ -326,6 +337,7 @@ function BoardPlayerRow({ item, canDraft, onDraft, onRemove, onStats, isBusy, dr
         )}
         <div className="mt-2 flex flex-wrap gap-2">
           <DurabilityBadge player={player} />
+          <TraitBadges player={player} />
         </div>
       </div>
       <PlayerTierCell player={player} />
@@ -1077,6 +1089,7 @@ export default function LeagueDraft() {
                 <p className="min-w-0 flex-1 truncate font-black uppercase">{playerName(slot.player)}</p>
                 <TierBadge tier={slot.player?.tier_value || 1} />
                 <DurabilityBadge player={slot.player} />
+                <TraitBadges player={slot.player} />
               </div>
               <p className="text-xs font-bold text-gray-500">
                 {slot.slot_type} | {playerTeamText(slot.player)}
